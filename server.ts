@@ -1,0 +1,130 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import express from 'express';
+import { ForgeAgent } from './src/agent/forge.ts';
+import { GitHubService } from './src/services/github.ts';
+import { ModelService } from './src/services/model.ts';
+import { TestRunnerService } from './src/services/test-runner.ts';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// In-memory reports store for current session
+const reportsStore = new Map<string, any>();
+
+// 1. Health & Capability inspection
+app.get('/api/health', (req, res) => {
+  const modelService = new ModelService();
+  res.json({
+    status: 'ONLINE',
+    project: 'Firstborn',
+    agent: 'Forge',
+    version: '1.0.0',
+    model: modelService.getProviderInfo(),
+    environment: {
+      nodeVersion: process.version,
+      hasGeminiKey: !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY',
+    },
+  });
+});
+
+// 2. Inspect Target Repository
+app.get('/api/github/inspect', async (req, res) => {
+  const target = (req.query.repo as string) || 'madnessgate44-debug/firstborn';
+  const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
+  const [owner, repo] = target.split('/');
+
+  if (!owner || !repo) {
+    return res.status(400).json({ error: 'Invalid repo query parameter. Expected owner/repo.' });
+  }
+
+  const github = new GitHubService(token);
+  const info = await github.inspectRepository(owner, repo);
+  res.json(info);
+});
+
+// 3. Submit and execute a Task through Forge
+app.post('/api/tasks/run', async (req, res) => {
+  const { id, title, description, targetRepo, targetBranch, allowPrCreation } = req.body;
+  const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
+
+  const taskId = id || `task-${Date.now()}`;
+  const agent = new ForgeAgent(token);
+
+  const report = await agent.executeTask({
+    id: taskId,
+    title,
+    description,
+    targetRepo: targetRepo || 'madnessgate44-debug/firstborn',
+    targetBranch: targetBranch || 'main',
+    createdAt: new Date().toISOString(),
+    author: 'operator-mobile',
+    allowPrCreation: Boolean(allowPrCreation),
+  });
+
+  reportsStore.set(taskId, report);
+
+  // Save report to disk as persistent evidence in .firstborn/evidence/<taskId>.json
+  try {
+    const evidenceDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
+    await fs.mkdir(evidenceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(evidenceDir, `${taskId}.json`),
+      JSON.stringify(report, null, 2),
+      'utf-8'
+    );
+  } catch (err: any) {
+    console.error('Failed to write local evidence file:', err.message);
+  }
+
+  res.json(report);
+});
+
+// 4. Retrieve Task Reports
+app.get('/api/tasks/:id', (req, res) => {
+  const report = reportsStore.get(req.params.id);
+  if (!report) {
+    return res.status(404).json({ error: 'Report not found' });
+  }
+  res.json(report);
+});
+
+// 5. Run explicit bounded verification check
+app.post('/api/verify/check', async (req, res) => {
+  const { command } = req.body;
+  if (!command) {
+    return res.status(400).json({ error: 'Command is required' });
+  }
+  const runner = new TestRunnerService();
+  const result = await runner.runCheck(command);
+  res.json(result);
+});
+
+// 6. Read COORDINATION.md contents
+app.get('/api/coordination', async (req, res) => {
+  try {
+    const content = await fs.readFile(path.resolve(process.cwd(), 'COORDINATION.md'), 'utf-8');
+    res.json({ content });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Serve static frontend in production
+app.use(express.static(path.resolve(process.cwd(), 'dist')));
+
+// Fallback to index.html for SPA routing
+app.get('*', (req, res) => {
+  res.sendFile(path.resolve(process.cwd(), 'dist', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Firstborn server running on port ${PORT}`);
+});
