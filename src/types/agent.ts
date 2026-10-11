@@ -28,7 +28,7 @@ export interface TaskDefinition {
   id: string;
   title: string;
   description: string;
-  targetRepo: string; // e.g. madnessgate44-debug/firstborn
+  targetRepo: string; // e.g. madnessgate44-debug/Firstborn
   targetBranch: string; // e.g. main
   createdAt: string;
   author: string;
@@ -48,7 +48,7 @@ export interface FileChangePlan {
   path: string;
   action: 'create' | 'modify' | 'delete';
   rationale: string;
-  diffPreview?: string;
+  content?: string;
 }
 
 export interface TaskExecutionReport {

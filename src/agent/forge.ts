@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TaskDefinition, TaskExecutionReport, TaskStatus } from '../types/agent.ts';
+import { TaskDefinition, TaskExecutionReport } from '../types/agent.ts';
 import { GitHubService } from '../services/github.ts';
 import { ModelService } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
@@ -77,21 +77,33 @@ export class ForgeAgent {
       report.baseCommitSha = repoInfo.latestCommitSha;
       log('info', `Target repository verified. Base branch: ${repoInfo.defaultBranch}, Base SHA: ${report.baseCommitSha}`);
 
-      // 3. READING PERSISTENT INSTRUCTIONS
+      // 3. READING PERSISTENT INSTRUCTIONS & TARGET CODE SCOPE (Fix F-06)
       log('info', 'Checking for persistent instructions in AGENTS.md');
       const agentsMdRemote = await this.github.fetchFile(owner, repo, 'AGENTS.md', repoInfo.defaultBranch);
       let instructionText = '';
       if (agentsMdRemote) {
         instructionText = agentsMdRemote.content;
-        log('info', 'Found and loaded remote AGENTS.md instructions.');
+        log('info', 'Loaded remote AGENTS.md instructions.');
       } else {
-        // Fallback to local AGENTS.md
         try {
           instructionText = await fs.readFile(path.resolve(process.cwd(), 'AGENTS.md'), 'utf-8');
-          log('info', 'Using local repository AGENTS.md instructions.');
+          log('info', 'Loaded local AGENTS.md instructions.');
         } catch {
-          log('warn', 'AGENTS.md not found locally or remotely; using built-in system standards.');
+          instructionText = 'Standard engineering instructions: inspect before editing, keep changes minimal.';
         }
+      }
+
+      // Read target repository file inventory
+      log('info', 'Gathering repository file inventory for grounding');
+      const repoFilePaths = await this.github.listRepositoryFiles(owner, repo, repoInfo.defaultBranch);
+      log('info', `Found ${repoFilePaths.length} files in target repository tree.`);
+
+      // Read package.json natively without CommonJS require (Fix F-08)
+      let packageJsonContent = '{}';
+      try {
+        packageJsonContent = await fs.readFile(path.resolve(process.cwd(), 'package.json'), 'utf-8');
+      } catch {
+        // Fallback
       }
 
       // 4. PLANNING (MODEL INVOCATION)
@@ -100,7 +112,8 @@ export class ForgeAgent {
 
       const contextFiles = [
         { path: 'AGENTS.md', content: instructionText },
-        { path: 'package.json', content: JSON.stringify(require('../../package.json'), null, 2) },
+        { path: 'package.json', content: packageJsonContent },
+        { path: 'FILE_TREE_INVENTORY.txt', content: repoFilePaths.slice(0, 50).join('\n') },
       ];
 
       report.modelInvoked.callsCount += 1;
@@ -137,17 +150,17 @@ export class ForgeAgent {
         path: ch.path,
         action: ch.action,
         rationale: ch.rationale,
+        content: ch.content,
       }));
 
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
 
-      // 5. TESTING / VERIFICATION
+      // 5. TESTING / VERIFICATION (Fix F-01 & F-09)
       report.status = 'TESTING';
-      log('info', 'Running verification checks and real tests in environment.');
+      log('info', 'Running bounded verification checks against strict command registry.');
 
-      const checksToRun = parsedPlan.suggestedChecks && parsedPlan.suggestedChecks.length > 0
-        ? parsedPlan.suggestedChecks
-        : ['npm run lint'];
+      // Default to strict safe check 'npm run lint'
+      const checksToRun = ['npm run lint'];
 
       for (const cmd of checksToRun) {
         log('info', `Executing bounded check: ${cmd}`);
@@ -161,22 +174,41 @@ export class ForgeAgent {
         }
       }
 
+      // Enforce fail-closed semantics (Fix F-09): if no tests ran, fail closed
+      if (report.testResults.length === 0) {
+        report.status = 'FAILED';
+        report.errorMessage = 'Verification failed: Zero tests were executed.';
+        log('error', report.errorMessage);
+        return report;
+      }
+
       const allChecksPassed = report.testResults.every((r) => r.status === 'PASSED');
       report.requirements.forEach((req) => {
         req.status = allChecksPassed ? 'PASS' : 'FAIL';
         req.evidence = `Exit codes: ${report.testResults.map((r) => `${r.command}=${r.exitCode}`).join(', ')}`;
       });
 
-      // 6. GITHUB OUTPUT & PR
+      if (!allChecksPassed) {
+        report.status = 'FAILED';
+        report.errorMessage = 'One or more verification checks failed.';
+        return report;
+      }
+
+      // 6. ACTUAL PATCH APPLICATION, COMMIT & PR CREATION (Fix F-02 & F-10)
       report.status = 'VERIFYING';
       const branchName = `forge/task-${task.id.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`;
       report.branchName = branchName;
 
+      // Extract actual files with content from plannedChanges
+      const filesToCommit = report.plannedChanges
+        .filter((c) => c.content && typeof c.content === 'string')
+        .map((c) => ({ path: c.path, content: c.content as string }));
+
       if (!task.allowPrCreation) {
-        log('info', 'Task completed verification. Pull Request creation not requested.');
-        report.status = allChecksPassed ? 'VERIFYING' : 'FAILED';
+        log('info', 'Task verified locally. Pull Request creation not requested.');
+        report.status = 'VERIFYING';
       } else {
-        log('info', `Attempting branch and PR creation for branch ${branchName}...`);
+        log('info', `Creating isolated branch ${branchName} at base SHA ${report.baseCommitSha}...`);
         const branchRes = await this.github.createOrUpdateBranch(owner, repo, branchName, report.baseCommitSha);
 
         if (!branchRes.success) {
@@ -184,6 +216,33 @@ export class ForgeAgent {
           report.status = 'BLOCKED';
           report.blockerReason = `GitHub branch operation blocked: ${branchRes.error}`;
         } else {
+          log('info', `Branch ${branchName} created successfully.`);
+
+          // Commit the actual patch files to the branch if files exist
+          if (filesToCommit.length > 0) {
+            log('info', `Committing ${filesToCommit.length} modified files to ${branchName}...`);
+            const commitRes = await this.github.commitChangesToBranch({
+              owner,
+              repo,
+              branchName,
+              baseSha: report.baseCommitSha,
+              commitMessage: `[Forge] ${task.title}\n\nTask-ID: ${task.id}\nRequirements: ${report.requirements.map(r => r.id).join(', ')}`,
+              files: filesToCommit,
+            });
+
+            if (commitRes.success && commitRes.headSha) {
+              report.headCommitSha = commitRes.headSha;
+              log('info', `Committed changes. Head SHA: ${report.headCommitSha}`);
+            } else {
+              log('warn', `Commit failed: ${commitRes.error}`);
+              report.status = 'BLOCKED';
+              report.blockerReason = `Git commit blocked: ${commitRes.error}`;
+              return report;
+            }
+          }
+
+          // Open Pull Request with genuine head and base
+          log('info', 'Opening Pull Request on GitHub...');
           const prRes = await this.github.openPullRequest({
             owner,
             repo,
@@ -191,12 +250,18 @@ export class ForgeAgent {
             head: branchName,
             base: repoInfo.defaultBranch,
             body: `### Forge Task Report: ${task.id}
-**Base Commit**: \`${report.baseCommitSha}\`
-**Requirements Summary**:
-${report.requirements.map((r) => `- [x] **${r.id}**: ${r.description}`).join('\n')}
+- **Base Commit**: \`${report.baseCommitSha}\`
+- **Head Commit**: \`${report.headCommitSha || report.baseCommitSha}\`
+- **Branch**: \`${branchName}\`
 
-**Verification Output**:
-${report.testResults.map((t) => `- \`${t.command}\`: Exit ${t.exitCode} (${t.status})`).join('\n')}
+#### Requirements Traceability
+${report.requirements.map((r) => `- [x] **${r.id}**: ${r.description} (${r.status})`).join('\n')}
+
+#### Verified Checks
+${report.testResults.map((t) => `- \`${t.command}\`: Exit ${t.exitCode} (${t.status}) in ${t.durationMs}ms`).join('\n')}
+
+#### Changed Files
+${report.plannedChanges.map((c) => `- \`${c.path}\` (${c.action}): ${c.rationale}`).join('\n')}
 `,
           });
 
@@ -204,7 +269,7 @@ ${report.testResults.map((t) => `- \`${t.command}\`: Exit ${t.exitCode} (${t.sta
             report.status = 'PR_OPENED';
             report.prUrl = prRes.url;
             report.prNumber = prRes.number;
-            log('info', `Pull Request successfully opened: ${prRes.url}`);
+            log('info', `Pull Request opened: ${prRes.url}`);
           } else {
             report.status = 'BLOCKED';
             report.blockerReason = `PR opening blocked: ${prRes.error}`;

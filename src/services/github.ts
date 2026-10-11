@@ -72,7 +72,6 @@ export class GitHubService {
 
       const data = await res.json();
       
-      // Get latest commit on default branch
       let latestSha = 'UNKNOWN';
       try {
         const branchRes = await fetch(
@@ -84,7 +83,7 @@ export class GitHubService {
           latestSha = branchData.sha;
         }
       } catch {
-        // Ignored, default branch may be empty
+        // Ignored
       }
 
       return {
@@ -102,7 +101,7 @@ export class GitHubService {
         defaultBranch: 'main',
         latestCommitSha: 'N/A',
         isPrivate: false,
-        errorMessage: `Network or fetch error: ${err.message}`,
+        errorMessage: `Network error: ${err.message}`,
       };
     }
   }
@@ -123,6 +122,23 @@ export class GitHubService {
       };
     } catch {
       return null;
+    }
+  }
+
+  async listRepositoryFiles(owner: string, repo: string, ref = 'main'): Promise<string[]> {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`,
+        { headers: this.getHeaders() }
+      );
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (!data.tree || !Array.isArray(data.tree)) return [];
+      return data.tree
+        .filter((item: any) => item.type === 'blob')
+        .map((item: any) => item.path);
+    } catch {
+      return [];
     }
   }
 
@@ -155,6 +171,109 @@ export class GitHubService {
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Commits files to GitHub using the Git Data API (blob -> tree -> commit -> update ref)
+   */
+  async commitChangesToBranch(params: {
+    owner: string;
+    repo: string;
+    branchName: string;
+    baseSha: string;
+    commitMessage: string;
+    files: { path: string; content: string }[];
+  }): Promise<{ success: boolean; headSha?: string; error?: string }> {
+    if (!this.token) {
+      return { success: false, error: 'Cannot commit changes without GitHub token.' };
+    }
+
+    try {
+      // 1. Create blobs for each file
+      const treeItems: { path: string; mode: string; type: string; sha: string }[] = [];
+      for (const file of params.files) {
+        const blobRes = await fetch(
+          `https://api.github.com/repos/${params.owner}/${params.repo}/git/blobs`,
+          {
+            method: 'POST',
+            headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: file.content,
+              encoding: 'utf-8',
+            }),
+          }
+        );
+        if (!blobRes.ok) {
+          const err = await blobRes.text();
+          return { success: false, error: `Failed to create blob for ${file.path}: ${err}` };
+        }
+        const blobData = await blobRes.json();
+        treeItems.push({
+          path: file.path,
+          mode: '100644',
+          type: 'blob',
+          sha: blobData.sha,
+        });
+      }
+
+      // 2. Create tree pointing to base commit tree
+      const treeRes = await fetch(
+        `https://api.github.com/repos/${params.owner}/${params.repo}/git/trees`,
+        {
+          method: 'POST',
+          headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_tree: params.baseSha,
+            tree: treeItems,
+          }),
+        }
+      );
+      if (!treeRes.ok) {
+        const err = await treeRes.text();
+        return { success: false, error: `Failed to create Git tree: ${err}` };
+      }
+      const treeData = await treeRes.json();
+
+      // 3. Create commit
+      const commitRes = await fetch(
+        `https://api.github.com/repos/${params.owner}/${params.repo}/git/commits`,
+        {
+          method: 'POST',
+          headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: params.commitMessage,
+            tree: treeData.sha,
+            parents: [params.baseSha],
+          }),
+        }
+      );
+      if (!commitRes.ok) {
+        const err = await commitRes.text();
+        return { success: false, error: `Failed to create commit: ${err}` };
+      }
+      const commitData = await commitRes.json();
+
+      // 4. Update branch reference to point to new commit
+      const refRes = await fetch(
+        `https://api.github.com/repos/${params.owner}/${params.repo}/git/refs/heads/${params.branchName}`,
+        {
+          method: 'PATCH',
+          headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sha: commitData.sha,
+            force: false,
+          }),
+        }
+      );
+      if (!refRes.ok) {
+        const err = await refRes.text();
+        return { success: false, error: `Failed to update branch reference: ${err}` };
+      }
+
+      return { success: true, headSha: commitData.sha };
+    } catch (err: any) {
+      return { success: false, error: `Commit operation failed: ${err.message}` };
     }
   }
 

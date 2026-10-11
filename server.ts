@@ -19,6 +19,12 @@ app.use(express.json());
 // In-memory reports store for current session
 const reportsStore = new Map<string, any>();
 
+// Helper to sanitize task IDs and prevent directory traversal (Fix F-05)
+function sanitizeTaskId(rawId: string): string {
+  const sanitized = rawId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  return sanitized || `task-${Date.now()}`;
+}
+
 // 1. Health & Capability inspection
 app.get('/api/health', (req, res) => {
   const modelService = new ModelService();
@@ -26,7 +32,7 @@ app.get('/api/health', (req, res) => {
     status: 'ONLINE',
     project: 'Firstborn',
     agent: 'Forge',
-    version: '1.0.0',
+    version: '1.1.0',
     model: modelService.getProviderInfo(),
     environment: {
       nodeVersion: process.version,
@@ -37,7 +43,7 @@ app.get('/api/health', (req, res) => {
 
 // 2. Inspect Target Repository
 app.get('/api/github/inspect', async (req, res) => {
-  const target = (req.query.repo as string) || 'madnessgate44-debug/firstborn';
+  const target = (req.query.repo as string) || 'madnessgate44-debug/Firstborn';
   const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
   const [owner, repo] = target.split('/');
 
@@ -55,14 +61,14 @@ app.post('/api/tasks/run', async (req, res) => {
   const { id, title, description, targetRepo, targetBranch, allowPrCreation } = req.body;
   const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
 
-  const taskId = id || `task-${Date.now()}`;
+  const taskId = sanitizeTaskId(id || `task-${Date.now()}`);
   const agent = new ForgeAgent(token);
 
   const report = await agent.executeTask({
     id: taskId,
     title,
     description,
-    targetRepo: targetRepo || 'madnessgate44-debug/firstborn',
+    targetRepo: targetRepo || 'madnessgate44-debug/Firstborn',
     targetBranch: targetBranch || 'main',
     createdAt: new Date().toISOString(),
     author: 'operator-mobile',
@@ -89,7 +95,8 @@ app.post('/api/tasks/run', async (req, res) => {
 
 // 4. Retrieve Task Reports
 app.get('/api/tasks/:id', (req, res) => {
-  const report = reportsStore.get(req.params.id);
+  const safeId = sanitizeTaskId(req.params.id);
+  const report = reportsStore.get(safeId);
   if (!report) {
     return res.status(404).json({ error: 'Report not found' });
   }

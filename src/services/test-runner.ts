@@ -3,67 +3,105 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { TestExecutionResult } from '../types/agent.ts';
 
-const execAsync = promisify(exec);
+// Fixed list of strictly whitelisted executables and authorized arguments (no shell, no eval)
+export interface SafeCommandSpec {
+  executable: string;
+  args: string[];
+}
 
-// Whitelist of allowed verification commands to prevent arbitrary untrusted execution
-const ALLOWED_COMMAND_PREFIXES = [
-  'npm run test',
-  'npm test',
-  'npm run lint',
-  'npm run build',
-  'npx vitest',
-  'npx tsc',
-  'node --check',
-  'node -e',
-];
+const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
+  'npm run lint': { executable: 'npm', args: ['run', 'lint'] },
+  'npm run test': { executable: 'npm', args: ['run', 'test'] },
+  'npm test': { executable: 'npm', args: ['test'] },
+  'npm run build': { executable: 'npm', args: ['run', 'build'] },
+  'npx vitest run': { executable: 'npx', args: ['vitest', 'run'] },
+  'npx tsc --noEmit': { executable: 'npx', args: ['tsc', '--noEmit'] },
+  'git status': { executable: 'git', args: ['status', '--short'] },
+  'git diff': { executable: 'git', args: ['diff'] },
+};
 
 export class TestRunnerService {
-  async runCheck(command: string, cwd = process.cwd()): Promise<TestExecutionResult> {
-    const trimmed = command.trim();
+  async runCheck(commandKey: string, cwd = process.cwd()): Promise<TestExecutionResult> {
+    const trimmed = commandKey.trim();
     const startTime = Date.now();
 
-    // Enforce safety boundary: verify command against allowed patterns
-    const isAllowed = ALLOWED_COMMAND_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
-    if (!isAllowed) {
+    const spec = AUTHORIZED_COMMANDS[trimmed];
+    if (!spec) {
       return {
         command: trimmed,
-        exitCode: 126, // Command invoked cannot execute
+        exitCode: 126, // Command Invocation blocked by security policy
         stdout: '',
-        stderr: `Security Boundary Violation: Command "${trimmed}" is not in the allowed verification command whitelist (${ALLOWED_COMMAND_PREFIXES.join(', ')}).`,
+        stderr: `Security Boundary Violation: Command "${trimmed}" is not in the strict fixed command registry. Shell evaluation and arbitrary script arguments are prohibited. Allowed commands: ${Object.keys(
+          AUTHORIZED_COMMANDS
+        ).join(', ')}`,
         durationMs: 0,
         status: 'ERROR',
       };
     }
 
-    try {
-      const { stdout, stderr } = await execAsync(trimmed, {
+    return new Promise<TestExecutionResult>((resolve) => {
+      let stdout = '';
+      let stderr = '';
+
+      // spawn directly without shell: true to prevent command injection, piping, and shell metacharacter expansion
+      const child = spawn(spec.executable, spec.args, {
         cwd,
-        timeout: 45000, // 45 seconds timeout
-        maxBuffer: 1024 * 1024 * 2, // 2MB buffer
+        shell: false,
+        env: {
+          ...process.env,
+          // Strip write-capable GitHub and Gemini tokens from child check execution environment
+          GITHUB_TOKEN: '',
+          GEMINI_API_KEY: '',
+        },
       });
 
-      return {
-        command: trimmed,
-        exitCode: 0,
-        stdout: stdout || '',
-        stderr: stderr || '',
-        durationMs: Date.now() - startTime,
-        status: 'PASSED',
-      };
-    } catch (err: any) {
-      const exitCode = typeof err.code === 'number' ? err.code : 1;
-      return {
-        command: trimmed,
-        exitCode,
-        stdout: err.stdout || '',
-        stderr: err.stderr || err.message,
-        durationMs: Date.now() - startTime,
-        status: 'FAILED',
-      };
-    }
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve({
+          command: trimmed,
+          exitCode: 124, // Timeout
+          stdout,
+          stderr: stderr + '\nExecution timed out after 45000ms',
+          durationMs: Date.now() - startTime,
+          status: 'ERROR',
+        });
+      }, 45000);
+
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        resolve({
+          command: trimmed,
+          exitCode: 1,
+          stdout,
+          stderr: stderr + `\nProcess spawn error: ${err.message}`,
+          durationMs: Date.now() - startTime,
+          status: 'ERROR',
+        });
+      });
+
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        const exitCode = typeof code === 'number' ? code : 1;
+        resolve({
+          command: trimmed,
+          exitCode,
+          stdout,
+          stderr,
+          durationMs: Date.now() - startTime,
+          status: exitCode === 0 ? 'PASSED' : 'FAILED',
+        });
+      });
+    });
   }
 }
