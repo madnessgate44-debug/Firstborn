@@ -106,6 +106,20 @@ export class GitHubService {
     }
   }
 
+  async fetchCommitTreeSha(owner: string, repo: string, commitSha: string): Promise<string | null> {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/git/commits/${commitSha}`,
+        { headers: this.getHeaders() }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.tree?.sha || null;
+    } catch {
+      return null;
+    }
+  }
+
   async fetchFile(owner: string, repo: string, path: string, ref = 'main'): Promise<GitHubFileContent | null> {
     try {
       const res = await fetch(
@@ -142,6 +156,9 @@ export class GitHubService {
     }
   }
 
+  /**
+   * Creates branch if it does not exist, or updates it if it already exists (Fixes branch retry collision)
+   */
   async createOrUpdateBranch(
     owner: string,
     repo: string,
@@ -152,7 +169,8 @@ export class GitHubService {
       return { success: false, error: 'Cannot push or branch without a GitHub token.' };
     }
     try {
-      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs`, {
+      // 1. Try to create ref
+      const createRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs`, {
         method: 'POST',
         headers: {
           ...this.getHeaders(),
@@ -164,24 +182,48 @@ export class GitHubService {
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.text();
-        return { success: false, error: `Branch creation failed (${res.status}): ${err}` };
+      if (createRes.ok) {
+        return { success: true };
       }
-      return { success: true };
+
+      // 2. If already exists (422), update the existing ref
+      if (createRes.status === 422) {
+        const updateRes = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branchName}`,
+          {
+            method: 'PATCH',
+            headers: {
+              ...this.getHeaders(),
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sha: baseSha,
+              force: true,
+            }),
+          }
+        );
+        if (updateRes.ok) {
+          return { success: true };
+        }
+        const err = await updateRes.text();
+        return { success: false, error: `Branch ref update failed (${updateRes.status}): ${err}` };
+      }
+
+      const err = await createRes.text();
+      return { success: false, error: `Branch creation failed (${createRes.status}): ${err}` };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
   }
 
   /**
-   * Commits files to GitHub using the Git Data API (blob -> tree -> commit -> update ref)
+   * Commits files to GitHub using Git Data API with resolved base_tree SHA (Fixes Git tree API bug)
    */
   async commitChangesToBranch(params: {
     owner: string;
     repo: string;
     branchName: string;
-    baseSha: string;
+    baseCommitSha: string;
     commitMessage: string;
     files: { path: string; content: string }[];
   }): Promise<{ success: boolean; headSha?: string; error?: string }> {
@@ -190,7 +232,13 @@ export class GitHubService {
     }
 
     try {
-      // 1. Create blobs for each file
+      // 1. Resolve base commit SHA to base tree SHA
+      const baseTreeSha = await this.fetchCommitTreeSha(params.owner, params.repo, params.baseCommitSha);
+      if (!baseTreeSha) {
+        return { success: false, error: `Failed to resolve tree SHA for base commit ${params.baseCommitSha}` };
+      }
+
+      // 2. Create blobs for each file
       const treeItems: { path: string; mode: string; type: string; sha: string }[] = [];
       for (const file of params.files) {
         const blobRes = await fetch(
@@ -217,14 +265,14 @@ export class GitHubService {
         });
       }
 
-      // 2. Create tree pointing to base commit tree
+      // 3. Create tree pointing to resolved base tree SHA (NOT commit SHA)
       const treeRes = await fetch(
         `https://api.github.com/repos/${params.owner}/${params.repo}/git/trees`,
         {
           method: 'POST',
           headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            base_tree: params.baseSha,
+            base_tree: baseTreeSha,
             tree: treeItems,
           }),
         }
@@ -235,7 +283,7 @@ export class GitHubService {
       }
       const treeData = await treeRes.json();
 
-      // 3. Create commit
+      // 4. Create commit with parent pointing to base commit SHA
       const commitRes = await fetch(
         `https://api.github.com/repos/${params.owner}/${params.repo}/git/commits`,
         {
@@ -244,7 +292,7 @@ export class GitHubService {
           body: JSON.stringify({
             message: params.commitMessage,
             tree: treeData.sha,
-            parents: [params.baseSha],
+            parents: [params.baseCommitSha],
           }),
         }
       );
@@ -254,7 +302,7 @@ export class GitHubService {
       }
       const commitData = await commitRes.json();
 
-      // 4. Update branch reference to point to new commit
+      // 5. Update branch reference to point to new commit
       const refRes = await fetch(
         `https://api.github.com/repos/${params.owner}/${params.repo}/git/refs/heads/${params.branchName}`,
         {
@@ -262,7 +310,7 @@ export class GitHubService {
           headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify({
             sha: commitData.sha,
-            force: false,
+            force: true,
           }),
         }
       );

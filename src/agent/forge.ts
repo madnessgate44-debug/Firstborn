@@ -3,12 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TaskDefinition, TaskExecutionReport } from '../types/agent.ts';
+import { TaskDefinition, TaskExecutionReport, FileChangePlan } from '../types/agent.ts';
 import { GitHubService } from '../services/github.ts';
 import { ModelService } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+
+// Sensitive / Protected repository paths that Forge is prohibited from altering
+const PROTECTED_PATH_PATTERNS = [
+  /^\.git\//i,
+  /^\.env/i,
+  /^\.github\/workflows\//i,
+  /^node_modules\//i,
+];
+
+// Maximum allowed patch content size per file (100KB)
+const MAX_FILE_PATCH_BYTES = 100 * 1024;
 
 export class ForgeAgent {
   private github: GitHubService;
@@ -19,6 +30,44 @@ export class ForgeAgent {
     this.github = new GitHubService(githubToken);
     this.model = new ModelService();
     this.testRunner = new TestRunnerService();
+  }
+
+  /**
+   * Strict validation of generated patch paths and contents (Fixes AUD-20261012-02 Patch Validation)
+   */
+  private validatePatch(changes: FileChangePlan[]): { valid: boolean; error?: string } {
+    if (!Array.isArray(changes) || changes.length === 0) {
+      return { valid: false, error: 'Empty patch: No file changes proposed.' };
+    }
+
+    for (const change of changes) {
+      // 1. Path format validation (must be relative, no traversal)
+      if (!change.path || typeof change.path !== 'string') {
+        return { valid: false, error: 'Malformed patch: Missing or non-string file path.' };
+      }
+      const normalizedPath = path.normalize(change.path).replace(/^(\.\/)+/, '');
+      if (path.isAbsolute(change.path) || normalizedPath.startsWith('..') || change.path.includes('../')) {
+        return { valid: false, error: `Security Boundary Violation: Directory traversal or absolute path detected: "${change.path}".` };
+      }
+
+      // 2. Protected files check
+      if (PROTECTED_PATH_PATTERNS.some((pat) => pat.test(normalizedPath))) {
+        return { valid: false, error: `Security Boundary Violation: Modification of protected file or path is forbidden: "${change.path}".` };
+      }
+
+      // 3. Action and content check
+      if (!['modify', 'create'].includes(change.action)) {
+        return { valid: false, error: `Unsupported or dangerous patch action "${change.action}". Only create and modify are supported.` };
+      }
+      if (typeof change.content !== 'string' || change.content.length === 0) {
+        return { valid: false, error: `Invalid patch content: "${change.path}" has empty or invalid content.` };
+      }
+      if (Buffer.byteLength(change.content, 'utf-8') > MAX_FILE_PATCH_BYTES) {
+        return { valid: false, error: `Patch size limit exceeded: "${change.path}" exceeds 100KB limit.` };
+      }
+    }
+
+    return { valid: true };
   }
 
   async executeTask(task: TaskDefinition): Promise<TaskExecutionReport> {
@@ -77,7 +126,7 @@ export class ForgeAgent {
       report.baseCommitSha = repoInfo.latestCommitSha;
       log('info', `Target repository verified. Base branch: ${repoInfo.defaultBranch}, Base SHA: ${report.baseCommitSha}`);
 
-      // 3. READING PERSISTENT INSTRUCTIONS & TARGET CODE SCOPE (Fix F-06)
+      // 3. READING PERSISTENT INSTRUCTIONS & TARGET CODE SCOPE
       log('info', 'Checking for persistent instructions in AGENTS.md');
       const agentsMdRemote = await this.github.fetchFile(owner, repo, 'AGENTS.md', repoInfo.defaultBranch);
       let instructionText = '';
@@ -98,7 +147,6 @@ export class ForgeAgent {
       const repoFilePaths = await this.github.listRepositoryFiles(owner, repo, repoInfo.defaultBranch);
       log('info', `Found ${repoFilePaths.length} files in target repository tree.`);
 
-      // Read package.json natively without CommonJS require (Fix F-08)
       let packageJsonContent = '{}';
       try {
         packageJsonContent = await fs.readFile(path.resolve(process.cwd(), 'package.json'), 'utf-8');
@@ -155,7 +203,17 @@ export class ForgeAgent {
 
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
 
-      // 5. TESTING / VERIFICATION (Fix F-01 & F-09)
+      // 5. PATCH VALIDATION (Fix AUD-20261012-02 Patch Validation)
+      const patchValidation = this.validatePatch(report.plannedChanges);
+      if (!patchValidation.valid) {
+        report.status = 'FAILED';
+        report.errorMessage = `Patch Validation Rejected: ${patchValidation.error}`;
+        log('error', report.errorMessage);
+        return report;
+      }
+      log('info', `Patch validated successfully: ${report.plannedChanges.length} files pass security checks.`);
+
+      // 6. TESTING / VERIFICATION
       report.status = 'TESTING';
       log('info', 'Running bounded verification checks against strict command registry.');
 
@@ -174,7 +232,7 @@ export class ForgeAgent {
         }
       }
 
-      // Enforce fail-closed semantics (Fix F-09): if no tests ran, fail closed
+      // Enforce fail-closed semantics: if no tests ran, fail closed
       if (report.testResults.length === 0) {
         report.status = 'FAILED';
         report.errorMessage = 'Verification failed: Zero tests were executed.';
@@ -194,64 +252,64 @@ export class ForgeAgent {
         return report;
       }
 
-      // 6. ACTUAL PATCH APPLICATION, COMMIT & PR CREATION (Fix F-02 & F-10)
+      // 7. GITHUB BRANCH, COMMIT & PR CREATION
       report.status = 'VERIFYING';
       const branchName = `forge/task-${task.id.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`;
       report.branchName = branchName;
 
-      // Extract actual files with content from plannedChanges
+      // Extract validated files with content
       const filesToCommit = report.plannedChanges
         .filter((c) => c.content && typeof c.content === 'string')
         .map((c) => ({ path: c.path, content: c.content as string }));
 
+      // Fix AUD-20261012-02 Empty PR prevention: fail closed if no file contents are committed
+      if (filesToCommit.length === 0) {
+        report.status = 'FAILED';
+        report.errorMessage = 'Safety Block: Zero files with valid content to commit. Cannot open empty Pull Request.';
+        log('error', report.errorMessage);
+        return report;
+      }
+
       if (!task.allowPrCreation) {
-        log('info', 'Task verified locally. Pull Request creation not requested.');
+        log('info', 'Task verified locally. Pull Request creation not authorized by caller.');
         report.status = 'VERIFYING';
       } else {
-        log('info', `Creating isolated branch ${branchName} at base SHA ${report.baseCommitSha}...`);
+        log('info', `Creating or updating isolated branch ${branchName} at base SHA ${report.baseCommitSha}...`);
         const branchRes = await this.github.createOrUpdateBranch(owner, repo, branchName, report.baseCommitSha);
 
         if (!branchRes.success) {
-          log('warn', `Branch creation halted: ${branchRes.error}`);
+          log('warn', `Branch operation halted: ${branchRes.error}`);
           report.status = 'BLOCKED';
           report.blockerReason = `GitHub branch operation blocked: ${branchRes.error}`;
         } else {
-          log('info', `Branch ${branchName} created successfully.`);
+          log('info', `Branch ${branchName} confirmed.`);
 
-          // Commit the actual patch files to the branch if files exist
-          if (filesToCommit.length > 0) {
-            log('info', `Committing ${filesToCommit.length} modified files to ${branchName}...`);
-            const commitRes = await this.github.commitChangesToBranch({
-              owner,
-              repo,
-              branchName,
-              baseSha: report.baseCommitSha,
-              commitMessage: `[Forge] ${task.title}\n\nTask-ID: ${task.id}\nRequirements: ${report.requirements.map(r => r.id).join(', ')}`,
-              files: filesToCommit,
-            });
-
-            if (commitRes.success && commitRes.headSha) {
-              report.headCommitSha = commitRes.headSha;
-              log('info', `Committed changes. Head SHA: ${report.headCommitSha}`);
-            } else {
-              log('warn', `Commit failed: ${commitRes.error}`);
-              report.status = 'BLOCKED';
-              report.blockerReason = `Git commit blocked: ${commitRes.error}`;
-              return report;
-            }
-          }
-
-          // Open Pull Request with genuine head and base
-          log('info', 'Opening Pull Request on GitHub...');
-          const prRes = await this.github.openPullRequest({
+          // Commit the actual patch files to the branch with base tree SHA resolution
+          log('info', `Committing ${filesToCommit.length} modified files to ${branchName}...`);
+          const commitRes = await this.github.commitChangesToBranch({
             owner,
             repo,
-            title: `[Forge] ${task.title}`,
-            head: branchName,
-            base: repoInfo.defaultBranch,
-            body: `### Forge Task Report: ${task.id}
+            branchName,
+            baseCommitSha: report.baseCommitSha,
+            commitMessage: `[Forge] ${task.title}\n\nTask-ID: ${task.id}\nRequirements: ${report.requirements.map(r => r.id).join(', ')}`,
+            files: filesToCommit,
+          });
+
+          if (commitRes.success && commitRes.headSha) {
+            report.headCommitSha = commitRes.headSha;
+            log('info', `Committed changes. Head SHA: ${report.headCommitSha}`);
+
+            // Open Pull Request with genuine head and base
+            log('info', 'Opening Pull Request on GitHub...');
+            const prRes = await this.github.openPullRequest({
+              owner,
+              repo,
+              title: `[Forge] ${task.title}`,
+              head: branchName,
+              base: repoInfo.defaultBranch,
+              body: `### Forge Task Report: ${task.id}
 - **Base Commit**: \`${report.baseCommitSha}\`
-- **Head Commit**: \`${report.headCommitSha || report.baseCommitSha}\`
+- **Head Commit**: \`${report.headCommitSha}\`
 - **Branch**: \`${branchName}\`
 
 #### Requirements Traceability
@@ -263,17 +321,22 @@ ${report.testResults.map((t) => `- \`${t.command}\`: Exit ${t.exitCode} (${t.sta
 #### Changed Files
 ${report.plannedChanges.map((c) => `- \`${c.path}\` (${c.action}): ${c.rationale}`).join('\n')}
 `,
-          });
+            });
 
-          if (prRes.success) {
-            report.status = 'PR_OPENED';
-            report.prUrl = prRes.url;
-            report.prNumber = prRes.number;
-            log('info', `Pull Request opened: ${prRes.url}`);
+            if (prRes.success) {
+              report.status = 'PR_OPENED';
+              report.prUrl = prRes.url;
+              report.prNumber = prRes.number;
+              log('info', `Pull Request opened: ${prRes.url}`);
+            } else {
+              report.status = 'BLOCKED';
+              report.blockerReason = `PR opening blocked: ${prRes.error}`;
+              log('warn', report.blockerReason);
+            }
           } else {
+            log('warn', `Commit failed: ${commitRes.error}`);
             report.status = 'BLOCKED';
-            report.blockerReason = `PR opening blocked: ${prRes.error}`;
-            log('warn', report.blockerReason);
+            report.blockerReason = `Git commit blocked: ${commitRes.error}`;
           }
         }
       }
