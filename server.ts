@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import type { RequestHandler } from 'express';
 import { ForgeAgent } from './src/agent/forge.ts';
 import { GitHubService } from './src/services/github.ts';
 import { ModelService } from './src/services/model.ts';
@@ -18,6 +19,32 @@ app.use(express.json());
 
 // In-memory reports store for current session
 const reportsStore = new Map<string, any>();
+
+const requireGitHubToken: RequestHandler = async (req, res, next) => {
+  const token = (req.headers.authorization || '').replace(/^Bearer\\s+/i, '').trim();
+  if (!token) {
+    res.status(401).json({ error: 'A valid GitHub token is required for this operation.' });
+    return;
+  }
+  try {
+    const response = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'Firstborn-Forge',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      res.status(401).json({ error: 'GitHub rejected the supplied token. No task was run.' });
+      return;
+    }
+    next();
+  } catch {
+    res.status(503).json({ error: 'Could not validate the GitHub token. No task was run.' });
+  }
+};
 
 // Helper to sanitize task IDs and prevent directory traversal (Fix F-05)
 function sanitizeTaskId(rawId: string): string {
@@ -42,7 +69,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // 2. Inspect Target Repository
-app.get('/api/github/inspect', async (req, res) => {
+app.get('/api/github/inspect', requireGitHubToken, async (req, res) => {
   const target = (req.query.repo as string) || 'madnessgate44-debug/Firstborn';
   const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
   const [owner, repo] = target.split('/');
@@ -57,7 +84,7 @@ app.get('/api/github/inspect', async (req, res) => {
 });
 
 // 3. Submit and execute a Task through Forge
-app.post('/api/tasks/run', async (req, res) => {
+app.post('/api/tasks/run', requireGitHubToken, async (req, res) => {
   const { id, title, description, targetRepo, targetBranch, allowPrCreation } = req.body;
   const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
 
@@ -94,7 +121,7 @@ app.post('/api/tasks/run', async (req, res) => {
 });
 
 // 4. Retrieve Task Reports
-app.get('/api/tasks/:id', (req, res) => {
+app.get('/api/tasks/:id', requireGitHubToken, (req, res) => {
   const safeId = sanitizeTaskId(req.params.id);
   const report = reportsStore.get(safeId);
   if (!report) {
@@ -104,7 +131,7 @@ app.get('/api/tasks/:id', (req, res) => {
 });
 
 // 5. Run explicit bounded verification check
-app.post('/api/verify/check', async (req, res) => {
+app.post('/api/verify/check', requireGitHubToken, async (req, res) => {
   const { command } = req.body;
   if (!command) {
     return res.status(400).json({ error: 'Command is required' });
