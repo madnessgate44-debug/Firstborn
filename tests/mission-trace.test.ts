@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { traceEntry, summarizeTrace } from '../src/agent/mission-trace.ts';
 import { loadForgeLimits } from '../src/agent/limits.ts';
+import { isKeylessOnly } from '../src/services/model.ts';
 
 const fixed = () => '2026-10-12T00:00:00.000Z';
 
@@ -58,3 +59,14 @@ test('loadForgeLimits: maxMissionAttempts is bounded and defaults to 1', () => {
   assert.equal(loadForgeLimits({ FORGE_MAX_MISSION_ATTEMPTS: '99' } as NodeJS.ProcessEnv).maxMissionAttempts, 5);
   assert.equal(loadForgeLimits({ FORGE_MAX_MISSION_ATTEMPTS: '0' } as NodeJS.ProcessEnv).maxMissionAttempts, 1);
 });
+
+test('isKeylessOnly: engages regardless of GitHub capitalization', () => {
+  // GitHub capitalizes repository-variable names, so the value arrives as "True".
+  for (const v of ['true', 'True', 'TRUE', ' true ']) {
+    assert.equal(isKeylessOnly({ FIRSTBORN_KEYLESS_ONLY: v } as NodeJS.ProcessEnv), true, v);
+  }
+  for (const v of ['', 'false', 'False', 'no', '0', undefined]) {
+    assert.equal(isKeylessOnly({ FIRSTBORN_KEYLESS_ONLY: v } as NodeJS.ProcessEnv), false, String(v));
+  }
+});
+
