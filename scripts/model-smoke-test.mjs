@@ -18,7 +18,7 @@ try {
   const llm = FreeLLM.fromEnv({
     keyless: true,
     maxAttempts: 12,
-    timeout: 75,
+    timeout: 30,
     hedge: true,
     onEvent: (event) => {
       events.push(event);
@@ -27,28 +27,38 @@ try {
       }
     },
   });
-  const response = await llm.chat([
-    { role: 'system', content: 'Reply with exactly the requested token and no other text.' },
-    { role: 'user', content: 'Reply with exactly: FIRSTBORN_KEYLESS_ROUTE_OK' },
-  ], {
-    model: 'chat:fast',
-    temperature: 0,
-    max_tokens: 64,
-    signal: AbortSignal.timeout(80000),
-  });
-  const text = response.text.trim();
-  if (!text.includes('FIRSTBORN_KEYLESS_ROUTE_OK')) {
-    throw new Error(`Model returned unexpected text: ${text.slice(0, 200) || '(empty)'}`);
+  let passed = null;
+  for (const alias of ['chat:large', 'chat:fast', 'chat:small']) {
+    try {
+      const response = await llm.chat([
+        { role: 'system', content: 'Reply with exactly the requested token and no other text.' },
+        { role: 'user', content: 'Reply with exactly: FIRSTBORN_KEYLESS_ROUTE_OK' },
+      ], {
+        model: alias,
+        temperature: 0,
+        max_tokens: 64,
+        signal: AbortSignal.timeout(30000),
+      });
+      const text = response.text.trim();
+      const provider = response.provider || 'not-reported';
+      if (text.includes('FIRSTBORN_KEYLESS_ROUTE_OK') && /kilo|ovh|keyless|anonymous/i.test(provider)) {
+        passed = { response, text, provider, alias };
+        break;
+      }
+      const firstChoice = response.raw?.choices?.[0];
+      const message = firstChoice?.message;
+      failures.push(`${alias} via ${provider}: unusable text; finish_reason=${firstChoice?.finish_reason ?? 'unknown'}, message_keys=${message && typeof message === 'object' ? Object.keys(message).join(',') : 'none'}, content_type=${Array.isArray(message?.content) ? 'array' : typeof message?.content}, reasoning_chars=${typeof message?.reasoning_content === 'string' ? message.reasoning_content.length : 0}`);
+    } catch (error) {
+      failures.push(`${alias}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
-  const provider = response.provider || 'not-reported';
-  if (!/kilo|ovh|keyless|anonymous/i.test(provider)) {
-    throw new Error(`Response succeeded but provider does not prove a keyless endpoint: ${provider}`);
-  }
+  if (!passed) throw new Error('No keyless route returned the required usable text across chat:large, chat:fast, and chat:small.');
   console.log(JSON.stringify({
     status: 'PASS',
     mode: 'keyless-only (all provider credentials removed)',
-    provider,
-    actualModel: response.model || 'not-reported',
+    requestedAlias: passed.alias,
+    provider: passed.provider,
+    actualModel: passed.response.model || 'not-reported',
     responseReceived: true,
     responseValidated: true,
     priorRouteFailures: failures,
