@@ -20,7 +20,7 @@ export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
   private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, '');
-  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'auto:coding';
+  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'murakumo-main';
 
   constructor() {
     const key = process.env.GEMINI_API_KEY?.trim();
@@ -130,7 +130,7 @@ Respond only with valid JSON.`;
         return {
           text: '',
           model: 'auto:coding -> gemini-2.5-flash',
-          provider: 'llmfaucet anonymous gateway + Gemini fallback',
+          provider: 'keyless model routes + Gemini fallback',
           success: false,
           error: `Primary keyless route failed: ${primaryError}; Gemini fallback failed: ${fallbackError}`,
           fallbackUsed: true,
