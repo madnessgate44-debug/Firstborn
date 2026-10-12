@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTargetBranch, evaluateRequirementEvidence } from '../src/agent/forge.ts';
+import { resolveTargetBranch, evaluateRequirementEvidence, validatePatchSubstance } from '../src/agent/forge.ts';
+import { isKeylessOnly } from '../src/services/model.ts';
 
 test('resolveTargetBranch: explicit non-default branch wins', () => {
   assert.equal(resolveTargetBranch('release/2.0', 'main'), 'release/2.0');
@@ -78,4 +79,42 @@ test('evidence: criterion in description is also honored', () => {
 test('evidence: missing acceptance criteria yields PENDING', () => {
   const result = evaluateRequirementEvidence({}, [passing]);
   assert.equal(result.status, 'PENDING');
+});
+
+test('patch substance: rejects a TODO-only newly created file', () => {
+  const result = validatePatchSubstance([{
+    path: 'tests/model.test.ts',
+    action: 'create',
+    content: '// TODO: implement test for isKeylessOnly helper',
+  }]);
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /Placeholder-only patch rejected/);
+});
+
+test('patch substance: rejects a TODO-only edit replacement', () => {
+  const result = validatePatchSubstance([{
+    path: 'tests/model.test.ts',
+    action: 'modify',
+    edits: [{ find: 'old test', replace: '// TODO: implement test' }],
+  }]);
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /Placeholder-only patch rejected/);
+});
+
+test('patch substance: accepts executable implementation or assertions', () => {
+  const result = validatePatchSubstance([{
+    path: 'tests/model.test.ts',
+    action: 'create',
+    content: "import assert from 'node:assert/strict';\\nassert.equal(1, 1);",
+  }]);
+  assert.equal(result.valid, true);
+});
+
+test('isKeylessOnly: explicit environment values are normalized without global mutation', () => {
+  for (const value of ['true', 'TRUE', ' True ']) {
+    assert.equal(isKeylessOnly({ FIRSTBORN_KEYLESS_ONLY: value } as NodeJS.ProcessEnv), true, value);
+  }
+  for (const value of [undefined, '', 'false']) {
+    assert.equal(isKeylessOnly({ FIRSTBORN_KEYLESS_ONLY: value } as NodeJS.ProcessEnv), false, String(value));
+  }
 });
