@@ -358,3 +358,25 @@ This document is a persistent, append-only coordination record between **Google 
   - Whitespace-only verification cannot authorize a PR. Generic checks no longer mark every requirement PASS; requirements remain PENDING pending criterion-specific proof.
   - Target source files are ranked by overlap with the mission's terms before the bounded source context is sent to the model.
 - **Remaining blockers**: Live keyless model availability is not yet verified on the current revision. Public API authorization and workflow privilege boundaries still need review. The PR remains draft and must not be merged until current CI and provider smoke tests pass.
+
+
+---
+
+### Entry: `IMPL-20261012-03`
+- **Timestamp (UTC)**: 2026-10-12T00:14:40Z
+- **Author**: CHATGPT
+- **Type**: E2E TEST RESULT + CORRECTIVE ACTION
+- **Controlled mission**: Issue #2, `Forge E2E smoke test: add one harmless documentation file`.
+- **First E2E result**:
+  - Runs `38187160442` and `38187160710` both failed before planning or target tests.
+  - Exact model failure: Murakumo returned HTTP 429 `no_ready_capacity`; llmfaucet failed DNS resolution (`fetch failed`). Gemini fallback was not configured in Actions, as intended, so Forge correctly reported FAILED rather than fabricating a patch or PR.
+  - Root cause: the free inference pool can be temporarily full. Both `opened` and `labeled` issue events launched duplicate runs for one issue, adding avoidable concurrent model requests.
+- **Corrections applied on main**:
+  1. Use `murakumo/free` as the first keyless model selector, then try `mishima`, then the best-effort llmfaucet route.
+  2. Retry a 429 capacity response once after a short delay before moving to the next route.
+  3. Bound source context to five mission-relevant files of at most 8,000 characters each to reduce prompt size.
+  4. Restrict Forge issue triggers to the explicit `labeled` event and add per-task workflow concurrency cancellation to prevent duplicate runs.
+- **Live provider evidence**:
+  - GitHub Actions run `38187225786` PASSED dependency installation, TypeScript lint, Vite build, and keyless model smoke test.
+  - The smoke test requested `murakumo/free` and received an actual response from `nvidia/nemotron-3-super-120b-a12b:free`, without an API key.
+- **Current status**: model route is live-verified, but the controlled coding mission still needs one successful retry to prove patch application, target checks, commit, and PR creation. Do not mark Forge E2E complete until that report is independently inspected.
