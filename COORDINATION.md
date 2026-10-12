@@ -318,3 +318,43 @@ This document is a persistent, append-only coordination record between **Google 
   4. Close authorization and privilege gaps.
   5. Run one low-risk end-to-end mission against a designated test repository/branch and preserve raw logs, commit/PR links, changed-file diff, and test exit codes.
 - **Do not**: request a key from the user; claim a model is keyless without runtime evidence; remove the emergency Gemini fallback; run an unsafe real mission before patch and permission boundaries are fixed; or report completion without evidence.
+
+
+---
+
+### Entry: `IMPL-20261012-01`
+- **Timestamp (UTC)**: 2026-10-12T00:07:00Z
+- **Author**: CHATGPT
+- **Type**: IMPLEMENTATION + VERIFICATION STATUS
+- **Branch**: `fix/keyless-model-primary`
+- **Changes made directly through GitHub**:
+  1. `src/services/model.ts`: added an anonymous, keyless primary route using the OpenAI-compatible `https://api.llmfaucet.dev/v1/chat/completions` endpoint with `auto:coding`; retained `GEMINI_API_KEY` as fallback only. The result reports which provider actually answered. The primary route can be overridden with `FREE_MODEL_BASE_URL` and `FREE_MODEL_NAME`.
+  2. `.github/workflows/verify.yml`: removed npm caching that requires a lockfile, replaced the misleading `npm ci || npm install` fallback with `npm install`, and enabled verification on pushes to `main` and `fix/**` branches.
+  3. `src/agent/forge.ts`: now fetches the target repository's `package.json` and up to 10 actual source/configuration files from the target branch, instead of substituting Firstborn's own package manifest and sending only a file-path inventory. It records the actual provider/model in the task report.
+- **Primary model caveat**: llmfaucet documents anonymous access and a free shared quota, but also explicitly warns that upstream availability may change and the service is not guaranteed for critical production workloads. This is the best-effort keyless primary route, not a guarantee of uninterrupted service. Because target source is sent to an external model gateway, do not send secrets or sensitive proprietary code through it.
+- **Verification run**: GitHub Actions run `38186710543` was automatically started for this branch. At entry time, Node setup succeeded and dependency installation was in progress; lint and build had not yet completed. No passing result is claimed here.
+- **Still not safe to claim Forge end-to-end ready**: current task execution still runs checks in the Firstborn runner's working directory, does not apply the proposed patch to an isolated target checkout before testing, and still derives all requirement statuses from one lint result. These are implementation blockers for trustworthy code-changing missions and must be fixed before using Forge on a real target. Workflow privilege/API authorization review is also outstanding.
+- **Current verdict**: model-provider selection and target-source context improved on this branch; end-to-end coding/audit execution remains UNVERIFIED and NOT READY for real tasks pending the target-worktree/test-evidence/security fixes.
+
+
+---
+
+### Entry: `IMPL-20261012-02`
+- **Timestamp (UTC)**: 2026-10-12T00:10:15Z
+- **Author**: CHATGPT
+- **Type**: IMPLEMENTATION CORRECTION + LIVE PROVIDER TEST
+- **New evidence from GitHub Actions**:
+  - The repository dependency install, TypeScript lint, and Vite production build completed successfully on an earlier branch revision.
+  - A real keyless-provider smoke request reached `api.murakumo.cloud` and returned HTTP 410 with `model_retired`: `murakumo-main` is no longer available and the endpoint instructed clients to use `mishima`.
+  - The same smoke test could not resolve `api.llmfaucet.dev` from the GitHub Actions runner (`getaddrinfo ENOTFOUND`). This means llmfaucet is not a proven usable fallback in the intended runtime, regardless of its published documentation.
+- **Correction applied**:
+  - Updated the primary anonymous model from `murakumo-main` to `mishima`.
+  - Kept llmfaucet as a secondary keyless route, but only as a best-effort fallback after the primary; it must not be described as verified available.
+  - Updated the smoke test to try both keyless routes and record the actual route/model or the concrete failure.
+- **Current verification state**: A fresh GitHub Actions run for the `mishima` route is queued/in progress. Do not mark AC-MODEL-1 PASS until the live smoke test succeeds from GitHub Actions.
+- **Forge execution improvement on this branch**:
+  - Patch application and checks now use a temporary target-repository checkout.
+  - Target dependency installation uses the exact registered command `npm install --ignore-scripts`; target lint/test/build commands are only run when declared in the target manifest.
+  - Whitespace-only verification cannot authorize a PR. Generic checks no longer mark every requirement PASS; requirements remain PENDING pending criterion-specific proof.
+  - Target source files are ranked by overlap with the mission's terms before the bounded source context is sent to the model.
+- **Remaining blockers**: Live keyless model availability is not yet verified on the current revision. Public API authorization and workflow privilege boundaries still need review. The PR remains draft and must not be merged until current CI and provider smoke tests pass.

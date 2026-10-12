@@ -127,7 +127,10 @@ export default function App() {
       // Attempt an empty title task to prove validation failure
       const res = await fetch('/api/tasks/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(githubToken.trim() ? { Authorization: `Bearer ${githubToken.trim()}` } : {}),
+        },
         body: JSON.stringify({
           title: '',
           description: '',
