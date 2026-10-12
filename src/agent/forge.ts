@@ -32,6 +32,8 @@ const PROTECTED_PATH_PATTERNS = [
 
 // Maximum allowed patch content size per file (100KB)
 const MAX_FILE_PATCH_BYTES = 100 * 1024;
+// Keep the total source context bounded for anonymous models with small context windows.
+const MAX_SOURCE_CONTEXT_CHARS = 24000;
 
 export class ForgeAgent {
   private github: GitHubService;
@@ -246,6 +248,18 @@ export class ForgeAgent {
             return report;
           }
           log('warn', `Skipping inferred ${reason} and continuing source selection.`);
+          continue;
+        }
+        const contextChars = targetSourceFiles.reduce((total, source) => total + source.content.length, 0);
+        if (contextChars + file.content.length > MAX_SOURCE_CONTEXT_CHARS) {
+          const reason = `adding ${file.path} would exceed the ${MAX_SOURCE_CONTEXT_CHARS}-character total source-context budget`;
+          if (explicitPaths.length > 0) {
+            report.status = 'BLOCKED';
+            report.blockerReason = `Explicit source context is too large: ${reason}.`;
+            log('warn', report.blockerReason);
+            return report;
+          }
+          log('warn', `Skipping inferred source file because ${reason}.`);
           continue;
         }
         targetSourceFiles.push({ path: file.path, content: file.content });
