@@ -301,6 +301,13 @@ export class ForgeAgent {
             if (scripts[scriptName]) checksToRun.push(command);
           }
         }
+        const substantiveChecks = checksToRun.filter((cmd) => cmd !== 'git diff --check');
+        if (substantiveChecks.length === 0) {
+          report.status = 'BLOCKED';
+          report.blockerReason = 'No recognized target-project test, lint, or build script exists; whitespace validation alone is not sufficient to authorize a coding PR.';
+          log('warn', report.blockerReason);
+          return report;
+        }
         checksToRun.push('git diff --check');
         for (const cmd of checksToRun) {
           log('info', `Testing proposed patch in target worktree: ${cmd}`);
@@ -386,7 +393,7 @@ export class ForgeAgent {
 - **Branch**: \`${branchName}\`
 
 #### Requirements Traceability
-${report.requirements.map((r) => `- [x] **${r.id}**: ${r.description} (${r.status})`).join('\n')}
+${report.requirements.map((r) => `- [ ] **${r.id}**: ${r.description} (${r.status}; criterion-specific proof pending)`).join('\n')}
 
 #### Verified Checks
 ${report.testResults.map((t) => `- \`${t.command}\`: Exit ${t.exitCode} (${t.status}) in ${t.durationMs}ms`).join('\n')}
