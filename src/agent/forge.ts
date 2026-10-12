@@ -16,6 +16,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { transformSync } from 'esbuild';
 
 const execFileAsync = promisify(execFile);
 
@@ -211,6 +212,16 @@ export function validateTestStructure(
   content: string,
 ): { valid: boolean; error?: string } {
   if (!/\.test\.[cm]?[jt]sx?$/i.test(filePath)) return { valid: true };
+
+  try {
+    transformSync(content, {
+      loader: /\.tsx$/i.test(filePath) ? 'tsx' : 'ts',
+      sourcefile: filePath,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { valid: false, error: `Test file syntax error: ${detail}` };
+  }
 
   const chars = content.split('');
   let state: 'code' | 'single' | 'double' | 'template' | 'line-comment' | 'block-comment' = 'code';
