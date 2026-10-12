@@ -12,7 +12,6 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import * as ts from 'typescript';
 
 const execFileAsync = promisify(execFile);
 
@@ -115,58 +114,34 @@ export class ForgeAgent {
     const problems: string[] = [];
 
     for (const change of changes) {
-      let current: string | undefined;
-      if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
-        current = sourceByPath.get(change.path);
-        if (typeof current !== 'string') {
-          problems.push(`${change.path}: source content was not supplied to validate the edit anchors.`);
-          continue;
-        }
-
-        for (const edit of change.edits) {
-          if (!edit || typeof edit.find !== 'string' || edit.find.length === 0 || typeof edit.replace !== 'string') {
-            problems.push(`${change.path}: malformed exact-edit entry.`);
-            current = undefined;
-            break;
-          }
-          const first = current.indexOf(edit.find);
-          if (first < 0) {
-            problems.push(`${change.path}: exact anchor not found: ${JSON.stringify(edit.find.slice(0, 100))}`);
-            current = undefined;
-            break;
-          }
-          const second = current.indexOf(edit.find, first + edit.find.length);
-          if (second >= 0) {
-            problems.push(`${change.path}: anchor is ambiguous: ${JSON.stringify(edit.find.slice(0, 100))}`);
-            current = undefined;
-            break;
-          }
-          current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
-        }
-      } else if (change.action === 'create' && typeof change.content === 'string') {
-        current = change.content;
-      } else {
+      if (change.action !== 'modify' || !Array.isArray(change.edits) || change.edits.length === 0) continue;
+      let current = sourceByPath.get(change.path);
+      if (typeof current !== 'string') {
+        problems.push(`${change.path}: source content was not supplied to validate the edit anchors.`);
         continue;
       }
 
-      if (typeof current !== 'string' || !/\.(?:ts|tsx|js|jsx|mts|cts|mjs|cjs)$/i.test(change.path)) continue;
-      const extension = path.extname(change.path).toLowerCase();
-      const scriptKind = extension === '.tsx'
-        ? ts.ScriptKind.TSX
-        : extension === '.jsx'
-          ? ts.ScriptKind.JSX
-          : ['.js', '.mjs', '.cjs'].includes(extension)
-            ? ts.ScriptKind.JS
-            : ts.ScriptKind.TS;
-      const sourceFile = ts.createSourceFile(change.path, current, ts.ScriptTarget.Latest, true, scriptKind);
-      for (const diagnostic of sourceFile.parseDiagnostics.slice(0, 3)) {
-        const position = sourceFile.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
-        const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ').slice(0, 180);
-        problems.push(`${change.path}: syntax error at ${position.line + 1}:${position.character + 1}: ${message}`);
+      for (const edit of change.edits) {
+        if (!edit || typeof edit.find !== 'string' || edit.find.length === 0 || typeof edit.replace !== 'string') {
+          problems.push(`${change.path}: malformed exact-edit entry.`);
+          break;
+        }
+        const first = current.indexOf(edit.find);
+        if (first < 0) {
+          problems.push(`${change.path}: exact anchor not found: ${JSON.stringify(edit.find.slice(0, 100))}`);
+          break;
+        }
+        const second = current.indexOf(edit.find, first + edit.find.length);
+        if (second >= 0) {
+          problems.push(`${change.path}: anchor is ambiguous: ${JSON.stringify(edit.find.slice(0, 100))}`);
+          break;
+        }
+        current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
       }
     }
     return problems;
   }
+
 
   private async applyChangesToWorktree(worktree: string, changes: FileChangePlan[]): Promise<void> {
     for (const change of changes) {
