@@ -253,7 +253,7 @@ export class ForgeAgent {
       const contextFiles = [
         { path: 'AGENTS.md', content: instructionText },
         { path: 'package.json', content: packageJsonContent },
-        { path: 'FILE_TREE_INVENTORY.txt', content: repoFilePaths.slice(0, 100).join('\n') },
+        { path: 'FILE_TREE_INVENTORY.txt', content: (explicitPaths.length > 0 ? explicitPaths : repoFilePaths.slice(0, 100)).join('\n') },
         ...targetSourceFiles,
       ];
 
