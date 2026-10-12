@@ -15,7 +15,7 @@ async function runCli() {
   const allowedPaths = rawAllowedPaths.split(/[;,\n]/).map((value) => value.trim()).filter(Boolean);
   const baseTaskDesc = process.env.TASK_DESC || 'Run repository health check and verification';
   const taskDesc = allowedPaths.length > 0
-    ? `${baseTaskDesc}\n\nSTRICT FILE SCOPE: You may modify only these exact repository paths: ${allowedPaths.join(', ')}. Do not edit any other file.`
+    ? [baseTaskDesc, '', `STRICT FILE SCOPE: You may modify only these exact repository paths: ${allowedPaths.join(', ')}. Do not edit any other file.`].join(String.fromCharCode(10))
     : baseTaskDesc;
   const targetRepo = process.env.GITHUB_REPOSITORY || 'madnessgate44-debug/firstborn';
   const token = process.env.GITHUB_TOKEN;
