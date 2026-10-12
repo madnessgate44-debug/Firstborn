@@ -20,12 +20,13 @@ on:
 
 concurrency:
   group: forge-${{ github.event.issue.number || github.event.inputs.task_id || github.run_id }}
-  cancel-in-progress: true
+  # Queue same-task runs instead of interrupting a run that may already be committing.
+  cancel-in-progress: false
 
 jobs:
   run-forge:
     # Only run when issue has label 'forge-task' or triggered manually
-    if: github.event_name == 'workflow_dispatch' || (contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
+    if: github.event_name == 'workflow_dispatch' || (github.event.label.name == 'forge-task' && contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
