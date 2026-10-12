@@ -1,7 +1,7 @@
 const routes = [
   {
     base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, ''),
-    model: process.env.FREE_MODEL_NAME || 'murakumo-main',
+    model: process.env.FREE_MODEL_NAME || 'mishima',
     provider: 'Murakumo anonymous inference',
     authorization: '',
   },
