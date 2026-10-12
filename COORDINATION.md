@@ -680,3 +680,44 @@ Open queue reduced 11 -> 3 (#34, #24, #30). No unique content dropped.
   least-privilege behaviour. No merge capability added. No secrets in this file.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-M3-20261012-02`
+- **Timestamp (UTC)**: 2026-10-12T15:55:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: M3 IMPLEMENTATION + EXHAUSTION-READINESS REPORT
+- **Branch**: `feat/forge-controller-hardening` (PR #34). Baseline `main` = `30e4f41`.
+
+#### What landed (M3)
+- `src/agent/mission-trace.ts` (new): deterministic `traceEntry` / `summarizeTrace`.
+  `report.trace[]` records `INSPECT -> PLAN -> VALIDATE -> APPLY -> TEST ->
+  POLICY -> COMMIT -> PR` transitions. Derived data only; never a control input.
+- `FORGE_MAX_MISSION_ATTEMPTS` (default 1, clamped 1..5) drives a bounded retry
+  around transient base movement. Default preserves prior single-attempt behaviour.
+- `docs/EXHAUSTION_TESTING.md` (new): procedure, signals (stuck loops, silent weak
+  models, wrong success, resource growth), bounded limits table, pass criteria.
+- `tests/mission-trace.test.ts` (new): 6 cases. Suite now 42/42.
+- `.gitignore`: runtime `.firstborn/` evidence ignored (never committed).
+
+#### Live evidence (local, keyless, no token — write therefore policy-blocked)
+Two consecutive runs, each:
+`INSPECT:PASSED -> PLAN:PASSED -> VALIDATE:PASSED -> APPLY:PASSED -> TEST:PASSED
+-> POLICY:BLOCKED`
+- All 5 target checks PASSED on attempt 1 (`npm install/lint/test/build`,
+  `git diff --check`).
+- Capability-first routing: `chat:large` skipped ("no usable text"), degraded to
+  `chat`/ovh with the reason recorded in `keylessRouteErrors`.
+- `POLICY:BLOCKED` is correct: `allowPrCreation=false` in the local harness, so no
+  unattributed GitHub write. The mission itself reached `VERIFYING` successfully.
+
+#### Checks
+`npm run lint` 0 · `npm test` 42/42 · `npm run build` 0 · `npm run model:smoke` PASS ·
+CI `verify` success on `ab87188`.
+
+#### State
+Remaining before exhaustion testing: merge PR #34 (human authority). The engine,
+trace, bounded limits, and doc are complete and verified.
+
+No secrets, tokens, or credentials appear in this entry.
