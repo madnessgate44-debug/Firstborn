@@ -164,3 +164,17 @@ test('test structure: rejects balanced but invalid TypeScript before checks', ()
   assert.equal(result.valid, false);
   assert.match(result.error ?? '', /Test file syntax error/);
 });
+
+test('test structure: accepts regex literals containing unmatched delimiter characters', () => {
+  const result = validateTestStructure('tests/example.test.ts', "import { test } from 'node:test';\ntest('regex', () => { const openBrace = /{/; assert.ok(openBrace); });");
+  assert.equal(result.valid, true);
+});
+
+test('test structure: rejects nested tests inside a nested callback', () => {
+  const result = validateTestStructure('tests/example.test.ts', `import { test } from 'node:test';
+test('outer', () => {
+  Promise.resolve().then(() => it('inner', () => {}));
+});`);
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /Nested test declaration rejected/);
+});
