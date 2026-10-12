@@ -177,10 +177,6 @@ export function validateModelPlanShape(raw: unknown): ModelPlanShapeCheck {
 }
 
 /**
- * Reject model output that is only a placeholder comment. Passing lint/tests on a
- * TODO-only file is not evidence that a coding task was implemented.
- */
-/**
  * Validate an optional exact path allowlist before a model patch can be applied.
  * Paths are normalized to POSIX form; an empty allowlist preserves legacy behavior.
  */
@@ -242,19 +238,21 @@ export function validateTestStructure(
     if (isTestCall(node)) {
       let ancestor: ts.Node | undefined = node.parent;
       while (ancestor) {
-        if (
-          (ts.isArrowFunction(ancestor) || ts.isFunctionExpression(ancestor))
-          && ts.isCallExpression(ancestor.parent)
-          && isTestCall(ancestor.parent)
-          && ancestor.parent.arguments.some((argument) => argument === ancestor)
-        ) {
-          const outerCall = ancestor.parent;
-          const firstArg = outerCall.arguments[0];
-          const label = firstArg && (ts.isStringLiteral(firstArg) || ts.isNoSubstitutionTemplateLiteral(firstArg))
-            ? firstArg.text
-            : '<unnamed test>';
-          nestedLabel = label;
-          return;
+        const callbackNode = ancestor;
+        if (ts.isArrowFunction(callbackNode) || ts.isFunctionExpression(callbackNode)) {
+          const parentCall = callbackNode.parent;
+          if (
+            ts.isCallExpression(parentCall)
+            && isTestCall(parentCall)
+            && parentCall.arguments.some((argument) => argument === callbackNode)
+          ) {
+            const firstArg = parentCall.arguments[0];
+            const label = firstArg && (ts.isStringLiteral(firstArg) || ts.isNoSubstitutionTemplateLiteral(firstArg))
+              ? firstArg.text
+              : '<unnamed test>';
+            nestedLabel = label;
+            return;
+          }
         }
         ancestor = ancestor.parent;
       }
@@ -272,6 +270,10 @@ export function validateTestStructure(
   return { valid: true };
 }
 
+/**
+ * Reject model output that is only a placeholder comment. Passing lint/tests on a
+ * TODO-only file is not evidence that a coding task was implemented.
+ */
 export function validatePatchSubstance(
   changes: FileChangePlan[],
 ): { valid: boolean; error?: string } {
