@@ -17,6 +17,10 @@ on:
         description: 'Task Detailed Description'
         required: true
         default: 'Verify tests and baseline commit integrity'
+      task_allowed_paths:
+        description: 'Optional comma-separated exact file paths Forge may modify'
+        required: false
+        default: ''
 
 concurrency:
   group: forge-${{ github.event.issue.number || github.event.inputs.task_id || github.run_id }}
@@ -66,6 +70,7 @@ jobs:
           TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id }}
           TASK_TITLE: ${{ github.event.issue.title || github.event.inputs.task_title }}
           TASK_DESC: ${{ github.event.issue.body || github.event.inputs.task_desc }}
+          TASK_ALLOWED_PATHS: ${{ github.event.inputs.task_allowed_paths }}
         run: npx tsx src/agent/forge-runner.ts
 
       - name: Finalize workflow evidence
