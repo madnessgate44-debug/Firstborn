@@ -49,7 +49,7 @@ export class ModelService {
   getProviderInfo() {
     return {
       primaryProvider: 'freelm multi-provider free-tier router with keyless Kilo and OVHcloud fallback',
-      primaryModel: 'chat:large',
+      primaryModel: 'chat',
       primaryRequiresApiKey: false,
       fallbackProvider: 'Google AI Studio / Gemini',
       fallbackModel: 'gemini-2.5-flash',
@@ -94,7 +94,7 @@ Respond only with valid JSON.`;
 
     const primaryErrors: string[] = [];
     let invokedProvider = 'freelm free-tier router';
-    let invokedModel = 'chat:large';
+    let invokedModel = 'chat';
 
     try {
       const llm = FreeLLM.fromEnv({
@@ -116,7 +116,7 @@ Respond only with valid JSON.`;
 
       // Some anonymous endpoints report HTTP success but return an empty/thinking-only
       // answer. Treat that as a failed model choice and try another discovered alias.
-      for (const alias of ['chat:large', 'chat:fast', 'chat:small']) {
+      for (const alias of ['chat', 'chat:fast', 'chat:small']) {
         try {
           const response = await llm.chat(messages, {
             model: alias,
