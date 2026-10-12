@@ -18,6 +18,7 @@ const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
   'npm run test': { executable: 'npm', args: ['run', 'test'] },
   'npm test': { executable: 'npm', args: ['test'] },
   'npm run build': { executable: 'npm', args: ['run', 'build'] },
+  'npm run model:smoke': { executable: 'npm', args: ['run', 'model:smoke'] },
   'npx vitest run': { executable: 'npx', args: ['vitest', 'run'] },
   'npx tsc --noEmit': { executable: 'npx', args: ['tsc', '--noEmit'] },
   'git status': { executable: 'git', args: ['status', '--short'] },
