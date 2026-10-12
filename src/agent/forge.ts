@@ -17,6 +17,7 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { transformSync } from 'esbuild';
+import * as ts from 'typescript';
 
 const execFileAsync = promisify(execFile);
 
@@ -220,131 +221,53 @@ export function validateTestStructure(
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return { valid: false, error: `Test file syntax error: ${detail}` };
+    return { valid: false, error: \`Test file syntax error: \${detail}\` };
   }
 
-  const chars = content.split('');
-  let state: 'code' | 'single' | 'double' | 'template' | 'line-comment' | 'block-comment' = 'code';
-  let escaped = false;
-  for (let i = 0; i < chars.length; i += 1) {
-    const ch = content[i];
-    const next = content[i + 1];
-    if (state === 'code') {
-      if (ch === '/' && next === '/') {
-        chars[i] = chars[i + 1] = ' ';
-        i += 1;
-        state = 'line-comment';
-      } else if (ch === '/' && next === '*') {
-        chars[i] = chars[i + 1] = ' ';
-        i += 1;
-        state = 'block-comment';
-      } else if (ch === "'") {
-        chars[i] = ' ';
-        state = 'single';
-      } else if (ch === '"') {
-        chars[i] = ' ';
-        state = 'double';
-      } else if (ch === '`') {
-        chars[i] = ' ';
-        state = 'template';
-      }
-    } else if (state === 'line-comment') {
-      if (ch === '\n') state = 'code';
-      else chars[i] = ' ';
-    } else if (state === 'block-comment') {
-      if (ch === '*' && next === '/') {
-        chars[i] = chars[i + 1] = ' ';
-        i += 1;
-        state = 'code';
-      } else if (ch !== '\n') chars[i] = ' ';
-    } else {
-      if (ch !== '\n') chars[i] = ' ';
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if ((state === 'single' && ch === "'") || (state === 'double' && ch === '"') || (state === 'template' && ch === '`')) state = 'code';
-    }
-  }
+  const source = ts.createSourceFile(
+    filePath,
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    /\.tsx$/i.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const isTestCall = (node: ts.Node): node is ts.CallExpression =>
+    ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && (node.expression.text === 'test' || node.expression.text === 'it');
 
-  const code = chars.join('');
-  const delimiters: { char: string; index: number }[] = [];
-  const pairs: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
-  for (let i = 0; i < code.length; i += 1) {
-    const ch = code[i];
-    if (ch === '(' || ch === '[' || ch === '{') delimiters.push({ char: ch, index: i });
-    else if (ch === ')' || ch === ']' || ch === '}') {
-      const open = delimiters.pop();
-      if (!open || open.char !== pairs[ch]) {
-        return { valid: false, error: `Test file has mismatched delimiter "${ch}" at offset ${i}.` };
+  let nestedLabel: string | undefined;
+  const visit = (node: ts.Node): void => {
+    if (nestedLabel) return;
+    if (isTestCall(node)) {
+      let ancestor: ts.Node | undefined = node.parent;
+      while (ancestor) {
+        if (
+          (ts.isArrowFunction(ancestor) || ts.isFunctionExpression(ancestor))
+          && ts.isCallExpression(ancestor.parent)
+          && isTestCall(ancestor.parent)
+          && ancestor.parent.arguments.some((argument) => argument === ancestor)
+        ) {
+          const outerCall = ancestor.parent;
+          const firstArg = outerCall.arguments[0];
+          const label = firstArg && (ts.isStringLiteral(firstArg) || ts.isNoSubstitutionTemplateLiteral(firstArg))
+            ? firstArg.text
+            : '<unnamed test>';
+          nestedLabel = label;
+          return;
+        }
+        ancestor = ancestor.parent;
       }
     }
-  }
-  if (delimiters.length > 0) {
-    const open = delimiters[delimiters.length - 1];
-    return { valid: false, error: `Test file has an unclosed "${open.char}" delimiter at offset ${open.index}.` };
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
 
-  const testCallIndexes: number[] = [];
-  for (const testName of ['test', 'it']) {
-    let at = code.indexOf(testName);
-    while (at >= 0) {
-      const before = at === 0 ? '' : code[at - 1];
-      let after = at + testName.length;
-      while (after < code.length && /\s/.test(code[after])) after += 1;
-      const boundaryBefore = !before || !/[A-Za-z0-9_$]/.test(before);
-      if (boundaryBefore && code.slice(at, at + testName.length) === testName && code[after] === '(') {
-        testCallIndexes.push(at);
-      }
-      at = code.indexOf(testName, at + testName.length);
-    }
-  }
-  testCallIndexes.sort((left, right) => left - right);
-  const callbackRanges: { start: number; end: number; name: string }[] = [];
-  for (const callStart of testCallIndexes) {
-    const openParen = code.indexOf('(', callStart);
-    let depth = 0;
-    let closeParen = -1;
-    for (let i = openParen; i < code.length; i += 1) {
-      if (code[i] === '(') depth += 1;
-      else if (code[i] === ')') {
-        depth -= 1;
-        if (depth === 0) { closeParen = i; break; }
-      }
-    }
-    if (closeParen < 0) continue;
-    const callBody = code.slice(openParen + 1, closeParen);
-    const arrowOffset = callBody.indexOf('=>');
-    const functionOffset = callBody.indexOf('function');
-    let callbackOffset = -1;
-    if (arrowOffset >= 0 && (functionOffset < 0 || arrowOffset < functionOffset)) callbackOffset = openParen + 1 + arrowOffset + 2;
-    else if (functionOffset >= 0) callbackOffset = openParen + 1 + functionOffset + 'function'.length;
-    if (callbackOffset < 0) continue;
-    const bodyOpen = code.indexOf('{', callbackOffset);
-    if (bodyOpen < 0 || bodyOpen >= closeParen) continue;
-    let braceDepth = 0;
-    let bodyClose = -1;
-    for (let i = bodyOpen; i < code.length; i += 1) {
-      if (code[i] === '{') braceDepth += 1;
-      else if (code[i] === '}') {
-        braceDepth -= 1;
-        if (braceDepth === 0) { bodyClose = i; break; }
-      }
-    }
-    if (bodyClose < 0) continue;
-    const parent = callbackRanges.find((range) => callStart > range.start && callStart < range.end);
-    if (parent) {
-      return {
-        valid: false,
-        error: `Nested test declaration rejected in "${filePath}": a test() or it() call appears inside the callback for "${parent.name}".`,
-      };
-    }
-    const firstArgument = content.slice(openParen + 1, closeParen).trim();
-    let label = '<unnamed test>';
-    if (firstArgument.startsWith("'") || firstArgument.startsWith('"')) {
-      const quote = firstArgument[0];
-      const labelEnd = firstArgument.indexOf(quote, 1);
-      if (labelEnd > 0) label = firstArgument.slice(1, labelEnd);
-    }
-    callbackRanges.push({ start: bodyOpen, end: bodyClose, name: label });
+  if (nestedLabel) {
+    return {
+      valid: false,
+      error: \`Nested test declaration rejected in "\${filePath}": a test() or it() call appears inside the callback for "\${nestedLabel}".\`,
+    };
   }
   return { valid: true };
 }
