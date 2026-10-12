@@ -9,6 +9,11 @@ import { ModelService } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 // Sensitive / Protected repository paths that Forge is prohibited from altering
 const PROTECTED_PATH_PATTERNS = [
@@ -25,8 +30,10 @@ export class ForgeAgent {
   private github: GitHubService;
   private model: ModelService;
   private testRunner: TestRunnerService;
+  private githubToken?: string;
 
   constructor(githubToken?: string) {
+    this.githubToken = githubToken?.trim();
     this.github = new GitHubService(githubToken);
     this.model = new ModelService();
     this.testRunner = new TestRunnerService();
@@ -45,8 +52,9 @@ export class ForgeAgent {
       if (!change.path || typeof change.path !== 'string') {
         return { valid: false, error: 'Malformed patch: Missing or non-string file path.' };
       }
-      const normalizedPath = path.normalize(change.path).replace(/^(\.\/)+/, '');
-      if (path.isAbsolute(change.path) || normalizedPath.startsWith('..') || change.path.includes('../')) {
+      const portablePath = change.path.replace(/\\/g, '/');
+      const normalizedPath = path.posix.normalize(portablePath).replace(/^(\.\/)+/, '');
+      if (path.isAbsolute(change.path) || portablePath.startsWith('/') || normalizedPath === '..' || normalizedPath.startsWith('../') || normalizedPath.includes('/../')) {
         return { valid: false, error: `Security Boundary Violation: Directory traversal or absolute path detected: "${change.path}".` };
       }
 
@@ -151,7 +159,7 @@ export class ForgeAgent {
       const packageJsonRemote = await this.github.fetchFile(owner, repo, 'package.json', repoInfo.defaultBranch);
       const packageJsonContent = packageJsonRemote?.content || '{}';
       const sourcePaths = repoFilePaths
-        .filter((p) => /\\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
+        .filter((p) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
         .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))
         .filter((p) => p !== 'package.json' && p !== 'AGENTS.md')
         .slice(0, 10);
@@ -227,43 +235,94 @@ export class ForgeAgent {
       }
       log('info', `Patch validated successfully: ${report.plannedChanges.length} files pass security checks.`);
 
-      // 6. TESTING / VERIFICATION
+      // 6. Apply the validated patch in an isolated checkout, then test that exact tree.
       report.status = 'TESTING';
-      log('info', 'Running bounded verification checks against strict command registry.');
-
-      // Default to strict safe check 'npm run lint'
-      const checksToRun = ['npm run lint'];
-
-      for (const cmd of checksToRun) {
-        log('info', `Executing bounded check: ${cmd}`);
-        const testRes = await this.testRunner.runCheck(cmd);
-        report.testResults.push(testRes);
-
-        if (testRes.status === 'PASSED') {
-          log('info', `Check "${cmd}" PASSED (exit code 0).`);
-        } else {
-          log('warn', `Check "${cmd}" FAILED (exit code ${testRes.exitCode}).`);
+      const workRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'firstborn-forge-'));
+      const worktree = path.join(workRoot, 'target');
+      try {
+        const gitEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete gitEnv.GITHUB_TOKEN;
+        delete gitEnv.GEMINI_API_KEY;
+        delete gitEnv.GH_TOKEN;
+        if (this.githubToken) {
+          gitEnv.GIT_CONFIG_COUNT = '1';
+          gitEnv.GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader';
+          gitEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${this.githubToken}`).toString('base64')}`;
         }
-      }
+        log('info', `Cloning target branch ${repoInfo.defaultBranch} into an isolated temporary worktree.`);
+        await execFileAsync('git', ['clone', '--depth', '1', '--branch', repoInfo.defaultBranch, `https://github.com/${owner}/${repo}.git`, worktree], {
+          env: gitEnv,
+          timeout: 120000,
+          maxBuffer: 2 * 1024 * 1024,
+        });
+        const { stdout: checkedOutSha } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: worktree, timeout: 15000 });
+        if (checkedOutSha.trim() !== report.baseCommitSha) {
+          report.status = 'BLOCKED';
+          report.blockerReason = `Target branch moved during inspection (expected ${report.baseCommitSha}, cloned ${checkedOutSha.trim()}). Retry against the new base.`;
+          log('warn', report.blockerReason);
+          return report;
+        }
 
-      // Enforce fail-closed semantics: if no tests ran, fail closed
-      if (report.testResults.length === 0) {
-        report.status = 'FAILED';
-        report.errorMessage = 'Verification failed: Zero tests were executed.';
-        log('error', report.errorMessage);
-        return report;
-      }
+        for (const change of report.plannedChanges) {
+          const portablePath = change.path.replace(/\\/g, '/');
+          const normalizedPath = path.posix.normalize(portablePath).replace(/^(\.\/)+/, '');
+          const absolutePath = path.resolve(worktree, normalizedPath);
+          if (!absolutePath.startsWith(worktree + path.sep)) {
+            throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
+          }
+          const exists = await fs.access(absolutePath).then(() => true).catch(() => false);
+          if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
+          if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+          await fs.writeFile(absolutePath, change.content as string, 'utf-8');
+        }
 
-      const allChecksPassed = report.testResults.every((r) => r.status === 'PASSED');
-      report.requirements.forEach((req) => {
-        req.status = allChecksPassed ? 'PASS' : 'FAIL';
-        req.evidence = `Exit codes: ${report.testResults.map((r) => `${r.command}=${r.exitCode}`).join(', ')}`;
-      });
+        const packagePath = path.join(worktree, 'package.json');
+        let scripts: Record<string, string> = {};
+        try {
+          const targetPackage = JSON.parse(await fs.readFile(packagePath, 'utf-8'));
+          scripts = targetPackage.scripts || {};
+        } catch {
+          // Non-Node repositories are not assumed to have npm checks.
+        }
 
-      if (!allChecksPassed) {
-        report.status = 'FAILED';
-        report.errorMessage = 'One or more verification checks failed.';
-        return report;
+        const checksToRun: string[] = [];
+        if (Object.keys(scripts).length > 0) {
+          const install = await this.testRunner.runCheck('npm install', worktree);
+          report.testResults.push(install);
+          if (install.status !== 'PASSED') {
+            report.status = 'FAILED';
+            report.errorMessage = `Target dependency installation failed (exit ${install.exitCode}).`;
+            log('error', report.errorMessage);
+            return report;
+          }
+          for (const command of ['npm run lint', 'npm test', 'npm run build']) {
+            const scriptName = command === 'npm test' ? 'test' : command.slice('npm run '.length);
+            if (scripts[scriptName]) checksToRun.push(command);
+          }
+        }
+        checksToRun.push('git diff --check');
+        for (const cmd of checksToRun) {
+          log('info', `Testing proposed patch in target worktree: ${cmd}`);
+          const result = await this.testRunner.runCheck(cmd, worktree);
+          report.testResults.push(result);
+          log(result.status === 'PASSED' ? 'info' : 'warn', `Target check "${cmd}" exit=${result.exitCode} status=${result.status}`);
+        }
+
+        const allChecksPassed = report.testResults.length > 0 && report.testResults.every((r) => r.status === 'PASSED');
+        if (!allChecksPassed) {
+          report.status = 'FAILED';
+          report.errorMessage = 'One or more checks failed in the isolated target worktree after applying the proposed patch.';
+          return report;
+        }
+
+        // Generic repository checks do not prove every requirement individually.
+        report.requirements.forEach((req) => {
+          req.status = 'PENDING';
+          req.evidence = `Target-tree checks passed: ${report.testResults.map((r) => `${r.command}=${r.exitCode}`).join(', ')}. Criterion-specific proof still requires review.`;
+        });
+      } finally {
+        await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
       }
 
       // 7. GITHUB BRANCH, COMMIT & PR CREATION
