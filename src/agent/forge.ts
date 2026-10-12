@@ -15,6 +15,7 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
+// Keyless models sometimes wrap otherwise-valid JSON in Markdown code fences.
 function parseModelJson(text: string): any {
   const trimmed = text.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
