@@ -1,4 +1,4 @@
-const base = (process.env.FREE_MODEL_BASE_URL || 'https://api.llmfaucet.dev/v1').replace(/\\/$/, '');
+const base = (process.env.FREE_MODEL_BASE_URL || 'https://api.llmfaucet.dev/v1').replace(/\/+$/, '');
 const model = process.env.FREE_MODEL_NAME || 'auto:coding';
 
 const response = await fetch(`${base}/chat/completions`, {
