@@ -28,7 +28,7 @@ try {
     },
   });
   let passed = null;
-  for (const alias of ['chat:large', 'chat:fast', 'chat:small']) {
+  for (const alias of ['chat', 'chat:fast', 'chat:small']) {
     try {
       const response = await llm.chat([
         { role: 'system', content: 'Reply with exactly the requested token and no other text.' },
@@ -36,7 +36,7 @@ try {
       ], {
         model: alias,
         temperature: 0,
-        max_tokens: 64,
+        max_tokens: 256,
         signal: AbortSignal.timeout(30000),
       });
       const text = response.text.trim();
@@ -52,7 +52,7 @@ try {
       failures.push(`${alias}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  if (!passed) throw new Error('No keyless route returned the required usable text across chat:large, chat:fast, and chat:small.');
+  if (!passed) throw new Error('No keyless route returned the required usable text across chat, chat:fast, and chat:small.');
   console.log(JSON.stringify({
     status: 'PASS',
     mode: 'keyless-only (all provider credentials removed)',
