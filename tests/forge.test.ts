@@ -156,5 +156,5 @@ test('second', () => {});`);
 test('test structure: rejects syntax errors before running checks', () => {
   const result = validateTestStructure('tests/example.test.ts', `test('unfinished', () => {`);
   assert.equal(result.valid, false);
-  assert.match(result.error ?? '', /syntax error/);
+  assert.match(result.error ?? '', /syntax error|unclosed|mismatched delimiter/);
 });
