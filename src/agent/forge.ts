@@ -15,6 +15,12 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
+function parseModelJson(text: string): any {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return JSON.parse(fenced ? fenced[1] : trimmed);
+}
+
 // Sensitive / Protected repository paths that Forge is prohibited from altering
 const PROTECTED_PATH_PATTERNS = [
   /^\.git\//i,
@@ -292,7 +298,7 @@ export class ForgeAgent {
 
       let parsedPlan: any;
       try {
-        parsedPlan = JSON.parse(modelResult.text);
+        parsedPlan = parseModelJson(modelResult.text);
       } catch (err: any) {
         log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
         report.modelInvoked.callsCount += 1;
@@ -309,7 +315,7 @@ export class ForgeAgent {
           return report;
         }
         try {
-          parsedPlan = JSON.parse(modelResult.text);
+          parsedPlan = parseModelJson(modelResult.text);
         } catch (repairErr: any) {
           report.status = 'FAILED';
           report.errorMessage = `Model output remained invalid JSON after one repair attempt: ${repairErr.message}`;
@@ -339,7 +345,7 @@ export class ForgeAgent {
           return report;
         }
         try {
-          parsedPlan = JSON.parse(modelResult.text);
+          parsedPlan = parseModelJson(modelResult.text);
         } catch (err: any) {
           report.status = 'FAILED';
           report.errorMessage = `Failed to parse repaired model JSON: ${err.message}`;
