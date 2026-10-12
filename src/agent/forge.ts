@@ -205,8 +205,8 @@ export function validateAllowedPaths(
 
 /**
  * Detect malformed node:test structure before running the test suite.
- * A small lexer masks comments and string literals so structural checks do not
- * mistake examples or text for executable test declarations.
+ * The TypeScript AST distinguishes executable test calls from comments, strings,
+ * regex literals, and other syntax that a lightweight lexer can misread.
  */
 export function validateTestStructure(
   filePath: string,
