@@ -424,3 +424,29 @@ This document is a persistent, append-only coordination record between **Google 
   - Reduce per-attempt timeout to 30 seconds.
 - **Verification pending**: GitHub Actions run `38187950715` is checking install, lint, build, and the live keyless smoke test for the fix. Do not re-run the coding mission until this run is green.
 - **E2E evidence preservation**: first mission snapshot is preserved at [PR #4](https://github.com/madnessgate44-debug/Firstborn/pull/4), branch `forge/e2e-smoke-preserved`, based on commit `0ef19fb3987889623868d6a42877de5f0df3b92b`. PR #4 is open and must not be merged automatically.
+
+
+---
+
+### Entry: `IMPL-20261012-05`
+- **Timestamp (UTC)**: 2026-10-12T00:51:20Z
+- **Author**: CHATGPT
+- **Type**: FIRST SUCCESSFUL EXISTING-CODE MISSION
+- **Mission**: Issue #2, `Forge code mission: print branch and head commit in execution report`.
+- **Live model evidence**:
+  - Forge used the keyless `Murakumo anonymous free model`, which resolved to `nvidia/nemotron-3-super-120b-a12b:free`.
+  - No Gemini API key was required for the successful run. Gemini remains the emergency fallback if an existing valid key is configured.
+  - Qwen3.8 public routes were not usable during the live probe (one returned HTTP 502 `connection_refused`; another returned HTTP 503 `node-unavailable`), so they were not promoted to primary.
+- **Actual code mission evidence**:
+  - Run: [38189556312](https://github.com/madnessgate44-debug/Firstborn/actions/runs/38189556312)
+  - Base SHA: `7bc1c548bde8b3b1970c9cc2e008afc5812937ea`
+  - Agent branch: `forge/task-2`
+  - Head commit: `7a754bb1ed9f7cac582c2506aa38a243f039d221`
+  - Only `src/agent/forge-runner.ts` was changed: two lines print `report.branchName` and `report.headCommitSha`, with `N/A` fallbacks.
+  - Forge fetched the actual target manifest and one explicitly named source file, applied the exact-anchor edit in an isolated checkout, then passed `npm install`, `npm run lint`, `npm run build`, and `git diff --check` (all exit code 0).
+- **PR permission boundary**:
+  - The agent's attempt to open a PR received HTTP 403: `GitHub Actions is not permitted to create or approve pull requests.`
+  - It preserved the tested branch and commit; it did not claim the PR existed.
+  - The ChatGPT GitHub controller independently inspected the report and diff, then opened [PR #13](https://github.com/madnessgate44-debug/Firstborn/pull/13). It is open and unmerged.
+- **Current outcome**: the keyless coding agent has now completed a real existing-code change, tested it in an isolated target checkout, and committed it. The remaining limitation is that GitHub Actions cannot create PRs with its current repository permission setting; the connected controller can create the review PR. The PR is intentionally left unmerged.
+- **Outstanding defect**: on PR-creation HTTP 403, the agent report still labels the overall status `BLOCKED` despite a tested commit being available. The new CLI output lines in PR #13 expose the branch and head SHA to the controller. A separate status-semantics correction remains desirable but is not a blocker to the proven one-agent coding path.
