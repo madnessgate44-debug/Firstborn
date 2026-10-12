@@ -540,15 +540,8 @@ export class ForgeAgent {
         }
 
         const checksToRun: string[] = [];
-        if (Object.keys(scripts).length > 0) {
-          const install = await this.testRunner.runCheck('npm install', worktree);
-          report.testResults.push(install);
-          if (install.status !== 'PASSED') {
-            report.status = 'FAILED';
-            report.errorMessage = `Target dependency installation failed (exit ${install.exitCode}).`;
-            log('error', report.errorMessage);
-            return report;
-          }
+        const hasNpmScripts = Object.keys(scripts).length > 0;
+        if (hasNpmScripts) {
           for (const command of ['npm run lint', 'npm test', 'npm run build']) {
             const scriptName = command === 'npm test' ? 'test' : command.slice('npm run '.length);
             if (scripts[scriptName]) checksToRun.push(command);
@@ -562,24 +555,126 @@ export class ForgeAgent {
           return report;
         }
         checksToRun.push('git diff --check');
-        for (const cmd of checksToRun) {
-          log('info', `Testing proposed patch in target worktree: ${cmd}`);
-          const result = await this.testRunner.runCheck(cmd, worktree);
-          report.testResults.push(result);
-          log(result.status === 'PASSED' ? 'info' : 'warn', `Target check "${cmd}" exit=${result.exitCode} status=${result.status}`);
+
+        let latestAttemptResults: TaskExecutionReport['testResults'] = [];
+        let allChecksPassed = false;
+        for (let attempt = 0; attempt < 2 && !allChecksPassed; attempt += 1) {
+          const attemptResults: TaskExecutionReport['testResults'] = [];
+          if (hasNpmScripts) {
+            let install = await this.testRunner.runCheck('npm install', worktree);
+            report.testResults.push(install);
+            attemptResults.push(install);
+            if (install.status !== 'PASSED') {
+              log('warn', `Dependency installation failed on attempt ${attempt + 1}; retrying once before classifying the environment as blocked.`);
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              install = await this.testRunner.runCheck('npm install', worktree);
+              report.testResults.push(install);
+              attemptResults.push(install);
+            }
+            if (install.status !== 'PASSED') {
+              report.status = 'FAILED';
+              report.errorMessage = `Target dependency installation failed twice (last exit ${install.exitCode}).`;
+              log('error', report.errorMessage);
+              return report;
+            }
+          }
+
+          for (const cmd of checksToRun) {
+            log('info', `Testing proposed patch (attempt ${attempt + 1}/2): ${cmd}`);
+            const result = await this.testRunner.runCheck(cmd, worktree);
+            report.testResults.push(result);
+            attemptResults.push(result);
+            const detail = result.status === 'PASSED'
+              ? ''
+              : `; stderr tail: ${result.stderr.slice(-500)}; stdout tail: ${result.stdout.slice(-500)}`;
+            log(result.status === 'PASSED' ? 'info' : 'warn', `Target check "${cmd}" exit=${result.exitCode} status=${result.status}${detail}`);
+          }
+
+          latestAttemptResults = attemptResults;
+          allChecksPassed = attemptResults.length > 0 && attemptResults.every((result) => result.status === 'PASSED');
+          if (allChecksPassed) break;
+
+          if (attempt === 0) {
+            const failedResults = attemptResults.filter((result) => result.status !== 'PASSED');
+            const failureDetails = failedResults.map((result) =>
+              `COMMAND: ${result.command}\nSTATUS: ${result.status}\nEXIT: ${result.exitCode}\nSTDOUT TAIL:\n${result.stdout.slice(-1800)}\nSTDERR TAIL:\n${result.stderr.slice(-1800)}`
+            ).join('\n\n--- FAILED CHECK ---\n\n');
+            log('warn', `Target checks failed; requesting one bounded model repair with ${failedResults.length} failing check(s).`);
+            report.modelInvoked.callsCount += 1;
+            const repairContext = [
+              ...contextFiles,
+              { path: 'FAILED_CHECKS.txt', content: failureDetails },
+              { path: 'PREVIOUS_PATCH_SUMMARY.txt', content: report.plannedChanges.map((change) => `${change.action} ${change.path}: ${change.rationale}`).join('\n') },
+            ];
+            const repairResult = await this.model.generatePlanAndPatch(
+              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (one bounded retry). The previous patch was applied but failed these target checks; the exact diagnostics are in FAILED_CHECKS.txt. Re-read the original source and diagnostics, fix the actual cause (including missing imports or type/syntax errors), and return a complete replacement JSON plan for the same task. Preserve the original task scope. Do not weaken, skip, or silence checks. Existing files must use exact-anchor edits copied verbatim from the original supplied source. If adding declarations, preserve top-level/interface/class boundaries. Do not modify package manifests, workflows, scripts, secrets, or security controls.`,
+              repairContext
+            );
+            report.modelInvoked.provider = repairResult.provider;
+            report.modelInvoked.model = repairResult.model;
+            report.modelInvoked.fallbackUsed = repairResult.fallbackUsed ?? false;
+            report.modelInvoked.keylessRouteErrors = repairResult.keylessRouteErrors ?? [];
+            if (!repairResult.success) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair model call failed: ${repairResult.error}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+            let repairedPlan: any;
+            try {
+              repairedPlan = parseModelJson(repairResult.text);
+            } catch (error: any) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair returned invalid JSON: ${error.message}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+            if (!Array.isArray(repairedPlan.changes) || repairedPlan.changes.length === 0) {
+              report.status = 'FAILED';
+              report.errorMessage = 'Target-check repair returned no replacement changes.';
+              log('error', report.errorMessage);
+              return report;
+            }
+            report.plannedChanges = repairedPlan.changes.map((change: any) => ({
+              path: change.path,
+              action: change.action,
+              rationale: change.rationale,
+              content: change.content,
+              edits: change.edits,
+            }));
+            const repairAnchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+            if (repairAnchorProblems.length > 0) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair failed patch preflight: ${repairAnchorProblems.slice(0, 5).join(' | ')}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+            const repairValidation = this.validatePatch(report.plannedChanges);
+            if (!repairValidation.valid) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair was rejected: ${repairValidation.error}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+
+            await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: worktree, timeout: 15000 });
+            await execFileAsync('git', ['clean', '-fd'], { cwd: worktree, timeout: 15000 });
+            await this.applyChangesToWorktree(worktree, report.plannedChanges);
+            log('info', 'Applied repaired patch to a clean base worktree; rerunning target checks once.');
+          }
         }
 
-        const allChecksPassed = report.testResults.length > 0 && report.testResults.every((r) => r.status === 'PASSED');
         if (!allChecksPassed) {
           report.status = 'FAILED';
-          report.errorMessage = 'One or more checks failed in the isolated target worktree after applying the proposed patch.';
+          report.errorMessage = 'Target checks still failed after one bounded patch-repair attempt.';
+          log('error', report.errorMessage);
           return report;
         }
 
         // Generic repository checks do not prove every requirement individually.
         report.requirements.forEach((req) => {
           req.status = 'PENDING';
-          req.evidence = `Target-tree checks passed: ${report.testResults.map((r) => `${r.command}=${r.exitCode}`).join(', ')}. Criterion-specific proof still requires review.`;
+          req.evidence = `Latest target-check attempt passed: ${latestAttemptResults.map((result) => `${result.command}=${result.exitCode}`).join(', ')}. Criterion-specific proof still requires review.`;
         });
       } finally {
         await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
