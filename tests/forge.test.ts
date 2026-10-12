@@ -107,7 +107,8 @@ test('patch substance: accepts executable implementation or assertions', () => {
   const result = validatePatchSubstance([{
     path: 'tests/model.test.ts',
     action: 'create',
-    content: "import assert from 'node:assert/strict';\\nassert.equal(1, 1);",
+    rationale: 'Ensure substantive code is accepted',
+    content: "import assert from 'node:assert/strict';\nassert.equal(1, 1);",
   }]);
   assert.equal(result.valid, true);
 });
