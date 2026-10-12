@@ -181,6 +181,32 @@ export function resolveTargetBranch(requested: string | undefined, defaultBranch
   return trimmed && trimmed !== defaultBranch ? trimmed : defaultBranch;
 }
 
+// Extract repo file paths the task names explicitly. Root-level files (README.md,
+// package.json, ...) count, not just src/docs/scripts/.github — otherwise a task
+// like "modify README.md" loses its authoritative target and the model edits blind.
+const EXPLICIT_PATH_RE = /(?<![\w./-])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml))(?![\w/-])/g;
+
+export function extractExplicitPaths(taskText: string, repoFilePaths: string[]): string[] {
+  const repoSet = new Set(repoFilePaths);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const match of taskText.matchAll(EXPLICIT_PATH_RE)) {
+    const candidate = match[1];
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    if (repoSet.has(candidate)) out.push(candidate);
+  }
+  return out;
+}
+
+// Exhaustion run: weak free models copied the harness's own context separator
+// and used it as an edit anchor, which can never match real file content.
+const HARNESS_SEPARATOR_ANCHOR_RE = /--- END FILE ---|<<<FORGE_(END_)?CONTEXT_FILE/;
+
+export function isHarnessSeparatorAnchor(find: string): boolean {
+  return HARNESS_SEPARATOR_ANCHOR_RE.test(find);
+}
+
 // A requirement is only PASS when a check named in its own acceptance criteria,
 // description, or explicit checkCommands actually passed. Unrelated green checks
 // cannot satisfy it, and a named-but-failing check yields FAIL, never PASS.
@@ -300,6 +326,14 @@ export class ForgeAgent {
       const source = sourceByPath.get(change.path);
       if (typeof source !== 'string') {
         problems.push(`${change.path}: source content was not supplied to validate the edit anchors.`);
+        continue;
+      }
+      // Exhaustion run: weak free models copy the harness's own context separator
+      // and use it as a "find" anchor, which can never match. Name it precisely so
+      // the bounded repair can redirect them instead of looping on a vague failure.
+      const markerAnchor = change.edits.find((edit) => isHarnessSeparatorAnchor(String(edit?.find ?? '')));
+      if (markerAnchor) {
+        problems.push(`${change.path}: edit anchor is a harness context separator, not file content: ${JSON.stringify(String(markerAnchor.find).slice(0, 60))}`);
         continue;
       }
       const result = applyExactEdits(source, change.edits);
@@ -485,10 +519,7 @@ export class ForgeAgent {
         .toLowerCase()
         .split(/[^a-z0-9]+/)
         .filter((term) => term.length > 2);
-      const explicitPaths = Array.from(
-        taskText.matchAll(/((?:src|scripts|\.github|docs)\/[\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml))/g),
-        (match) => match[1]
-      ).filter((candidate, index, all) => all.indexOf(candidate) === index && repoFilePaths.includes(candidate));
+      const explicitPaths = extractExplicitPaths(taskText, repoFilePaths);
       const eligibleSourcePaths = repoFilePaths
         .filter((p) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
         .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))

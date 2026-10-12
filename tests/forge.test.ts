@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTargetBranch, evaluateRequirementEvidence } from '../src/agent/forge.ts';
+import { resolveTargetBranch, evaluateRequirementEvidence, extractExplicitPaths, isHarnessSeparatorAnchor } from '../src/agent/forge.ts';
 
 test('resolveTargetBranch: explicit non-default branch wins', () => {
   assert.equal(resolveTargetBranch('release/2.0', 'main'), 'release/2.0');
@@ -78,4 +78,42 @@ test('evidence: criterion in description is also honored', () => {
 test('evidence: missing acceptance criteria yields PENDING', () => {
   const result = evaluateRequirementEvidence({}, [passing]);
   assert.equal(result.status, 'PENDING');
+});
+
+test('extractExplicitPaths: recognizes root-level files named in the task', () => {
+  const repo = ['README.md', 'package.json', 'src/agent/forge.ts', 'docs/EXHAUSTION_TESTING.md'];
+  assert.deepEqual(
+    extractExplicitPaths('Modify README.md by adding a section at the end.', repo),
+    ['README.md']
+  );
+  assert.deepEqual(
+    extractExplicitPaths('Update src/agent/forge.ts and docs/EXHAUSTION_TESTING.md.', repo),
+    ['src/agent/forge.ts', 'docs/EXHAUSTION_TESTING.md']
+  );
+});
+
+test('extractExplicitPaths: ignores non-repo names and de-duplicates', () => {
+  const repo = ['README.md'];
+  // A basename absent from the repo tree must not become an authoritative target.
+  assert.deepEqual(extractExplicitPaths('Edit README.md and then README.md again.', repo), ['README.md']);
+  assert.deepEqual(extractExplicitPaths('Edit CHANGELOG.md.', repo), []);
+});
+
+test('extractExplicitPaths: still recognizes nested paths', () => {
+  const repo = ['src/exhaust-add.ts', 'tests/exhaust-add.test.ts'];
+  assert.deepEqual(
+    extractExplicitPaths('Create src/exhaust-add.ts and tests/exhaust-add.test.ts.', repo),
+    ['src/exhaust-add.ts', 'tests/exhaust-add.test.ts']
+  );
+});
+
+test('isHarnessSeparatorAnchor: flags harness separators but not real content', () => {
+  // Exhaustion run: models anchored on the harness context separator.
+  assert.equal(isHarnessSeparatorAnchor('--- END FILE ---'), true);
+  assert.equal(isHarnessSeparatorAnchor('text\n--- END FILE ---'), true);
+  assert.equal(isHarnessSeparatorAnchor('<<<FORGE_CONTEXT_FILE path="README.md">>>'), true);
+  assert.equal(isHarnessSeparatorAnchor('<<<FORGE_END_CONTEXT_FILE>>>'), true);
+  // Real file content is never flagged.
+  assert.equal(isHarnessSeparatorAnchor('# Firstborn / Forge'), false);
+  assert.equal(isHarnessSeparatorAnchor(''), false);
 });
