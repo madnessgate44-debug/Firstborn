@@ -19,7 +19,7 @@ type ChatMessage = { role: 'system' | 'user'; content: string };
 export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
-  private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.llmfaucet.dev/v1').replace(/\\/$/, '');
+  private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.llmfaucet.dev/v1').replace(/\/+$/, '');
   private readonly primaryModel = process.env.FREE_MODEL_NAME || 'auto:coding';
 
   constructor() {
