@@ -27,6 +27,7 @@ jobs:
     # Only run when issue has label 'forge-task' or triggered manually
     if: github.event_name == 'workflow_dispatch' || (contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
@@ -43,17 +44,46 @@ jobs:
         with:
           node-version: 22
 
+      - name: Initialize execution evidence
+        run: |
+          mkdir -p .firstborn/evidence
+          printf '{"status":"STARTED","note":"Forge workflow started; detailed agent report will be added by forge-runner."}\n' > .firstborn/evidence/workflow-preflight.json
+
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Run Forge Agent
+        id: forge
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FIRSTBORN_KEYLESS_ONLY: 'true'
           TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id }}
           TASK_TITLE: ${{ github.event.issue.title || github.event.inputs.task_title }}
           TASK_DESC: ${{ github.event.issue.body || github.event.inputs.task_desc }}
         run: npx tsx src/agent/forge-runner.ts
+
+      - name: Finalize workflow evidence
+        if: always()
+        env:
+          FORGE_STEP_OUTCOME: ${{ steps.forge.outcome }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          evidence = Path('.firstborn/evidence/workflow-preflight.json')
+          if evidence.exists():
+              data = json.loads(evidence.read_text())
+              outcome = os.environ.get('FORGE_STEP_OUTCOME', 'unknown')
+              data['workflowOutcome'] = outcome
+              data['status'] = 'WORKFLOW_STEP_COMPLETED' if outcome == 'success' else 'WORKFLOW_STEP_FAILED'
+              evidence.write_text(json.dumps(data, indent=2) + '\n')
+          PY
 
       - name: Upload Execution Evidence Artifact
         if: always()

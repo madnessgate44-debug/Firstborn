@@ -32,6 +32,22 @@ const PROTECTED_PATH_PATTERNS = [
 
 // Maximum allowed patch content size per file (100KB)
 const MAX_FILE_PATCH_BYTES = 100 * 1024;
+// Keep the total source context bounded for anonymous models with small context windows.
+const MAX_SOURCE_CONTEXT_CHARS = 24000;
+
+// Anonymous models sometimes wrap otherwise valid JSON in Markdown fences.
+// Normalize only that wrapper; JSON.parse remains the strict structural validator.
+function parseModelJson(text: string): any {
+  let normalized = text.trim();
+  if (normalized.startsWith('```')) {
+    const firstLineEnd = normalized.indexOf('\n');
+    if (firstLineEnd >= 0) normalized = normalized.slice(firstLineEnd + 1);
+    const trimmedEnd = normalized.trimEnd();
+    if (trimmedEnd.endsWith('```')) normalized = trimmedEnd.slice(0, -3);
+    normalized = normalized.trim();
+  }
+  return JSON.parse(normalized);
+}
 
 export class ForgeAgent {
   private github: GitHubService;
@@ -126,6 +142,72 @@ export class ForgeAgent {
     return problems;
   }
 
+
+  private async applyChangesToWorktree(worktree: string, changes: FileChangePlan[]): Promise<void> {
+    for (const change of changes) {
+      const portablePath = change.path.replace(/\\/g, '/');
+      const normalizedPath = path.posix.normalize(portablePath).replace(/^(\.\/)+/, '');
+      const absolutePath = path.resolve(worktree, normalizedPath);
+      if (!absolutePath.startsWith(worktree + path.sep)) {
+        throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
+      }
+      const worktreeRealPath = await fs.realpath(worktree);
+      const relativeParent = path.relative(worktree, path.dirname(absolutePath));
+      let checkedParent = worktreeRealPath;
+      for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
+        checkedParent = path.join(checkedParent, segment);
+        let parentStat;
+        try { parentStat = await fs.lstat(checkedParent); } catch (err: any) {
+          if (err?.code !== 'ENOENT') throw err;
+        }
+        if (parentStat?.isSymbolicLink()) {
+          throw new Error(`BLOCKED: patch target parent contains a symlink: ${change.path}`);
+        }
+        if (!parentStat) {
+          await fs.mkdir(checkedParent);
+          parentStat = await fs.lstat(checkedParent);
+        }
+        const resolvedParent = await fs.realpath(checkedParent);
+        if (resolvedParent !== worktreeRealPath && !resolvedParent.startsWith(worktreeRealPath + path.sep)) {
+          throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
+        }
+      }
+      const parentRealPath = await fs.realpath(path.dirname(absolutePath));
+      if (parentRealPath !== worktreeRealPath && !parentRealPath.startsWith(worktreeRealPath + path.sep)) {
+        throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
+      }
+      let targetStat;
+      try { targetStat = await fs.lstat(absolutePath); } catch (err: any) {
+        if (err?.code !== 'ENOENT') throw err;
+      }
+      if (targetStat?.isSymbolicLink()) throw new Error(`BLOCKED: refusing to patch symlink: ${change.path}`);
+      if (targetStat) {
+        const targetRealPath = await fs.realpath(absolutePath);
+        if (targetRealPath !== worktreeRealPath && !targetRealPath.startsWith(worktreeRealPath + path.sep)) {
+          throw new Error(`BLOCKED: patch target resolves outside the worktree: ${change.path}`);
+        }
+      }
+      const exists = Boolean(targetStat);
+      if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
+      if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
+      if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
+        let current = await fs.readFile(absolutePath, 'utf-8');
+        for (const edit of change.edits) {
+          const first = current.indexOf(edit.find);
+          if (first < 0) throw new Error(`Exact edit anchor not found in ${change.path}: ${edit.find.slice(0, 100)}`);
+          const second = current.indexOf(edit.find, first + edit.find.length);
+          if (second >= 0) throw new Error(`Ambiguous edit anchor occurs more than once in ${change.path}: ${edit.find.slice(0, 100)}`);
+          current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
+        }
+        await fs.writeFile(absolutePath, current, 'utf-8');
+        // The GitHub commit API receives the verified full file from the tested worktree.
+        change.content = current;
+      } else {
+        await fs.writeFile(absolutePath, change.content as string, 'utf-8');
+      }
+    }
+  }
+
   async executeTask(task: TaskDefinition): Promise<TaskExecutionReport> {
     const report: TaskExecutionReport = {
       taskId: task.id,
@@ -133,9 +215,11 @@ export class ForgeAgent {
       startTime: new Date().toISOString(),
       baseCommitSha: 'UNKNOWN',
       modelInvoked: {
-        provider: 'Google AI Studio / Gemini',
-        model: 'gemini-2.5-flash',
+        provider: process.env.FIRSTBORN_KEYLESS_ONLY === 'true' ? 'keyless router (not yet selected)' : 'not selected',
+        model: 'not-selected',
         callsCount: 0,
+        fallbackUsed: false,
+        keylessRouteErrors: [],
       },
       requirements: [],
       plannedChanges: [],
@@ -219,32 +303,57 @@ export class ForgeAgent {
         .filter((p) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
         .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))
         .filter((p) => p !== 'package.json' && p !== 'AGENTS.md');
-      // If the mission names exact files, do not send unrelated source files that can confuse patch anchors.
-      const sourcePaths = (explicitPaths.length > 0 ? explicitPaths : eligibleSourcePaths
+      // Exact user-named paths are authoritative. For inferred context, skip oversized files
+      // and continue searching so an unrelated large file cannot block the whole mission.
+      const sourceCandidates = (explicitPaths.length > 0 ? explicitPaths.slice(0, 5) : eligibleSourcePaths
         .sort((a, b) => {
           const score = (candidate: string) => {
             const lower = candidate.toLowerCase();
             return taskTerms.reduce((total, term) => total + (lower.includes(term) ? 1 : 0), 0);
           };
           return score(b) - score(a) || a.localeCompare(b);
-        }))
-        .slice(0, 5);
-      const sourceResults = await Promise.all(
-        sourcePaths.map(async (p) => {
-          const file = await this.github.fetchFile(owner, repo, p, repoInfo.defaultBranch);
-          return file ? { path: file.path, content: file.content } : null;
-        })
-      );
-      const oversizedSource = sourceResults.find((file) => file !== null && file.content.length > 16000);
-      if (oversizedSource) {
+        }));
+      const targetSourceFiles: { path: string; content: string }[] = [];
+      for (const candidate of sourceCandidates) {
+        if (targetSourceFiles.length >= 5) break;
+        const file = await this.github.fetchFile(owner, repo, candidate, repoInfo.defaultBranch);
+        if (!file) {
+          log('warn', `Could not fetch candidate source file; skipping: ${candidate}`);
+          continue;
+        }
+        if (file.content.length > 16000) {
+          const reason = `source file exceeds 16000 characters: ${file.path}`;
+          if (explicitPaths.length > 0) {
+            report.status = 'BLOCKED';
+            report.blockerReason = `Explicitly requested ${reason}; refusing to guess or patch an incomplete context.`;
+            log('warn', report.blockerReason);
+            return report;
+          }
+          log('warn', `Skipping inferred ${reason} and continuing source selection.`);
+          continue;
+        }
+        const contextChars = targetSourceFiles.reduce((total, source) => total + source.content.length, 0);
+        if (contextChars + file.content.length > MAX_SOURCE_CONTEXT_CHARS) {
+          const reason = `adding ${file.path} would exceed the ${MAX_SOURCE_CONTEXT_CHARS}-character total source-context budget`;
+          if (explicitPaths.length > 0) {
+            report.status = 'BLOCKED';
+            report.blockerReason = `Explicit source context is too large: ${reason}.`;
+            log('warn', report.blockerReason);
+            return report;
+          }
+          log('warn', `Skipping inferred source file because ${reason}.`);
+          continue;
+        }
+        targetSourceFiles.push({ path: file.path, content: file.content });
+      }
+      if (targetSourceFiles.length === 0) {
         report.status = 'BLOCKED';
-        report.blockerReason = `file too large to patch safely: ${oversizedSource.path} exceeds 16000 characters.`;
+        report.blockerReason = explicitPaths.length > 0
+          ? 'None of the explicitly requested source files could be safely loaded.'
+          : 'No eligible source files under the 16000-character context limit could be loaded.';
         log('warn', report.blockerReason);
         return report;
       }
-      const targetSourceFiles = sourceResults.filter(
-        (file): file is { path: string; content: string } => file !== null
-      );
 
       // 4. PLANNING (MODEL INVOCATION)
       report.status = 'PLANNING';
@@ -266,7 +375,10 @@ export class ForgeAgent {
       report.modelInvoked.provider = modelResult.provider;
       report.modelInvoked.model = modelResult.model;
       report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
-      report.modelInvoked.keylessRouteErrors = modelResult.keylessRouteErrors ?? [];
+      report.modelInvoked.keylessRouteErrors = [
+          ...(report.modelInvoked.keylessRouteErrors ?? []),
+          ...(modelResult.keylessRouteErrors ?? []),
+        ];
       if (!modelResult.success) {
         report.status = 'FAILED';
         report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
@@ -292,7 +404,7 @@ export class ForgeAgent {
 
       let parsedPlan: any;
       try {
-        parsedPlan = JSON.parse(modelResult.text);
+        parsedPlan = parseModelJson(modelResult.text);
       } catch (err: any) {
         log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
         report.modelInvoked.callsCount += 1;
@@ -302,6 +414,11 @@ export class ForgeAgent {
         );
         report.modelInvoked.provider = modelResult.provider;
         report.modelInvoked.model = modelResult.model;
+        report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
+        report.modelInvoked.keylessRouteErrors = [
+          ...(report.modelInvoked.keylessRouteErrors ?? []),
+          ...(modelResult.keylessRouteErrors ?? []),
+        ];
         if (!modelResult.success) {
           report.status = 'FAILED';
           report.errorMessage = `Model JSON repair failed: ${modelResult.error}`;
@@ -309,7 +426,7 @@ export class ForgeAgent {
           return report;
         }
         try {
-          parsedPlan = JSON.parse(modelResult.text);
+          parsedPlan = parseModelJson(modelResult.text);
         } catch (repairErr: any) {
           report.status = 'FAILED';
           report.errorMessage = `Model output remained invalid JSON after one repair attempt: ${repairErr.message}`;
@@ -327,11 +444,16 @@ export class ForgeAgent {
         log('warn', `Model patch contains invalid exact anchors; requesting bounded repair ${anchorRepairAttempts}/2: ${anchorProblems.slice(0, 5).join(' | ')}`);
         report.modelInvoked.callsCount += 1;
         modelResult = await this.model.generatePlanAndPatch(
-          `${task.title}\nDetails: ${task.description}\n\nPATCH REPAIR REQUIRED (attempt ${anchorRepairAttempts}/2). The previous patch was rejected before application because these exact-anchor checks failed: ${JSON.stringify(anchorProblems.slice(0, 5))}. Re-read the supplied source files and regenerate the complete compact JSON plan. Every edit.find must be copied verbatim from the matching supplied file and must occur exactly once. Keep at most 3 files and 4 edits total. Do not guess anchors, do not weaken validation, and do not change unrelated files.`,
+          `${task.title}\nDetails: ${task.description}\n\nPATCH REPAIR REQUIRED (attempt ${anchorRepairAttempts}/2). The previous patch was rejected before application because these patch preflight checks failed: ${JSON.stringify(anchorProblems.slice(0, 5))}. Re-read the supplied source files and regenerate the complete compact JSON plan. Every edit.find must be copied verbatim from the matching supplied file and must occur exactly once. Keep at most 3 files and 4 edits total. Do not guess anchors, do not weaken validation, and do not change unrelated files.`,
           contextFiles
         );
         report.modelInvoked.provider = modelResult.provider;
         report.modelInvoked.model = modelResult.model;
+        report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
+        report.modelInvoked.keylessRouteErrors = [
+          ...(report.modelInvoked.keylessRouteErrors ?? []),
+          ...(modelResult.keylessRouteErrors ?? []),
+        ];
         if (!modelResult.success) {
           report.status = 'FAILED';
           report.errorMessage = `Model patch repair failed: ${modelResult.error}`;
@@ -339,7 +461,7 @@ export class ForgeAgent {
           return report;
         }
         try {
-          parsedPlan = JSON.parse(modelResult.text);
+          parsedPlan = parseModelJson(modelResult.text);
         } catch (err: any) {
           report.status = 'FAILED';
           report.errorMessage = `Failed to parse repaired model JSON: ${err.message}`;
@@ -396,68 +518,7 @@ export class ForgeAgent {
           return report;
         }
 
-        for (const change of report.plannedChanges) {
-          const portablePath = change.path.replace(/\\/g, '/');
-          const normalizedPath = path.posix.normalize(portablePath).replace(/^(\.\/)+/, '');
-          const absolutePath = path.resolve(worktree, normalizedPath);
-          if (!absolutePath.startsWith(worktree + path.sep)) {
-            throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
-          }
-          const worktreeRealPath = await fs.realpath(worktree);
-          const relativeParent = path.relative(worktree, path.dirname(absolutePath));
-          let checkedParent = worktreeRealPath;
-          for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
-            checkedParent = path.join(checkedParent, segment);
-            let parentStat;
-            try { parentStat = await fs.lstat(checkedParent); } catch (err: any) {
-              if (err?.code !== 'ENOENT') throw err;
-            }
-            if (parentStat?.isSymbolicLink()) {
-              throw new Error(`BLOCKED: patch target parent contains a symlink: ${change.path}`);
-            }
-            if (!parentStat) {
-              await fs.mkdir(checkedParent);
-              parentStat = await fs.lstat(checkedParent);
-            }
-            const resolvedParent = await fs.realpath(checkedParent);
-            if (resolvedParent !== worktreeRealPath && !resolvedParent.startsWith(worktreeRealPath + path.sep)) {
-              throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
-            }
-          }
-          const parentRealPath = await fs.realpath(path.dirname(absolutePath));
-          if (parentRealPath !== worktreeRealPath && !parentRealPath.startsWith(worktreeRealPath + path.sep)) {
-            throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
-          }
-          let targetStat;
-          try { targetStat = await fs.lstat(absolutePath); } catch (err: any) {
-            if (err?.code !== 'ENOENT') throw err;
-          }
-          if (targetStat?.isSymbolicLink()) throw new Error(`BLOCKED: refusing to patch symlink: ${change.path}`);
-          if (targetStat) {
-            const targetRealPath = await fs.realpath(absolutePath);
-            if (targetRealPath !== worktreeRealPath && !targetRealPath.startsWith(worktreeRealPath + path.sep)) {
-              throw new Error(`BLOCKED: patch target resolves outside the worktree: ${change.path}`);
-            }
-          }
-          const exists = Boolean(targetStat);
-          if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
-          if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
-          if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
-            let current = await fs.readFile(absolutePath, 'utf-8');
-            for (const edit of change.edits) {
-              const first = current.indexOf(edit.find);
-              if (first < 0) throw new Error(`Exact edit anchor not found in ${change.path}: ${edit.find.slice(0, 100)}`);
-              const second = current.indexOf(edit.find, first + edit.find.length);
-              if (second >= 0) throw new Error(`Ambiguous edit anchor occurs more than once in ${change.path}: ${edit.find.slice(0, 100)}`);
-              current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
-            }
-            await fs.writeFile(absolutePath, current, 'utf-8');
-            // The GitHub commit API receives the verified full file from the tested worktree.
-            change.content = current;
-          } else {
-            await fs.writeFile(absolutePath, change.content as string, 'utf-8');
-          }
-        }
+        await this.applyChangesToWorktree(worktree, report.plannedChanges);
 
         const packagePath = path.join(worktree, 'package.json');
         let scripts: Record<string, string> = {};
@@ -469,15 +530,8 @@ export class ForgeAgent {
         }
 
         const checksToRun: string[] = [];
-        if (Object.keys(scripts).length > 0) {
-          const install = await this.testRunner.runCheck('npm install', worktree);
-          report.testResults.push(install);
-          if (install.status !== 'PASSED') {
-            report.status = 'FAILED';
-            report.errorMessage = `Target dependency installation failed (exit ${install.exitCode}).`;
-            log('error', report.errorMessage);
-            return report;
-          }
+        const hasNpmScripts = Object.keys(scripts).length > 0;
+        if (hasNpmScripts) {
           for (const command of ['npm run lint', 'npm test', 'npm run build']) {
             const scriptName = command === 'npm test' ? 'test' : command.slice('npm run '.length);
             if (scripts[scriptName]) checksToRun.push(command);
@@ -491,24 +545,137 @@ export class ForgeAgent {
           return report;
         }
         checksToRun.push('git diff --check');
-        for (const cmd of checksToRun) {
-          log('info', `Testing proposed patch in target worktree: ${cmd}`);
-          const result = await this.testRunner.runCheck(cmd, worktree);
-          report.testResults.push(result);
-          log(result.status === 'PASSED' ? 'info' : 'warn', `Target check "${cmd}" exit=${result.exitCode} status=${result.status}`);
+
+        let latestAttemptResults: TaskExecutionReport['testResults'] = [];
+        let allChecksPassed = false;
+        for (let attempt = 0; attempt < 3 && !allChecksPassed; attempt += 1) {
+          const attemptResults: TaskExecutionReport['testResults'] = [];
+          if (hasNpmScripts) {
+            let install = await this.testRunner.runCheck('npm install', worktree);
+            report.testResults.push(install);
+            attemptResults.push(install);
+            if (install.status !== 'PASSED') {
+              log('warn', `Dependency installation failed on attempt ${attempt + 1}; retrying once before classifying the environment as blocked.`);
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              const retryInstall = await this.testRunner.runCheck('npm install', worktree);
+              report.testResults.push(retryInstall);
+              attemptResults[attemptResults.length - 1] = retryInstall;
+              install = retryInstall;
+            }
+            if (install.status !== 'PASSED') {
+              report.status = 'FAILED';
+              report.errorMessage = `Target dependency installation failed twice (last exit ${install.exitCode}).`;
+              log('error', report.errorMessage);
+              return report;
+            }
+          }
+
+          for (const cmd of checksToRun) {
+            log('info', `Testing proposed patch (attempt ${attempt + 1}/3): ${cmd}`);
+            const result = await this.testRunner.runCheck(cmd, worktree);
+            report.testResults.push(result);
+            attemptResults.push(result);
+            const detail = result.status === 'PASSED'
+              ? ''
+              : `; stderr tail: ${result.stderr.slice(-500)}; stdout tail: ${result.stdout.slice(-500)}`;
+            log(result.status === 'PASSED' ? 'info' : 'warn', `Target check "${cmd}" exit=${result.exitCode} status=${result.status}${detail}`);
+          }
+
+          latestAttemptResults = attemptResults;
+          allChecksPassed = attemptResults.length > 0 && attemptResults.every((result) => result.status === 'PASSED');
+          if (allChecksPassed) break;
+
+          if (attempt < 2) {
+            const failedResults = attemptResults.filter((result) => result.status !== 'PASSED');
+            const failureDetails = failedResults.map((result) =>
+              `COMMAND: ${result.command}\nSTATUS: ${result.status}\nEXIT: ${result.exitCode}\nSTDOUT HEAD:\n${result.stdout.slice(0, 700)}\nSTDOUT TAIL:\n${result.stdout.slice(-1100)}\nSTDERR HEAD:\n${result.stderr.slice(0, 500)}\nSTDERR TAIL:\n${result.stderr.slice(-1100)}`
+            ).join('\n\n--- FAILED CHECK ---\n\n');
+            log('warn', `Target checks failed; requesting bounded repair ${attempt + 1}/2 with ${failedResults.length} failing check(s).`);
+            report.modelInvoked.callsCount += 1;
+            const previousPatchSummary = report.plannedChanges
+              .map((change) => JSON.stringify({
+                path: change.path,
+                action: change.action,
+                rationale: change.rationale,
+                edits: change.edits?.map((edit) => ({
+                  find: edit.find.slice(0, 500),
+                  replace: edit.replace.slice(0, 800),
+                })),
+                contentPreview: typeof change.content === 'string' ? change.content.slice(0, 1200) : undefined,
+              }, null, 2))
+              .join('\n');
+            const repairResult = await this.model.generatePlanAndPatch(
+              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (attempt ${attempt + 1}/2). The previous patch was applied but failed target checks. The exact previous edits and compiler/test diagnostics are included below. Do not repeat the same edit if it caused the failure; change the anchor or placement to address the diagnostics. For top-level declarations, use a file-scope anchor; for interface members, use a unique field anchor inside the intended interface. Fix the actual cause (including missing imports or type/syntax errors), and return a complete replacement JSON plan for the same task. Preserve the original task scope. Do not weaken, skip, or silence checks. Existing files must use exact-anchor edits copied verbatim from the original supplied source. Do not modify package manifests, workflows, scripts, secrets, or security controls.\n\nPREVIOUS PATCH SUMMARY:\n${previousPatchSummary}\n\nFAILED CHECK DIAGNOSTICS:\n${failureDetails}`,
+              contextFiles
+            );
+            report.modelInvoked.provider = repairResult.provider;
+            report.modelInvoked.model = repairResult.model;
+            report.modelInvoked.fallbackUsed = repairResult.fallbackUsed ?? false;
+            report.modelInvoked.keylessRouteErrors = [
+              ...(report.modelInvoked.keylessRouteErrors ?? []),
+              ...(repairResult.keylessRouteErrors ?? []),
+            ];
+            if (!repairResult.success) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair model call failed: ${repairResult.error}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+            let repairedPlan: any;
+            try {
+              repairedPlan = parseModelJson(repairResult.text);
+            } catch (error: any) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair returned invalid JSON: ${error.message}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+            if (!Array.isArray(repairedPlan.changes) || repairedPlan.changes.length === 0) {
+              report.status = 'FAILED';
+              report.errorMessage = 'Target-check repair returned no replacement changes.';
+              log('error', report.errorMessage);
+              return report;
+            }
+            report.plannedChanges = repairedPlan.changes.map((change: any) => ({
+              path: change.path,
+              action: change.action,
+              rationale: change.rationale,
+              content: change.content,
+              edits: change.edits,
+            }));
+            const repairAnchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+            if (repairAnchorProblems.length > 0) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair failed patch preflight: ${repairAnchorProblems.slice(0, 5).join(' | ')}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+            const repairValidation = this.validatePatch(report.plannedChanges);
+            if (!repairValidation.valid) {
+              report.status = 'FAILED';
+              report.errorMessage = `Target-check repair was rejected: ${repairValidation.error}`;
+              log('error', report.errorMessage);
+              return report;
+            }
+
+            await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: worktree, timeout: 15000 });
+            await execFileAsync('git', ['clean', '-fd'], { cwd: worktree, timeout: 15000 });
+            await this.applyChangesToWorktree(worktree, report.plannedChanges);
+            log('info', 'Applied repaired patch to a clean base worktree; rerunning target checks after this repair attempt.');
+          }
         }
 
-        const allChecksPassed = report.testResults.length > 0 && report.testResults.every((r) => r.status === 'PASSED');
         if (!allChecksPassed) {
           report.status = 'FAILED';
-          report.errorMessage = 'One or more checks failed in the isolated target worktree after applying the proposed patch.';
+          report.errorMessage = 'Target checks still failed after two bounded patch-repair attempts.';
+          log('error', report.errorMessage);
           return report;
         }
 
         // Generic repository checks do not prove every requirement individually.
         report.requirements.forEach((req) => {
           req.status = 'PENDING';
-          req.evidence = `Target-tree checks passed: ${report.testResults.map((r) => `${r.command}=${r.exitCode}`).join(', ')}. Criterion-specific proof still requires review.`;
+          req.evidence = `Latest target-check attempt passed: ${latestAttemptResults.map((result) => `${result.command}=${result.exitCode}`).join(', ')}. Criterion-specific proof still requires review.`;
         });
       } finally {
         await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
