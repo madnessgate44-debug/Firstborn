@@ -82,6 +82,42 @@ export class ForgeAgent {
     return { valid: true };
   }
 
+  private findEditAnchorProblems(
+    changes: FileChangePlan[],
+    contextFiles: { path: string; content: string }[]
+  ): string[] {
+    const sourceByPath = new Map(contextFiles.map((file) => [file.path, file.content]));
+    const problems: string[] = [];
+
+    for (const change of changes) {
+      if (change.action !== 'modify' || !Array.isArray(change.edits) || change.edits.length === 0) continue;
+      let current = sourceByPath.get(change.path);
+      if (typeof current !== 'string') {
+        problems.push(`${change.path}: source content was not supplied to validate the edit anchors.`);
+        continue;
+      }
+
+      for (const edit of change.edits) {
+        if (!edit || typeof edit.find !== 'string' || edit.find.length === 0 || typeof edit.replace !== 'string') {
+          problems.push(`${change.path}: malformed exact-edit entry.`);
+          break;
+        }
+        const first = current.indexOf(edit.find);
+        if (first < 0) {
+          problems.push(`${change.path}: exact anchor not found: ${JSON.stringify(edit.find.slice(0, 100))}`);
+          break;
+        }
+        const second = current.indexOf(edit.find, first + edit.find.length);
+        if (second >= 0) {
+          problems.push(`${change.path}: anchor is ambiguous: ${JSON.stringify(edit.find.slice(0, 100))}`);
+          break;
+        }
+        current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
+      }
+    }
+    return problems;
+  }
+
   async executeTask(task: TaskDefinition): Promise<TaskExecutionReport> {
     const report: TaskExecutionReport = {
       taskId: task.id,
@@ -200,7 +236,7 @@ export class ForgeAgent {
       ];
 
       report.modelInvoked.callsCount += 1;
-      const modelResult = await this.model.generatePlanAndPatch(
+      let modelResult = await this.model.generatePlanAndPatch(
         `Task: ${task.title}\nDetails: ${task.description}`,
         contextFiles
       );
@@ -214,6 +250,22 @@ export class ForgeAgent {
         return report;
       }
 
+      const applyPlanToReport = (parsedPlan: any) => {
+        report.requirements = (parsedPlan.requirements || []).map((req: any) => ({
+          id: req.id,
+          description: req.description,
+          acceptanceCriteria: req.acceptanceCriteria,
+          status: 'PENDING',
+        }));
+        report.plannedChanges = (parsedPlan.changes || []).map((ch: any) => ({
+          path: ch.path,
+          action: ch.action,
+          rationale: ch.rationale,
+          content: ch.content,
+          edits: ch.edits,
+        }));
+      };
+
       let parsedPlan: any;
       try {
         parsedPlan = JSON.parse(modelResult.text);
@@ -223,21 +275,42 @@ export class ForgeAgent {
         log('error', report.errorMessage);
         return report;
       }
+      applyPlanToReport(parsedPlan);
 
-      report.requirements = (parsedPlan.requirements || []).map((req: any) => ({
-        id: req.id,
-        description: req.description,
-        acceptanceCriteria: req.acceptanceCriteria,
-        status: 'PENDING',
-      }));
-
-      report.plannedChanges = (parsedPlan.changes || []).map((ch: any) => ({
-        path: ch.path,
-        action: ch.action,
-        rationale: ch.rationale,
-        content: ch.content,
-        edits: ch.edits,
-      }));
+      // Repair one malformed model patch using the exact inspected source, without weakening anchor validation.
+      let anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+      if (anchorProblems.length > 0) {
+        log('warn', `Model patch contains invalid exact anchors; requesting one bounded repair: ${anchorProblems.slice(0, 5).join(' | ')}`);
+        report.modelInvoked.callsCount += 1;
+        modelResult = await this.model.generatePlanAndPatch(
+          `${task.title}\nDetails: ${task.description}\n\nPATCH REPAIR REQUIRED. The previous generated patch was rejected before application because these exact-anchor checks failed: ${JSON.stringify(anchorProblems.slice(0, 5))}. Re-read the supplied source files and regenerate the complete JSON plan. Every edit.find must be copied verbatim from the matching supplied file and must occur exactly once. Do not guess anchors, do not weaken validation, and do not change unrelated files.`,
+          contextFiles
+        );
+        report.modelInvoked.provider = modelResult.provider;
+        report.modelInvoked.model = modelResult.model;
+        if (!modelResult.success) {
+          report.status = 'FAILED';
+          report.errorMessage = `Model patch repair failed: ${modelResult.error}`;
+          log('error', report.errorMessage);
+          return report;
+        }
+        try {
+          parsedPlan = JSON.parse(modelResult.text);
+        } catch (err: any) {
+          report.status = 'FAILED';
+          report.errorMessage = `Failed to parse repaired model JSON: ${err.message}`;
+          log('error', report.errorMessage);
+          return report;
+        }
+        applyPlanToReport(parsedPlan);
+        anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+        if (anchorProblems.length > 0) {
+          report.status = 'FAILED';
+          report.errorMessage = `Patch repair still contains invalid exact anchors: ${anchorProblems.slice(0, 5).join(' | ')}`;
+          log('error', report.errorMessage);
+          return report;
+        }
+      }
 
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
 
