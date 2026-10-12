@@ -21,12 +21,11 @@ on:
 jobs:
   run-forge:
     # Only run when issue has label 'forge-task' or triggered manually
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.issue.labels.*.name, 'forge-task')
+    if: github.event_name == 'workflow_dispatch' || (contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      issues: write
 
     steps:
       - name: Checkout Repository
