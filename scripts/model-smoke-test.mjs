@@ -1,8 +1,8 @@
 const routes = [
   {
     base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, ''),
-    model: process.env.FREE_MODEL_NAME || 'murakumo/free',
-    provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous free model',
+    model: process.env.FREE_MODEL_NAME || 'mishima',
+    provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous model',
     authorization: '',
   },
   {
@@ -17,7 +17,7 @@ const routes = [
     provider: 'llmfaucet anonymous gateway',
     authorization: 'Bearer free',
   },
-];
+].filter((route, index, all) => all.findIndex((candidate) => candidate.base === route.base && candidate.model === route.model) === index);
 
 const expected = 'FIRSTBORN_MODEL_ROUTE_OK';
 const failures = [];
