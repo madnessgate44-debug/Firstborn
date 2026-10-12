@@ -273,7 +273,7 @@ export class ForgeAgent {
         log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
         report.modelInvoked.callsCount += 1;
         modelResult = await this.model.generatePlanAndPatch(
-          `${task.title}\nDetails: ${task.description}\n\nOUTPUT REPAIR REQUIRED. The previous response was invalid or truncated JSON (${String(err.message).slice(0, 240)}). Return a much smaller valid JSON plan. Existing files MUST use compact exact-anchor edits only, never full file content. Use at most 3 files and 4 edits total. Copy every find string verbatim from the supplied source. Output JSON only; if you cannot safely fit the patch, return an empty changes array and state the blocker in summary.`,
+          `${task.title}\nDetails: ${task.description}\n\nOUTPUT REPAIR REQUIRED. The previous response was invalid or truncated JSON (${String(err.message).slice(0, 240)}). Return a much smaller valid JSON plan. Existing files MUST use compact exact-anchor edits only, never full file content. Use at most 2 files and 3 edits total. Copy every find string verbatim from the supplied source. Output JSON only; if you cannot safely fit the patch, return an empty changes array and state the blocker in summary.`,
           contextFiles
         );
         report.modelInvoked.provider = modelResult.provider;
