@@ -197,7 +197,7 @@ Respond only with valid JSON.`;
       model: this.primaryModel,
       provider: 'keyless model routes unavailable',
       success: false,
-      error: `All keyless primary routes failed: ${primaryError}. Gemini fallback is not configured.`,
+      error: `All keyless primary routes failed: ${primaryError}. ${process.env.FIRSTBORN_KEYLESS_ONLY === 'true' ? 'Gemini fallback is disabled by FIRSTBORN_KEYLESS_ONLY=true.' : 'Gemini fallback is not configured.'}`,
       fallbackUsed: false,
       keylessRouteErrors: [...primaryErrors],
     };
