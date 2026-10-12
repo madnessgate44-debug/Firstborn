@@ -13,6 +13,7 @@ export interface SafeCommandSpec {
 }
 
 const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
+  'npm run model:smoke': { executable: 'npm', args: ['run', 'model:smoke'] },
   'npm install': { executable: 'npm', args: ['install', '--ignore-scripts'] },
   'npm run lint': { executable: 'npm', args: ['run', 'lint'] },
   'npm run test': { executable: 'npm', args: ['run', 'test'] },
