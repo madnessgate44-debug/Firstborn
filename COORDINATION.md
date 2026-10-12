@@ -593,3 +593,39 @@ On `forge/task-r5-staged-20261012` (PR #31), diff vs PR #29 branch is the comple
 | R7 | Permissions ("ultimate control") | none | DEFERRED to ChatGPT |
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-MERGE-20261012-03`
+- **Timestamp (UTC)**: 2026-10-12T12:50:00Z
+- **Author**: OPENHANDS (acting under Ahmed's explicit merge directive)
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: REPORT
+- **Baseline**: `main` before = `6ef8d95`; `main` after = `062ad27`.
+
+#### Merges performed (in the requested order)
+| PR | Result | Merge commit |
+| :-- | :-- | :-- |
+| #29 | MERGED (squash) | `f0f2a8b` |
+| #31 | MERGED (squash) | `0f23624` |
+| #32 | MERGED (squash) | `062ad27` |
+| #23 | CLOSED (superseded earlier) | — |
+
+#31 required a rebase onto the squash-merged `main`; it was cherry-picked to a clean tree, verified, and merged. No content lost.
+
+#### Final `main` verification (observed exit codes, not claims)
+- `npm ci` -> EXIT 0
+- `npm run lint` -> EXIT 0
+- `npm run build` -> EXIT 0
+- `npm test` -> 27 passed / 0 failed
+- `npm start` -> server ONLINE; `GET /api/health` -> HTTP 200; `GET /` -> HTTP 200
+- live E2E mission: requirement `REQ-1` = **PASS**, evidence `npm run lint=0`; checks `npm install=0, npm run lint=0, npm test=0, npm run build=0, git diff --check=0`; `callsCount: 1`
+
+#### Newly present on `main`
+`src/agent/limits.ts`, `src/agent/stages.ts`, `tests/resilience.test.ts`, `tests/stages.test.ts`, plus the R3/R5/R6 changes and the `App.tsx` verification-matrix correction.
+
+#### Unchanged safety posture
+- R7 permissions: **still deferred; no permission change.** The "ultimate control" request is not implemented.
+- No secrets in this file. No merge of any PR with failing CI.
+
+No secrets, tokens, or credentials appear in this entry.
