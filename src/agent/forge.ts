@@ -19,8 +19,15 @@ const execFileAsync = promisify(execFile);
 const PROTECTED_PATH_PATTERNS = [
   /^\.git\//i,
   /^\.env/i,
-  /^\.github\/workflows\//i,
+  /^\.github\//i,
   /^node_modules\//i,
+  // Files executed by target checks must not be model-editable.
+  /(^|\/)package(-lock)?\.json$/i,
+  /(^|\/)npm-shrinkwrap\.json$/i,
+  /(^|\/)\.npmrc$/i,
+  /^vite\.config\.[cm]?[jt]s$/i,
+  /^tsconfig[^/]*\.json$/i,
+  /^scripts\//i,
 ];
 
 // Maximum allowed patch content size per file (100KB)
@@ -62,6 +69,7 @@ export class ForgeAgent {
       if (PROTECTED_PATH_PATTERNS.some((pat) => pat.test(normalizedPath))) {
         return { valid: false, error: `Security Boundary Violation: Modification of protected file or path is forbidden: "${change.path}".` };
       }
+      change.path = normalizedPath; // commit exactly the path that was tested
 
       // 3. Action and content check
       if (!['modify', 'create'].includes(change.action)) {
@@ -238,7 +246,7 @@ export class ForgeAgent {
       const contextFiles = [
         { path: 'AGENTS.md', content: instructionText },
         { path: 'package.json', content: packageJsonContent },
-        { path: 'FILE_TREE_INVENTORY.txt', content: repoFilePaths.slice(0, 100).join('\\n') },
+        { path: 'FILE_TREE_INVENTORY.txt', content: repoFilePaths.slice(0, 100).join('\n') },
         ...targetSourceFiles,
       ];
 

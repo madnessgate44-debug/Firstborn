@@ -9,6 +9,7 @@ import * as path from 'path';
 
 async function runCli() {
   const taskId = process.env.TASK_ID || `cli-${Date.now()}`;
+  const safeTaskId = taskId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64) || 'task';
   const taskTitle = process.env.TASK_TITLE || 'Automated Maintenance Task';
   const taskDesc = process.env.TASK_DESC || 'Run repository health check and verification';
   const targetRepo = process.env.GITHUB_REPOSITORY || 'madnessgate44-debug/firstborn';
@@ -32,6 +33,8 @@ async function runCli() {
   console.log('--- FORGE EXECUTION REPORT ---');
   console.log('Status:', report.status);
   console.log('Base SHA:', report.baseCommitSha);
+  console.log('Branch:', report.branchName ?? 'N/A');
+  console.log('Head commit:', report.headCommitSha ?? 'N/A');
   console.log('Requirements:', report.requirements.length);
   console.log('Tests Run:', report.testResults.length);
   if (report.prUrl) console.log('PR Opened:', report.prUrl);
@@ -41,11 +44,11 @@ async function runCli() {
   const evidenceDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
   await fs.mkdir(evidenceDir, { recursive: true });
   await fs.writeFile(
-    path.join(evidenceDir, `${taskId}.json`),
+    path.join(evidenceDir, `${safeTaskId}.json`),
     JSON.stringify(report, null, 2)
   );
 
-  if (report.status === 'FAILED') {
+  if (report.status === 'FAILED' || report.status === 'BLOCKED') {
     process.exit(1);
   }
 }

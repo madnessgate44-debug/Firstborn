@@ -25,6 +25,16 @@ const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
   'git diff --check': { executable: 'git', args: ['diff', '--check'] },
 };
 
+const SAFE_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TZ', 'TMPDIR'];
+function buildSafeEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { CI: 'true' };
+  for (const key of SAFE_ENV_KEYS) {
+    const v = process.env[key];
+    if (typeof v === 'string') env[key] = v;
+  }
+  return env;
+}
+
 export class TestRunnerService {
   async runCheck(commandKey: string, cwd = process.cwd()): Promise<TestExecutionResult> {
     const trimmed = commandKey.trim();
@@ -52,12 +62,7 @@ export class TestRunnerService {
       const child = spawn(spec.executable, spec.args, {
         cwd,
         shell: false,
-        env: {
-          ...process.env,
-          // Strip write-capable GitHub and Gemini tokens from child check execution environment
-          GITHUB_TOKEN: '',
-          GEMINI_API_KEY: '',
-        },
+        env: buildSafeEnv(),
       });
 
       const timer = setTimeout(() => {
