@@ -168,6 +168,71 @@ export class ForgeAgent {
     return problems;
   }
 
+  private async applyChangesToWorktree(worktree: string, changes: FileChangePlan[]): Promise<void> {
+    for (const change of changes) {
+      const portablePath = change.path.replace(/\\/g, '/');
+      const normalizedPath = path.posix.normalize(portablePath).replace(/^(\.\/)+/, '');
+      const absolutePath = path.resolve(worktree, normalizedPath);
+      if (!absolutePath.startsWith(worktree + path.sep)) {
+        throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
+      }
+      const worktreeRealPath = await fs.realpath(worktree);
+      const relativeParent = path.relative(worktree, path.dirname(absolutePath));
+      let checkedParent = worktreeRealPath;
+      for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
+        checkedParent = path.join(checkedParent, segment);
+        let parentStat;
+        try { parentStat = await fs.lstat(checkedParent); } catch (err: any) {
+          if (err?.code !== 'ENOENT') throw err;
+        }
+        if (parentStat?.isSymbolicLink()) {
+          throw new Error(`BLOCKED: patch target parent contains a symlink: ${change.path}`);
+        }
+        if (!parentStat) {
+          await fs.mkdir(checkedParent);
+          parentStat = await fs.lstat(checkedParent);
+        }
+        const resolvedParent = await fs.realpath(checkedParent);
+        if (resolvedParent !== worktreeRealPath && !resolvedParent.startsWith(worktreeRealPath + path.sep)) {
+          throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
+        }
+      }
+      const parentRealPath = await fs.realpath(path.dirname(absolutePath));
+      if (parentRealPath !== worktreeRealPath && !parentRealPath.startsWith(worktreeRealPath + path.sep)) {
+        throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
+      }
+      let targetStat;
+      try { targetStat = await fs.lstat(absolutePath); } catch (err: any) {
+        if (err?.code !== 'ENOENT') throw err;
+      }
+      if (targetStat?.isSymbolicLink()) throw new Error(`BLOCKED: refusing to patch symlink: ${change.path}`);
+      if (targetStat) {
+        const targetRealPath = await fs.realpath(absolutePath);
+        if (targetRealPath !== worktreeRealPath && !targetRealPath.startsWith(worktreeRealPath + path.sep)) {
+          throw new Error(`BLOCKED: patch target resolves outside the worktree: ${change.path}`);
+        }
+      }
+      const exists = Boolean(targetStat);
+      if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
+      if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
+      if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
+        let current = await fs.readFile(absolutePath, 'utf-8');
+        for (const edit of change.edits) {
+          const first = current.indexOf(edit.find);
+          if (first < 0) throw new Error(`Exact edit anchor not found in ${change.path}: ${edit.find.slice(0, 100)}`);
+          const second = current.indexOf(edit.find, first + edit.find.length);
+          if (second >= 0) throw new Error(`Ambiguous edit anchor occurs more than once in ${change.path}: ${edit.find.slice(0, 100)}`);
+          current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
+        }
+        await fs.writeFile(absolutePath, current, 'utf-8');
+        // The GitHub commit API receives the verified full file from the tested worktree.
+        change.content = current;
+      } else {
+        await fs.writeFile(absolutePath, change.content as string, 'utf-8');
+      }
+    }
+  }
+
   async executeTask(task: TaskDefinition): Promise<TaskExecutionReport> {
     const report: TaskExecutionReport = {
       taskId: task.id,
@@ -463,68 +528,7 @@ export class ForgeAgent {
           return report;
         }
 
-        for (const change of report.plannedChanges) {
-          const portablePath = change.path.replace(/\\/g, '/');
-          const normalizedPath = path.posix.normalize(portablePath).replace(/^(\.\/)+/, '');
-          const absolutePath = path.resolve(worktree, normalizedPath);
-          if (!absolutePath.startsWith(worktree + path.sep)) {
-            throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
-          }
-          const worktreeRealPath = await fs.realpath(worktree);
-          const relativeParent = path.relative(worktree, path.dirname(absolutePath));
-          let checkedParent = worktreeRealPath;
-          for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
-            checkedParent = path.join(checkedParent, segment);
-            let parentStat;
-            try { parentStat = await fs.lstat(checkedParent); } catch (err: any) {
-              if (err?.code !== 'ENOENT') throw err;
-            }
-            if (parentStat?.isSymbolicLink()) {
-              throw new Error(`BLOCKED: patch target parent contains a symlink: ${change.path}`);
-            }
-            if (!parentStat) {
-              await fs.mkdir(checkedParent);
-              parentStat = await fs.lstat(checkedParent);
-            }
-            const resolvedParent = await fs.realpath(checkedParent);
-            if (resolvedParent !== worktreeRealPath && !resolvedParent.startsWith(worktreeRealPath + path.sep)) {
-              throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
-            }
-          }
-          const parentRealPath = await fs.realpath(path.dirname(absolutePath));
-          if (parentRealPath !== worktreeRealPath && !parentRealPath.startsWith(worktreeRealPath + path.sep)) {
-            throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
-          }
-          let targetStat;
-          try { targetStat = await fs.lstat(absolutePath); } catch (err: any) {
-            if (err?.code !== 'ENOENT') throw err;
-          }
-          if (targetStat?.isSymbolicLink()) throw new Error(`BLOCKED: refusing to patch symlink: ${change.path}`);
-          if (targetStat) {
-            const targetRealPath = await fs.realpath(absolutePath);
-            if (targetRealPath !== worktreeRealPath && !targetRealPath.startsWith(worktreeRealPath + path.sep)) {
-              throw new Error(`BLOCKED: patch target resolves outside the worktree: ${change.path}`);
-            }
-          }
-          const exists = Boolean(targetStat);
-          if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
-          if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
-          if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
-            let current = await fs.readFile(absolutePath, 'utf-8');
-            for (const edit of change.edits) {
-              const first = current.indexOf(edit.find);
-              if (first < 0) throw new Error(`Exact edit anchor not found in ${change.path}: ${edit.find.slice(0, 100)}`);
-              const second = current.indexOf(edit.find, first + edit.find.length);
-              if (second >= 0) throw new Error(`Ambiguous edit anchor occurs more than once in ${change.path}: ${edit.find.slice(0, 100)}`);
-              current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
-            }
-            await fs.writeFile(absolutePath, current, 'utf-8');
-            // The GitHub commit API receives the verified full file from the tested worktree.
-            change.content = current;
-          } else {
-            await fs.writeFile(absolutePath, change.content as string, 'utf-8');
-          }
-        }
+        await this.applyChangesToWorktree(worktree, report.plannedChanges);
 
         const packagePath = path.join(worktree, 'package.json');
         let scripts: Record<string, string> = {};
