@@ -188,7 +188,7 @@ export function validateAllowedPaths(
   allowedPaths?: string[],
 ): { valid: boolean; error?: string } {
   if (!allowedPaths || allowedPaths.length === 0) return { valid: true };
-  const normalize = (value: string) => path.posix.normalize(value.replace(/\\\\/g, '/')).replace(/^(\\.\\/)+/, '');
+  const normalize = (value: string) => path.posix.normalize(value.split(String.fromCharCode(92)).join('/'));
   const allowed = new Set(allowedPaths.map(normalize));
   for (const change of changes) {
     const candidate = normalize(change.path);
