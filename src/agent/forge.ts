@@ -39,8 +39,13 @@ const MAX_SOURCE_CONTEXT_CHARS = 24000;
 // Normalize only that wrapper; JSON.parse remains the strict structural validator.
 function parseModelJson(text: string): any {
   let normalized = text.trim();
-  const fenced = normalized.match(/^\`\`\`(?:json)?\\s*([\\s\\S]*?)\\s*\`\`\`$/i);
-  if (fenced) normalized = fenced[1].trim();
+  if (normalized.startsWith('```')) {
+    const firstLineEnd = normalized.indexOf('\n');
+    if (firstLineEnd >= 0) normalized = normalized.slice(firstLineEnd + 1);
+    const trimmedEnd = normalized.trimEnd();
+    if (trimmedEnd.endsWith('```')) normalized = trimmedEnd.slice(0, -3);
+    normalized = normalized.trim();
+  }
   return JSON.parse(normalized);
 }
 
