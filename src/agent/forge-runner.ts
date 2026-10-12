@@ -43,6 +43,9 @@ async function runCli() {
   if (report.errorMessage) console.log('Error:', report.errorMessage);
   if (report.blockerReason) console.log('Blocker:', report.blockerReason);
 
+  // Early BLOCKED/FAILED returns inside executeTask may not pass through its normal finalizer.
+  // Stamp the end time here so every persisted report has a complete execution window.
+  report.endTime ||= new Date().toISOString();
   const evidenceDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
   await fs.mkdir(evidenceDir, { recursive: true });
   await fs.writeFile(
