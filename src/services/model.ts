@@ -64,7 +64,7 @@ Follow these rules:
   ],
   "suggestedChecks": ["npm run lint"]
 }
-STRICT OUTPUT LIMIT: this anonymous endpoint caps output at 2048 tokens. Return compact valid JSON only, with no markdown. For existing files, action MUST be "modify" and MUST use "edits"; never return the whole file in "content". For a new file, action MUST be "create" and use "content" instead of "edits". Limit the whole patch to at most 3 files and at most 4 edits total. Keep each find/replace snippet minimal but exact. Every find string must occur exactly once in the supplied source file. Do not repeat unchanged source. If a safe patch cannot fit these limits, return valid JSON with an empty changes array and explain the blocker in summary. Use only paths in the supplied target repository inventory or clearly justified new paths.
+STRICT OUTPUT LIMIT: reserve output well below the anonymous endpoint's 2048-token ceiling by using max_tokens=1024. Return compact valid JSON only, with no markdown. For existing files, action MUST be "modify" and MUST use "edits"; never return the whole file in "content". For a new file, action MUST be "create" and use "content" instead of "edits". Limit the whole patch to at most 2 files and at most 3 edits total. Keep each find/replace snippet minimal but exact. Every find string must occur exactly once in the supplied source file. Do not repeat unchanged source. If a safe patch cannot fit these limits, return valid JSON with an empty changes array and explain the blocker in summary. Use only paths in the supplied target repository inventory or clearly justified new paths.
 Context Files:
 ${fileContexts}
 User Task:
@@ -106,7 +106,7 @@ Respond only with valid JSON.`;
           const response = await fetch(`${route.baseUrl}/chat/completions`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 2048, reasoning: { effort: 'none' } }),
+            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 1024, reasoning: { effort: 'none' } }),
             signal: AbortSignal.timeout(30000),
           });
 
