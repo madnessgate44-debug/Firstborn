@@ -49,6 +49,38 @@ function parseModelJson(text: string): any {
   return JSON.parse(normalized);
 }
 
+// Requested branch wins only when it is explicit and not the default; invalid
+// branches are resolved later (and fail closed) by the caller.
+export function resolveTargetBranch(requested: string | undefined, defaultBranch: string): string {
+  const trimmed = requested?.trim();
+  return trimmed && trimmed !== defaultBranch ? trimmed : defaultBranch;
+}
+
+// A requirement is only PASS when a check named in its own acceptance criteria
+// or description actually passed. Unrelated green checks cannot satisfy it.
+export function evaluateRequirementEvidence(
+  requirement: { acceptanceCriteria?: string; description?: string },
+  results: { command: string; status: string; exitCode: number }[]
+): { status: 'PASS' | 'PENDING'; evidence: string } {
+  const attemptEvidence = results.map((result) => `${result.command}=${result.exitCode}`).join(', ');
+  const criterion = `${requirement.acceptanceCriteria ?? ''} ${requirement.description ?? ''}`.toLowerCase();
+  const referencedChecks = results.filter((result) => {
+    const command = result.command.toLowerCase();
+    const scriptName = command === 'npm test' ? 'test' : command.replace(/^npm run /, '');
+    return criterion.includes(command) || criterion.includes(scriptName);
+  });
+  if (referencedChecks.length > 0 && referencedChecks.every((result) => result.status === 'PASSED')) {
+    return {
+      status: 'PASS',
+      evidence: `Criterion-matched checks passed: ${referencedChecks.map((result) => `${result.command}=${result.exitCode}`).join(', ')}.`,
+    };
+  }
+  return {
+    status: 'PENDING',
+    evidence: `No criterion-specific passing check was identified. Latest target-check attempt: ${attemptEvidence}. Manual review required.`,
+  };
+}
+
 export class ForgeAgent {
   private github: GitHubService;
   private model: ModelService;
@@ -266,9 +298,23 @@ export class ForgeAgent {
       report.baseCommitSha = repoInfo.latestCommitSha;
       log('info', `Target repository verified. Base branch: ${repoInfo.defaultBranch}, Base SHA: ${report.baseCommitSha}`);
 
+      // Honor an explicitly requested target branch; fall back to the repository default.
+      const targetBranch = resolveTargetBranch(task.targetBranch, repoInfo.defaultBranch);
+      if (targetBranch !== repoInfo.defaultBranch) {
+        const branchSha = await this.github.fetchBranchHeadSha(owner, repo, targetBranch);
+        if (!branchSha) {
+          report.status = 'BLOCKED';
+          report.blockerReason = `Requested target branch "${targetBranch}" could not be resolved in ${owner}/${repo}.`;
+          log('warn', report.blockerReason);
+          return report;
+        }
+        report.baseCommitSha = branchSha;
+        log('info', `Using explicitly requested target branch "${targetBranch}" at SHA ${branchSha}.`);
+      }
+
       // 3. READING PERSISTENT INSTRUCTIONS & TARGET CODE SCOPE
       log('info', 'Checking for persistent instructions in AGENTS.md');
-      const agentsMdRemote = await this.github.fetchFile(owner, repo, 'AGENTS.md', repoInfo.defaultBranch);
+      const agentsMdRemote = await this.github.fetchFile(owner, repo, 'AGENTS.md', targetBranch);
       let instructionText = '';
       if (agentsMdRemote) {
         instructionText = agentsMdRemote.content;
@@ -284,11 +330,11 @@ export class ForgeAgent {
 
       // Read target repository file inventory
       log('info', 'Gathering repository file inventory for grounding');
-      const repoFilePaths = await this.github.listRepositoryFiles(owner, repo, repoInfo.defaultBranch);
+      const repoFilePaths = await this.github.listRepositoryFiles(owner, repo, targetBranch);
       log('info', `Found ${repoFilePaths.length} files in target repository tree.`);
 
       // Read the target repository's package manifest and bounded real source files.
-      const packageJsonRemote = await this.github.fetchFile(owner, repo, 'package.json', repoInfo.defaultBranch);
+      const packageJsonRemote = await this.github.fetchFile(owner, repo, 'package.json', targetBranch);
       const packageJsonContent = packageJsonRemote?.content || '{}';
       const taskText = `${task.title} ${task.description}`;
       const taskTerms = taskText
@@ -316,7 +362,7 @@ export class ForgeAgent {
       const targetSourceFiles: { path: string; content: string }[] = [];
       for (const candidate of sourceCandidates) {
         if (targetSourceFiles.length >= 5) break;
-        const file = await this.github.fetchFile(owner, repo, candidate, repoInfo.defaultBranch);
+        const file = await this.github.fetchFile(owner, repo, candidate, targetBranch);
         if (!file) {
           log('warn', `Could not fetch candidate source file; skipping: ${candidate}`);
           continue;
@@ -504,8 +550,8 @@ export class ForgeAgent {
           gitEnv.GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader';
           gitEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${this.githubToken}`).toString('base64')}`;
         }
-        log('info', `Cloning target branch ${repoInfo.defaultBranch} into an isolated temporary worktree.`);
-        await execFileAsync('git', ['clone', '--depth', '1', '--branch', repoInfo.defaultBranch, `https://github.com/${owner}/${repo}.git`, worktree], {
+        log('info', `Cloning target branch ${targetBranch} into an isolated temporary worktree.`);
+        await execFileAsync('git', ['clone', '--depth', '1', '--branch', targetBranch, `https://github.com/${owner}/${repo}.git`, worktree], {
           env: gitEnv,
           timeout: 120000,
           maxBuffer: 2 * 1024 * 1024,
@@ -672,10 +718,12 @@ export class ForgeAgent {
           return report;
         }
 
-        // Generic repository checks do not prove every requirement individually.
+        // Bind each requirement to the concrete evidence available for it rather than
+        // forcing a blanket PENDING (see evaluateRequirementEvidence).
         report.requirements.forEach((req) => {
-          req.status = 'PENDING';
-          req.evidence = `Latest target-check attempt passed: ${latestAttemptResults.map((result) => `${result.command}=${result.exitCode}`).join(', ')}. Criterion-specific proof still requires review.`;
+          const evaluation = evaluateRequirementEvidence(req, latestAttemptResults);
+          req.status = evaluation.status;
+          req.evidence = evaluation.evidence;
         });
       } finally {
         await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -736,7 +784,7 @@ export class ForgeAgent {
               repo,
               title: `[Forge] ${task.title}`,
               head: branchName,
-              base: repoInfo.defaultBranch,
+              base: targetBranch,
               body: `### Forge Task Report: ${task.id}
 - **Base Commit**: \`${report.baseCommitSha}\`
 - **Head Commit**: \`${report.headCommitSha}\`

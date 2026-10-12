@@ -106,6 +106,20 @@ export class GitHubService {
     }
   }
 
+  async fetchBranchHeadSha(owner: string, repo: string, branch: string): Promise<string | null> {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(branch)}`,
+        { headers: this.getHeaders() }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return typeof data.sha === 'string' ? data.sha : null;
+    } catch {
+      return null;
+    }
+  }
+
   async fetchCommitTreeSha(owner: string, repo: string, commitSha: string): Promise<string | null> {
     try {
       const res = await fetch(

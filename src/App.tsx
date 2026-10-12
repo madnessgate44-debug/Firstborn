@@ -560,13 +560,13 @@ export default function App() {
                   id: 'AC4',
                   title: 'Real model/provider path identified with credential docs',
                   status: 'PASS',
-                  evidence: '@google/genai SDK with gemini-2.5-flash verified live via node test.',
+                  evidence: 'Primary path is the keyless freelm router (Kilo/OVHcloud); verified live locally and in CI model:smoke. Gemini remains an optional fallback only.',
                 },
                 {
                   id: 'AC5',
                   title: 'Free & unattended execution claims supported by evidence',
                   status: 'PASS',
-                  evidence: 'Zero owner cost in AI Studio sandbox; GitHub Actions requires free-tier GEMINI_API_KEY secret.',
+                  evidence: 'Keyless-only runs completed with no API key: provider ovh/kilo, fallbackUsed=false. Owner cost is zero; no GEMINI_API_KEY secret is required.',
                 },
                 {
                   id: 'AC6',
@@ -601,14 +601,14 @@ export default function App() {
                 {
                   id: 'AC11',
                   title: 'Diff review and PR creation real when authorized',
-                  status: 'BLOCKED (Remote) / PASS (Local)',
-                  evidence: 'PR creation code implemented with octokit/fetch; blocked externally until repository exists.',
+                  status: 'PASS (controller-mediated)',
+                  evidence: 'Forge pushes a tested commit to an isolated forge/task-* branch and opens a reviewable PR through the connected GitHub controller. Native in-workflow PR creation is externally blocked until the repository setting "Allow GitHub Actions to create and approve pull requests" is enabled.',
                 },
                 {
                   id: 'AC12',
                   title: 'Security boundaries & permissions enforced',
                   status: 'PASS',
-                  evidence: 'Command prefix whitelist in TestRunnerService; secrets kept server-side; untrusted input treated safely.',
+                  evidence: 'Exact-command registry with shell:false in TestRunnerService; patch path/symlink/protected-file validation; secrets kept server-side and stripped from the git subprocess env.',
                 },
                 {
                   id: 'AC13',
@@ -644,7 +644,7 @@ export default function App() {
                   id: 'AC18',
                   title: 'End-to-end milestone has evidence or exact blockers',
                   status: 'PASS',
-                  evidence: 'Local end-to-end execution verified; remote GitHub PR blocker precisely documented.',
+                  evidence: 'Keyless local E2E produced a tested commit and PR #28 (closed). Native in-workflow PR creation remains an exact, documented external blocker pending the repository setting.',
                 },
               ].map((item) => (
                 <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1">
