@@ -5,16 +5,28 @@ on:
     types: [labeled]
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'Execution mode'
+        type: choice
+        required: true
+        default: coding
+        options:
+          - coding
+          - audit
+      target_repo:
+        description: 'Target repository in owner/repo format (audit mode only)'
+        required: true
+        default: 'madnessgate44-debug/Firstborn'
       task_id:
-        description: 'Task Identifier'
+        description: 'Task Identifier (coding mode)'
         required: true
         default: 'manual-task'
       task_title:
-        description: 'Task Title'
+        description: 'Task Title (coding mode)'
         required: true
         default: 'Run Repository Verification'
       task_desc:
-        description: 'Task Detailed Description'
+        description: 'Task Detailed Description (coding mode)'
         required: true
         default: 'Verify tests and baseline commit integrity'
 
@@ -24,8 +36,8 @@ concurrency:
 
 jobs:
   run-forge:
-    # Only run when issue has label 'forge-task' or triggered manually
-    if: github.event_name == 'workflow_dispatch' || (contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
+    # Coding missions preserve the existing issue-label path; audit has a separate read-only job.
+    if: (github.event_name == 'workflow_dispatch' && inputs.mode != 'audit') || (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -91,3 +103,44 @@ jobs:
         with:
           name: forge-evidence
           path: .firstborn/evidence/
+
+  run-readonly-audit:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The audit job cannot write to GitHub or open PRs.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Firstborn audit tooling only
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies without lifecycle scripts
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts
+          else
+            npm install --ignore-scripts
+          fi
+
+      - name: Run read-only repository audit
+        env:
+          FORGE_TARGET_REPO: ${{ inputs.target_repo }}
+        run: npx tsx src/agent/audit-runner.ts
+
+      - name: Upload read-only audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-readonly-audit
+          path: .firstborn/evidence/readonly-audit.*
+          if-no-files-found: warn
