@@ -95,3 +95,11 @@ test('evidence: bare script names do not count as a full command reference', () 
   );
   assert.equal(result.status, 'PENDING');
 });
+
+test('evidence: full command references remain case-insensitive', () => {
+  const result = evaluateRequirementEvidence(
+    { acceptanceCriteria: 'Run NPM RUN LINT and require exit code 0' },
+    [passing]
+  );
+  assert.equal(result.status, 'PASS');
+});
