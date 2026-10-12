@@ -533,7 +533,7 @@ export class ForgeAgent {
 
         let latestAttemptResults: TaskExecutionReport['testResults'] = [];
         let allChecksPassed = false;
-        for (let attempt = 0; attempt < 2 && !allChecksPassed; attempt += 1) {
+        for (let attempt = 0; attempt < 3 && !allChecksPassed; attempt += 1) {
           const attemptResults: TaskExecutionReport['testResults'] = [];
           if (hasNpmScripts) {
             let install = await this.testRunner.runCheck('npm install', worktree);
@@ -556,7 +556,7 @@ export class ForgeAgent {
           }
 
           for (const cmd of checksToRun) {
-            log('info', `Testing proposed patch (attempt ${attempt + 1}/2): ${cmd}`);
+            log('info', `Testing proposed patch (attempt ${attempt + 1}/3): ${cmd}`);
             const result = await this.testRunner.runCheck(cmd, worktree);
             report.testResults.push(result);
             attemptResults.push(result);
@@ -570,18 +570,24 @@ export class ForgeAgent {
           allChecksPassed = attemptResults.length > 0 && attemptResults.every((result) => result.status === 'PASSED');
           if (allChecksPassed) break;
 
-          if (attempt === 0) {
+          if (attempt < 2) {
             const failedResults = attemptResults.filter((result) => result.status !== 'PASSED');
             const failureDetails = failedResults.map((result) =>
-              `COMMAND: ${result.command}\nSTATUS: ${result.status}\nEXIT: ${result.exitCode}\nSTDOUT TAIL:\n${result.stdout.slice(-1800)}\nSTDERR TAIL:\n${result.stderr.slice(-1800)}`
+              `COMMAND: ${result.command}\nSTATUS: ${result.status}\nEXIT: ${result.exitCode}\nSTDOUT HEAD:\n${result.stdout.slice(0, 700)}\nSTDOUT TAIL:\n${result.stdout.slice(-1100)}\nSTDERR HEAD:\n${result.stderr.slice(0, 500)}\nSTDERR TAIL:\n${result.stderr.slice(-1100)}`
             ).join('\n\n--- FAILED CHECK ---\n\n');
-            log('warn', `Target checks failed; requesting one bounded model repair with ${failedResults.length} failing check(s).`);
+            log('warn', `Target checks failed; requesting bounded repair ${attempt + 1}/2 with ${failedResults.length} failing check(s).`);
             report.modelInvoked.callsCount += 1;
             const previousPatchSummary = report.plannedChanges
-              .map((change) => `${change.action} ${change.path}: ${change.rationale}`)
+              .map((change) => JSON.stringify({
+                path: change.path,
+                action: change.action,
+                rationale: change.rationale,
+                edits: change.edits,
+                contentPreview: typeof change.content === 'string' ? change.content.slice(0, 1200) : undefined,
+              }, null, 2))
               .join('\n');
             const repairResult = await this.model.generatePlanAndPatch(
-              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (one bounded retry). The previous patch was applied but failed target checks. Fix the actual cause (including missing imports or type/syntax errors), and return a complete replacement JSON plan for the same task. Preserve the original task scope. Do not weaken, skip, or silence checks. Existing files must use exact-anchor edits copied verbatim from the original supplied source. If adding declarations, preserve top-level/interface/class boundaries. Do not modify package manifests, workflows, scripts, secrets, or security controls.\n\nPREVIOUS PATCH SUMMARY:\n${previousPatchSummary}\n\nFAILED CHECK DIAGNOSTICS:\n${failureDetails}`,
+              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (attempt ${attempt + 1}/2). The previous patch was applied but failed target checks. The exact previous edits and compiler/test diagnostics are included below. Do not repeat the same edit if it caused the failure; change the anchor or placement to address the diagnostics. For top-level declarations, use a file-scope anchor; for interface members, use a unique field anchor inside the intended interface. Fix the actual cause (including missing imports or type/syntax errors), and return a complete replacement JSON plan for the same task. Preserve the original task scope. Do not weaken, skip, or silence checks. Existing files must use exact-anchor edits copied verbatim from the original supplied source. Do not modify package manifests, workflows, scripts, secrets, or security controls.\n\nPREVIOUS PATCH SUMMARY:\n${previousPatchSummary}\n\nFAILED CHECK DIAGNOSTICS:\n${failureDetails}`,
               contextFiles
             );
             report.modelInvoked.provider = repairResult.provider;
@@ -634,13 +640,13 @@ export class ForgeAgent {
             await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: worktree, timeout: 15000 });
             await execFileAsync('git', ['clean', '-fd'], { cwd: worktree, timeout: 15000 });
             await this.applyChangesToWorktree(worktree, report.plannedChanges);
-            log('info', 'Applied repaired patch to a clean base worktree; rerunning target checks once.');
+            log('info', 'Applied repaired patch to a clean base worktree; rerunning target checks after this repair attempt.');
           }
         }
 
         if (!allChecksPassed) {
           report.status = 'FAILED';
-          report.errorMessage = 'Target checks still failed after one bounded patch-repair attempt.';
+          report.errorMessage = 'Target checks still failed after two bounded patch-repair attempts.';
           log('error', report.errorMessage);
           return report;
         }
