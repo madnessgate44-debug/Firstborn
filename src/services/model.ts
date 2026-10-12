@@ -21,7 +21,7 @@ export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
   private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, '');
-  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'murakumo/free';
+  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'mishima';
 
   constructor() {
     const key = process.env.GEMINI_API_KEY?.trim();
@@ -36,7 +36,7 @@ export class ModelService {
 
   getProviderInfo() {
     return {
-      primaryProvider: 'Murakumo anonymous free models with capacity fallback; llmfaucet best-effort secondary route',
+      primaryProvider: 'Murakumo anonymous mishima route with Qwen and free-alias fallbacks; llmfaucet best-effort secondary route',
       primaryModel: this.primaryModel,
       primaryRequiresApiKey: false,
       fallbackProvider: 'Google AI Studio / Gemini',
@@ -81,26 +81,40 @@ Respond only with valid JSON.`;
       {
         baseUrl: this.primaryUrl,
         model: this.primaryModel,
-        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous free model',
+        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous inference',
         authorization: '',
+        timeoutMs: process.env.FREE_MODEL_BASE_URL ? 30000 : 60000,
+        maxAttempts: 1,
       },
       {
         baseUrl: 'https://api.murakumo.cloud/v1',
-        model: 'mishima',
-        provider: 'Murakumo anonymous fallback model',
+        model: 'qwen3.8-27b-throughput-b70',
+        provider: 'Murakumo anonymous Qwen3.8 throughput-b70 coding route',
         authorization: '',
+        timeoutMs: 60000,
+        maxAttempts: 1,
+      },
+      {
+        baseUrl: 'https://api.murakumo.cloud/v1',
+        model: 'murakumo/free',
+        provider: 'Murakumo anonymous free model',
+        authorization: '',
+        timeoutMs: 30000,
+        maxAttempts: 1,
       },
       {
         baseUrl: 'https://api.llmfaucet.dev/v1',
         model: 'auto:coding',
         provider: 'llmfaucet anonymous gateway',
         authorization: 'Bearer free',
+        timeoutMs: 30000,
+        maxAttempts: 1,
       },
     ];
     const primaryErrors: string[] = [];
     for (const route of keylessRoutes) {
       let routeSucceeded = false;
-      for (let attempt = 0; attempt < 2 && !routeSucceeded; attempt += 1) {
+      for (let attempt = 0; attempt < route.maxAttempts && !routeSucceeded; attempt += 1) {
         try {
           const headers: Record<string, string> = { 'Content-Type': 'application/json' };
           if (route.authorization) headers.Authorization = route.authorization;
@@ -108,7 +122,7 @@ Respond only with valid JSON.`;
             method: 'POST',
             headers,
             body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 1024 }),
-            signal: AbortSignal.timeout(30000),
+            signal: AbortSignal.timeout(route.timeoutMs),
           });
 
           if (!response.ok) {
