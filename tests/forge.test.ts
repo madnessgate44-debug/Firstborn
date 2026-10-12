@@ -79,3 +79,19 @@ test('evidence: missing acceptance criteria yields PENDING', () => {
   const result = evaluateRequirementEvidence({}, [passing]);
   assert.equal(result.status, 'PENDING');
 });
+
+test('evidence: generic words like "test" do not bind an unrelated passing command', () => {
+  const result = evaluateRequirementEvidence(
+    { acceptanceCriteria: 'the feature should be tested thoroughly' },
+    [{ command: 'npm test', status: 'PASSED', exitCode: 0 }]
+  );
+  assert.equal(result.status, 'PENDING');
+});
+
+test('evidence: bare script names do not count as a full command reference', () => {
+  const result = evaluateRequirementEvidence(
+    { acceptanceCriteria: 'lint quality should remain high' },
+    [passing]
+  );
+  assert.equal(result.status, 'PENDING');
+});
