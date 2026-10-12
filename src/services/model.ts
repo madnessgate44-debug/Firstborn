@@ -35,7 +35,7 @@ export class ModelService {
 
   getProviderInfo() {
     return {
-      primaryProvider: 'llmfaucet anonymous gateway',
+      primaryProvider: 'Murakumo anonymous inference; llmfaucet keyless gateway as secondary route',
       primaryModel: this.primaryModel,
       primaryRequiresApiKey: false,
       fallbackProvider: 'Google AI Studio / Gemini',
@@ -74,22 +74,41 @@ Respond only with valid JSON.`;
       { role: 'user', content: fullPrompt },
     ];
 
-    let primaryError = '';
-    try {
-      const response = await fetch(`${this.primaryUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer free' },
-        body: JSON.stringify({ model: this.primaryModel, messages, temperature: 0.1 }),
-        signal: AbortSignal.timeout(60000),
-      });
-      if (!response.ok) throw new Error(`Keyless model gateway returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
-      const data = await response.json() as { choices?: { message?: { content?: string } }[]; model?: string };
-      const text = data.choices?.[0]?.message?.content;
-      if (!text) throw new Error('Keyless model gateway returned no message content.');
-      return { text, model: data.model || this.primaryModel, provider: 'llmfaucet anonymous gateway', success: true, fallbackUsed: false };
-    } catch (err) {
-      primaryError = err instanceof Error ? err.message : String(err);
+    const keylessRoutes = [
+      {
+        baseUrl: this.primaryUrl,
+        model: this.primaryModel,
+        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous inference',
+        authorization: '',
+      },
+      {
+        baseUrl: 'https://api.llmfaucet.dev/v1',
+        model: 'auto:coding',
+        provider: 'llmfaucet anonymous gateway',
+        authorization: 'Bearer free',
+      },
+    ];
+    const primaryErrors: string[] = [];
+    for (const route of keylessRoutes) {
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (route.authorization) headers.Authorization = route.authorization;
+        const response = await fetch(`${route.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ model: route.model, messages, temperature: 0.1 }),
+          signal: AbortSignal.timeout(45000),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+        const data = await response.json() as { choices?: { message?: { content?: string } }[]; model?: string };
+        const text = data.choices?.[0]?.message?.content;
+        if (!text) throw new Error('Endpoint returned no message content.');
+        return { text, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false };
+      } catch (err) {
+        primaryErrors.push(`${route.provider}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
+    const primaryError = primaryErrors.join(' | ');
 
     if (this.gemini) {
       try {
@@ -122,9 +141,9 @@ Respond only with valid JSON.`;
     return {
       text: '',
       model: this.primaryModel,
-      provider: 'llmfaucet anonymous gateway',
+      provider: 'keyless model routes unavailable',
       success: false,
-      error: `Primary keyless route failed: ${primaryError}. Gemini fallback is not configured.`,
+      error: `All keyless primary routes failed: ${primaryError}. Gemini fallback is not configured.`,
       fallbackUsed: false,
     };
   }
