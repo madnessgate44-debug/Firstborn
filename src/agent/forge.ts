@@ -510,6 +510,13 @@ export class ForgeAgent {
           req.status = 'PENDING';
           req.evidence = `Target-tree checks passed: ${report.testResults.map((r) => `${r.command}=${r.exitCode}`).join(', ')}. Criterion-specific proof still requires review.`;
         });
+
+        // Persist the exact, tested file contents before deleting the isolated worktree.
+        // Model plans for existing files use exact-anchor edits, so change.content may be absent.
+        for (const change of report.plannedChanges) {
+          change.content = await fs.readFile(path.resolve(worktree, change.path), 'utf-8');
+        }
+        log('info', `Captured final tested contents for ${report.plannedChanges.length} file(s) for commit.`);
       } finally {
         await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
       }
