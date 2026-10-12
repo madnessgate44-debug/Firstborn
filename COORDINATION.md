@@ -629,3 +629,54 @@ No secrets, tokens, or credentials appear in this entry.
 - No secrets in this file. No merge of any PR with failing CI.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-R7-20261012-01`
+- **Timestamp (UTC)**: 2026-10-12T13:20:00Z
+- **Author**: OPENHANDS (acting under Ahmed's directive to reach 100% of the ultimate agent)
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: IMPLEMENTATION + RISK ASSESSMENT + M4 TRIAGE REPORT
+- **Baseline inspected**: `main` = `30e4f41`. Work on branch `feat/forge-controller-hardening`; PR #34.
+
+#### M4 — Repository hygiene (open-PR triage)
+| PR | Disposition | Reason |
+| :-- | :-- | :-- |
+| #17 | CLOSED (supersede) | Superseded by #19 (freelm routing); branch conflicts, content landed. |
+| #18 | CLOSED (supersede) | Superseded by #19 (freelm failover); branch conflicts, content landed. |
+| #20 | CLOSED (duplicate) | Same single-field proof marker as #21/#25. |
+| #21 | CLOSED (duplicate) | Same single-field proof marker; kept as reference E2E proof. |
+| #25 | CLOSED (duplicate) | Same single-field proof marker from a Forge E2E run. |
+| #26 | CLOSED (folded in) | Its `npm run model:smoke` authorization is preserved in PR #34 (d313c1b). |
+| #4  | CLOSED (e2e proof) | Controlled smoke artifact, superseded by #25/#34. |
+| #27 | CLOSED (e2e proof) | One-off repeatability evidence, superseded on main. |
+| #24 | KEEP (open) | Unique DeepSeek free-model proof (issue #22). |
+| #30 | KEEP (open) | Unique audit-handoff record for ChatGPT. |
+Open queue reduced 11 -> 3 (#34, #24, #30). No unique content dropped.
+
+#### M5 / R7 — Permission control plane ("ultimate control")
+- **Implemented, default least privilege.** New pure decision function
+  `evaluatePermissionPolicy` (`src/agent/policy.ts`) consulted by `forge.ts`
+  before every GitHub write (branch, commit, PR).
+- **Profiles**: `readonly` < `sandbox` < `review` (default) < `publish`.
+  Merge is never representable. `main`/`master` denied by policy.
+- **Human sign-off**: `FORGE_REQUIRE_HUMAN_APPROVAL=true` caps the effective
+  profile at `sandbox` (branch only, PR withheld).
+- **Risk assessment**: `docs/R7_PERMISSION_RISK_ASSESSMENT.md` (required before
+  any boundary change).
+- **Tests**: 9 cases in `tests/policy.test.ts`.
+
+#### Observed verification (PR #34 head)
+- `npm run lint` -> EXIT 0
+- `npm test` -> 36 passed / 0 failed (was 27; +9 policy)
+- `npm run build` -> EXIT 0
+- `npm run model:smoke` -> PASS (keyless; kilo, nvidia/nemotron-3-super-120b-a12b:free)
+- CI `verify` on PR #34 -> success
+- Also fixed: stale AC11/AC18 "externally blocked" wording in `src/App.tsx`,
+  which contradicted observed reality (PRs #21/#25 authored by github-actions[bot]).
+
+#### Safety posture
+- No blanket permission increase: the default profile equals the previous
+  least-privilege behaviour. No merge capability added. No secrets in this file.
+
+No secrets, tokens, or credentials appear in this entry.
