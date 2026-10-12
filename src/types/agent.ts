@@ -57,6 +57,7 @@ export interface TaskExecutionReport {
   status: TaskStatus;
   startTime: string;
   endTime?: string;
+  verificationProof?: string;
   baseCommitSha: string;
   headCommitSha?: string;
   branchName?: string;
