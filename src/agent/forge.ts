@@ -295,13 +295,15 @@ export class ForgeAgent {
       }
       applyPlanToReport(parsedPlan);
 
-      // Repair one malformed model patch using the exact inspected source, without weakening anchor validation.
+      // Retry malformed exact anchors at most twice. Never relax matching or apply a guessed edit.
       let anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
-      if (anchorProblems.length > 0) {
-        log('warn', `Model patch contains invalid exact anchors; requesting one bounded repair: ${anchorProblems.slice(0, 5).join(' | ')}`);
+      let anchorRepairAttempts = 0;
+      while (anchorProblems.length > 0 && anchorRepairAttempts < 2) {
+        anchorRepairAttempts += 1;
+        log('warn', `Model patch contains invalid exact anchors; requesting bounded repair ${anchorRepairAttempts}/2: ${anchorProblems.slice(0, 5).join(' | ')}`);
         report.modelInvoked.callsCount += 1;
         modelResult = await this.model.generatePlanAndPatch(
-          `${task.title}\nDetails: ${task.description}\n\nPATCH REPAIR REQUIRED. The previous generated patch was rejected before application because these exact-anchor checks failed: ${JSON.stringify(anchorProblems.slice(0, 5))}. Re-read the supplied source files and regenerate the complete JSON plan. Every edit.find must be copied verbatim from the matching supplied file and must occur exactly once. Do not guess anchors, do not weaken validation, and do not change unrelated files.`,
+          `${task.title}\nDetails: ${task.description}\n\nPATCH REPAIR REQUIRED (attempt ${anchorRepairAttempts}/2). The previous patch was rejected before application because these exact-anchor checks failed: ${JSON.stringify(anchorProblems.slice(0, 5))}. Re-read the supplied source files and regenerate the complete compact JSON plan. Every edit.find must be copied verbatim from the matching supplied file and must occur exactly once. Keep at most 3 files and 4 edits total. Do not guess anchors, do not weaken validation, and do not change unrelated files.`,
           contextFiles
         );
         report.modelInvoked.provider = modelResult.provider;
@@ -322,12 +324,12 @@ export class ForgeAgent {
         }
         applyPlanToReport(parsedPlan);
         anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
-        if (anchorProblems.length > 0) {
-          report.status = 'FAILED';
-          report.errorMessage = `Patch repair still contains invalid exact anchors: ${anchorProblems.slice(0, 5).join(' | ')}`;
-          log('error', report.errorMessage);
-          return report;
-        }
+      }
+      if (anchorProblems.length > 0) {
+        report.status = 'FAILED';
+        report.errorMessage = `Patch contains invalid exact anchors after two repair attempts: ${anchorProblems.slice(0, 5).join(' | ')}`;
+        log('error', report.errorMessage);
+        return report;
       }
 
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
