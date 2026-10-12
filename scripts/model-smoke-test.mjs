@@ -1,8 +1,14 @@
 const routes = [
   {
     base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, ''),
-    model: process.env.FREE_MODEL_NAME || 'mishima',
-    provider: 'Murakumo anonymous inference',
+    model: process.env.FREE_MODEL_NAME || 'murakumo/free',
+    provider: 'Murakumo anonymous free model',
+    authorization: '',
+  },
+  {
+    base: 'https://api.murakumo.cloud/v1',
+    model: 'mishima',
+    provider: 'Murakumo anonymous fallback model',
     authorization: '',
   },
   {
@@ -28,11 +34,15 @@ for (const route of routes) {
           { role: 'user', content: 'Reply with exactly: FIRSTBORN_MODEL_ROUTE_OK' },
         ],
         temperature: 0,
-        max_tokens: 40,
+        max_tokens: 64,
       }),
       signal: AbortSignal.timeout(30000),
     });
 
+    if (response.status === 429) {
+      failures.push(`${route.provider}: HTTP 429 capacity busy`);
+      continue;
+    }
     if (!response.ok) {
       failures.push(`${route.provider}: HTTP ${response.status}: ${(await response.text()).slice(0, 250)}`);
       continue;
@@ -50,6 +60,7 @@ for (const route of routes) {
       requestedModel: route.model,
       actualModel: data.model || 'not-reported',
       responseReceived: true,
+      priorRouteFailures: failures,
     }, null, 2));
     process.exit(0);
   } catch (error) {
