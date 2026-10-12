@@ -4,6 +4,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { FreeLLM } from 'freelm';
 
 export interface ModelGenerationResult {
   text: string;
@@ -17,13 +18,24 @@ export interface ModelGenerationResult {
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
 
+const KEYLESS_CREDENTIAL_ENV_NAMES = [
+  'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY',
+  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'ZAI_API_KEY', 'COHERE_API_KEY',
+  'CO_API_KEY', 'CEREBRAS_API_KEY', 'MISTRAL_API_KEY', 'NVIDIA_API_KEY', 'NIM_API_KEY',
+  'KILO_API_KEY', 'FREELM_GOOGLE_KEYS', 'FREELM_GROQ_KEYS', 'FREELM_OPENROUTER_KEYS',
+  'FREELM_CLOUDFLARE_KEYS', 'FREELM_ZAI_KEYS', 'FREELM_COHERE_KEYS',
+  'FREELM_CEREBRAS_KEYS', 'FREELM_MISTRAL_KEYS', 'FREELM_NIM_KEYS', 'FREELM_KILO_KEYS',
+];
+
 export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
-  private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, '');
-  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'mishima';
 
   constructor() {
+    if (process.env.FIRSTBORN_KEYLESS_ONLY === 'true') {
+      for (const name of KEYLESS_CREDENTIAL_ENV_NAMES) delete process.env[name];
+      process.env.FREELM_KEYLESS = '1';
+    }
     const key = process.env.GEMINI_API_KEY?.trim();
     this.geminiConfigured = Boolean(key && key !== 'MY_GEMINI_API_KEY');
     this.gemini = this.geminiConfigured ? new GoogleGenAI({ apiKey: key }) : null;
@@ -36,15 +48,15 @@ export class ModelService {
 
   getProviderInfo() {
     return {
-      primaryProvider: 'Murakumo anonymous free models with capacity fallback; llmfaucet best-effort secondary route',
-      primaryModel: this.primaryModel,
+      primaryProvider: 'freelm multi-provider free-tier router with keyless Kilo and OVHcloud fallback',
+      primaryModel: 'chat:large',
       primaryRequiresApiKey: false,
       fallbackProvider: 'Google AI Studio / Gemini',
       fallbackModel: 'gemini-2.5-flash',
       fallbackConfigured: this.geminiConfigured && process.env.FIRSTBORN_KEYLESS_ONLY !== 'true',
       costStatus: process.env.FIRSTBORN_KEYLESS_ONLY === 'true'
-        ? 'Strict keyless-only mode: Gemini fallback is disabled for this execution.'
-        : 'Primary route is anonymous shared free capacity with variable limits; Gemini fallback requires an already-configured API key.',
+        ? 'Strict keyless-only mode: provider credentials are removed and Gemini fallback is disabled.'
+        : 'freelm prefers configured free-tier providers and can fall back to anonymous keyless endpoints; Gemini fallback is optional.',
     };
   }
 
@@ -79,90 +91,64 @@ Respond only with valid JSON.`;
       { role: 'user', content: fullPrompt },
     ];
 
-    const keylessRoutes = [
-      {
-        baseUrl: this.primaryUrl,
-        model: this.primaryModel,
-        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous model',
-        authorization: '',
-      },
-      {
-        baseUrl: 'https://api.murakumo.cloud/v1',
-        model: 'mishima',
-        provider: 'Murakumo anonymous fallback model',
-        authorization: '',
-      },
-      {
-        baseUrl: 'https://api.llmfaucet.dev/v1',
-        model: 'auto:coding',
-        provider: 'llmfaucet anonymous gateway',
-        authorization: 'Bearer free',
-      },
-    ].filter((route, index, all) => all.findIndex((candidate) => candidate.baseUrl === route.baseUrl && candidate.model === route.model) === index);
     const primaryErrors: string[] = [];
-    for (const route of keylessRoutes) {
-      let routeSucceeded = false;
-      for (let attempt = 0; attempt < 2 && !routeSucceeded; attempt += 1) {
+    let invokedProvider = 'freelm free-tier router';
+    let invokedModel = 'chat:large';
+
+    try {
+      const llm = FreeLLM.fromEnv({
+        // Always include the no-signup Kilo/OVHcloud routes as last resorts.
+        keyless: true,
+        maxAttempts: 12,
+        timeout: 35,
+        hedge: true,
+        onEvent: (event) => {
+          if (event.kind === 'error') {
+            primaryErrors.push(`${event.provider || 'unknown provider'} / ${event.model || 'unknown model'}: ${event.error || `HTTP ${event.status ?? 'unknown'}`}`);
+          }
+          if (event.kind === 'success') {
+            invokedProvider = event.provider || invokedProvider;
+            invokedModel = event.model || invokedModel;
+          }
+        },
+      });
+
+      // Some anonymous endpoints report HTTP success but return an empty/thinking-only
+      // answer. Treat that as a failed model choice and try another discovered alias.
+      for (const alias of ['chat:large', 'chat:fast', 'chat:small']) {
         try {
-          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-          if (route.authorization) headers.Authorization = route.authorization;
-          const response = await fetch(`${route.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 1024, reasoning: { effort: 'none' } }),
-            signal: AbortSignal.timeout(30000),
+          const response = await llm.chat(messages, {
+            model: alias,
+            temperature: 0.1,
+            max_tokens: 1024,
+            signal: AbortSignal.timeout(40000),
           });
-
-          if (!response.ok) {
-            const responseBody = (await response.text()).slice(0, 300);
-            const message = `${route.provider}: HTTP ${response.status}: ${responseBody}`;
-            primaryErrors.push(message);
-            if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
-              await new Promise((resolve) => setTimeout(resolve, response.status === 429 ? 1500 : 750));
-              continue;
-            }
-            routeSucceeded = true;
+          const content = response.text.trim();
+          invokedProvider = response.provider || invokedProvider;
+          invokedModel = response.model || invokedModel;
+          if (!content) {
+            primaryErrors.push(`${alias} via ${invokedProvider}: response contained no usable text`);
             continue;
           }
-
-          const data = await response.json() as {
-            choices?: { text?: unknown; finish_reason?: string; message?: { content?: unknown; refusal?: unknown; reasoning?: unknown } }[];
-            model?: string;
-            output_text?: unknown;
+          return {
+            text: content,
+            model: invokedModel,
+            provider: invokedProvider,
+            success: true,
+            fallbackUsed: false,
+            keylessRouteErrors: [...primaryErrors],
           };
-          const choice = data.choices?.[0];
-          const rawContent = choice?.message?.content ?? choice?.text ?? data.output_text;
-          const content = typeof rawContent === 'string'
-            ? rawContent
-            : Array.isArray(rawContent)
-              ? rawContent.map((part: any) => typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : typeof part?.content === 'string' ? part.content : '').join('')
-              : '';
-          if (!content.trim()) {
-            const messageKeys = choice?.message && typeof choice.message === 'object'
-              ? Object.keys(choice.message).join(',')
-              : 'none';
-            primaryErrors.push(`${route.provider}: HTTP ${response.status} but no usable text (finish_reason=${choice?.finish_reason || 'unknown'}, message_keys=${messageKeys}, response_model=${data.model || 'unknown'})`);
-            if (attempt === 0) {
-              await new Promise((resolve) => setTimeout(resolve, 750));
-              continue;
-            }
-            routeSucceeded = true;
-            continue;
-          }
-
-          return { text: content, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false, keylessRouteErrors: [...primaryErrors] };
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
-          primaryErrors.push(`${route.provider}: ${errorMessage}`);
-          if (attempt === 0 && /timeout|aborted|fetch failed/i.test(errorMessage)) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-            continue;
-          }
-          routeSucceeded = true;
+          primaryErrors.push(`${alias}: ${errorMessage}`);
         }
       }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      primaryErrors.push(`freelm initialization failed: ${errorMessage}`);
     }
-    const primaryError = primaryErrors.join(' | ');
+
+    const primaryError = primaryErrors.join(' | ') || 'freelm returned no usable text without a reported provider error';
 
     if (this.gemini && process.env.FIRSTBORN_KEYLESS_ONLY !== 'true') {
       try {
@@ -196,7 +182,7 @@ Respond only with valid JSON.`;
 
     return {
       text: '',
-      model: this.primaryModel,
+      model: 'chat:large',
       provider: 'keyless model routes unavailable',
       success: false,
       error: `All keyless primary routes failed: ${primaryError}. ${process.env.FIRSTBORN_KEYLESS_ONLY === 'true' ? 'Gemini fallback is disabled by FIRSTBORN_KEYLESS_ONLY=true.' : 'Gemini fallback is not configured.'}`,
