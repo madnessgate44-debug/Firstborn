@@ -1,42 +1,61 @@
-const base = (process.env.FREE_MODEL_BASE_URL || 'https://api.llmfaucet.dev/v1').replace(/\/+$/, '');
-const model = process.env.FREE_MODEL_NAME || 'auto:coding';
-
-const response = await fetch(`${base}/chat/completions`, {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    Authorization: 'Bearer free',
+const routes = [
+  {
+    base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\\/+$/, ''),
+    model: process.env.FREE_MODEL_NAME || 'murakumo-main',
+    provider: 'Murakumo anonymous inference',
+    authorization: '',
   },
-  body: JSON.stringify({
-    model,
-    messages: [
-      { role: 'system', content: 'Reply with a short plain-text answer.' },
-      { role: 'user', content: 'Reply with exactly: FIRSTBORN_MODEL_ROUTE_OK' },
-    ],
-    temperature: 0,
-    max_tokens: 40,
-  }),
-  signal: AbortSignal.timeout(45000),
-});
+  {
+    base: 'https://api.llmfaucet.dev/v1',
+    model: 'auto:coding',
+    provider: 'llmfaucet anonymous gateway',
+    authorization: 'Bearer free',
+  },
+];
 
-if (!response.ok) {
-  const detail = (await response.text()).slice(0, 500);
-  console.error(`Keyless model route failed: HTTP ${response.status}: ${detail}`);
-  process.exit(1);
+const failures = [];
+for (const route of routes) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (route.authorization) headers.Authorization = route.authorization;
+    const response = await fetch(`${route.base}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: route.model,
+        messages: [
+          { role: 'system', content: 'Reply with a short plain-text answer.' },
+          { role: 'user', content: 'Reply with exactly: FIRSTBORN_MODEL_ROUTE_OK' },
+        ],
+        temperature: 0,
+        max_tokens: 40,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!response.ok) {
+      failures.push(`${route.provider}: HTTP ${response.status}: ${(await response.text()).slice(0, 250)}`);
+      continue;
+    }
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || !text.trim()) {
+      failures.push(`${route.provider}: empty response content`);
+      continue;
+    }
+
+    console.log(JSON.stringify({
+      status: 'PASS',
+      provider: route.provider,
+      requestedModel: route.model,
+      actualModel: data.model || 'not-reported',
+      responseReceived: true,
+    }, null, 2));
+    process.exit(0);
+  } catch (error) {
+    failures.push(`${route.provider}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
-const data = await response.json();
-const text = data.choices?.[0]?.message?.content;
-if (typeof text !== 'string' || !text.trim()) {
-  console.error('Keyless model route returned no message content.');
-  process.exit(1);
-}
-
-console.log(JSON.stringify({
-  status: 'PASS',
-  provider: 'llmfaucet anonymous gateway',
-  requestedModel: model,
-  actualModel: data.model || 'not-reported',
-  responseReceived: true,
-  routedVia: response.headers.get('x-routed-via') || 'not-reported',
-}, null, 2));
+console.error('All keyless model routes failed:', failures.join(' | '));
+process.exit(1);
