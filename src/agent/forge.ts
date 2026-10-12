@@ -1013,7 +1013,7 @@ export class ForgeAgent {
           // This catches malformed syntax and forbidden nested node:test declarations before
           // the patch can be considered successful, while still feeding diagnostics into repair.
           for (const change of report.plannedChanges) {
-            if (change.action === 'delete' || !/\\.test\\.[cm]?[jt]sx?$/i.test(change.path)) continue;
+            if (change.action === 'delete' || !/\.test\.[cm]?[jt]sx?$/i.test(change.path)) continue;
             let structureResult: TestExecutionResult | undefined;
             try {
               const testContent = await fs.readFile(path.join(worktree, change.path), 'utf-8');
