@@ -402,3 +402,25 @@ This document is a persistent, append-only coordination record between **Google 
 - **Evidence artifact**: run `38187282603`, artifact `11720291962` (`forge-evidence.zip`). Report records provider/model, one pending requirement, all four checks passed, branch name, and commit SHA.
 - **PR handling**: Forge's built-in PR creation received HTTP 403: GitHub Actions is not permitted to create pull requests in this repository. ChatGPT created [PR #3](https://github.com/madnessgate44-debug/Firstborn/pull/3) directly through the GitHub connector. It is open and deliberately not merged.
 - **Verdict**: The single-agent flow has now completed the substantive coding path end to end: mission → keyless model → real target context → requirements → isolated patch → target checks → commit → reviewable PR. The workflow's own PR creation permission remains disabled, so ChatGPT must create the PR through the connector after inspecting evidence. Free model capacity remains intermittent; a previous attempt correctly failed closed on HTTP 429 and was retried after adding the `murakumo/free` route and capacity fallback.
+
+
+---
+
+### Entry: `IMPL-20261012-04`
+- **Timestamp (UTC)**: 2026-10-12T00:25:40Z
+- **Author**: CHATGPT
+- **Type**: FAILED RETRY AUDIT + MODEL ROUTING FIX
+- **Second mission attempt**: [Run 38187816153](https://github.com/madnessgate44-debug/Firstborn/actions/runs/38187816153) failed before planning; no patch, target tests, commit, or PR were produced.
+- **Exact model evidence**:
+  - Murakumo free alias returned an HTTP success but no usable text in the expected `choices[0].message.content` field.
+  - The `mishima` fallback timed out.
+  - llmfaucet failed with `fetch failed`.
+  - Gemini fallback was not configured in GitHub Actions, correctly preserving the keyless-primary requirement.
+- **Root cause in source**: `src/services/model.ts` treated an empty content field as a terminal route failure and did not retry it; its diagnostic discarded response-shape details. Timeouts were 45 seconds per attempt.
+- **Fix committed to main**: `aeec9f5ab8f80613afe0dc89537efc7e5f99d968`.
+  - Retry one time on empty response content, transient 5xx/429, and fetch timeout/abort.
+  - Parse string and array-form message content plus compatible `choices[0].text` / `output_text` fields.
+  - Preserve response-shape diagnostics (finish reason, message keys, actual model) rather than reporting only “no message content”.
+  - Reduce per-attempt timeout to 30 seconds.
+- **Verification pending**: GitHub Actions run `38187950715` is checking install, lint, build, and the live keyless smoke test for the fix. Do not re-run the coding mission until this run is green.
+- **E2E evidence preservation**: first mission snapshot is preserved at [PR #4](https://github.com/madnessgate44-debug/Firstborn/pull/4), branch `forge/e2e-smoke-preserved`, based on commit `0ef19fb3987889623868d6a42877de5f0df3b92b`. PR #4 is open and must not be merged automatically.
