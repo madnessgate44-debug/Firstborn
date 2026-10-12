@@ -20,7 +20,7 @@ export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
   private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, '');
-  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'qwen3.8-27b-throughput-5090';
+  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'qwen3.8-27b-throughput-b70';
 
   constructor() {
     const key = process.env.GEMINI_API_KEY?.trim();
@@ -80,9 +80,17 @@ Respond only with valid JSON.`;
       {
         baseUrl: this.primaryUrl,
         model: this.primaryModel,
-        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous Qwen3.8 coding route',
+        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous Qwen3.8 throughput-b70 coding route',
         authorization: '',
-        timeoutMs: process.env.FREE_MODEL_BASE_URL ? 30000 : 420000,
+        timeoutMs: process.env.FREE_MODEL_BASE_URL ? 30000 : 60000,
+        maxAttempts: 1,
+      },
+      {
+        baseUrl: 'https://api.murakumo.cloud/v1',
+        model: 'qwen3.8-27b-throughput-5090',
+        provider: 'Murakumo anonymous Qwen3.8 5090 fallback route',
+        authorization: '',
+        timeoutMs: 420000,
         maxAttempts: 1,
       },
       {
