@@ -1170,8 +1170,8 @@ export class ForgeAgent {
               head: branchName,
               base: targetBranch,
               body: `### Forge Task Report: ${task.id}
-- **Base Commit**: `${report.baseCommitSha}`
-- **Head Commit**: `${report.headCommitSha}`
+- **Base Commit**: \`${report.baseCommitSha}\`
+- **Head Commit**: \`${report.headCommitSha}\`
 - **Provider**: ${report.modelInvoked.provider}
 - **Model**: ${report.modelInvoked.model}
 - **Fallback Used**: ${report.modelInvoked.fallbackUsed ?? 'unknown'}
