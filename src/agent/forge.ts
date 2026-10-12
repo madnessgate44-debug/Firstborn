@@ -198,22 +198,29 @@ export class ForgeAgent {
       // Read the target repository's package manifest and bounded real source files.
       const packageJsonRemote = await this.github.fetchFile(owner, repo, 'package.json', repoInfo.defaultBranch);
       const packageJsonContent = packageJsonRemote?.content || '{}';
-      const taskTerms = `${task.title} ${task.description}`
+      const taskText = `${task.title} ${task.description}`;
+      const taskTerms = taskText
         .toLowerCase()
         .split(/[^a-z0-9]+/)
         .filter((term) => term.length > 2);
-      const sourcePaths = repoFilePaths
+      const explicitPaths = Array.from(
+        taskText.matchAll(/((?:src|scripts|\.github|docs)\/[\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml))/g),
+        (match) => match[1]
+      ).filter((candidate, index, all) => all.indexOf(candidate) === index && repoFilePaths.includes(candidate));
+      const eligibleSourcePaths = repoFilePaths
         .filter((p) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
         .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))
-        .filter((p) => p !== 'package.json' && p !== 'AGENTS.md')
+        .filter((p) => p !== 'package.json' && p !== 'AGENTS.md');
+      // If the mission names exact files, do not send unrelated source files that can confuse patch anchors.
+      const sourcePaths = (explicitPaths.length > 0 ? explicitPaths : eligibleSourcePaths
         .sort((a, b) => {
           const score = (candidate: string) => {
             const lower = candidate.toLowerCase();
             return taskTerms.reduce((total, term) => total + (lower.includes(term) ? 1 : 0), 0);
           };
           return score(b) - score(a) || a.localeCompare(b);
-        })
-        .slice(0, 10);
+        }))
+        .slice(0, 5);
       const sourceResults = await Promise.all(
         sourcePaths.map(async (p) => {
           const file = await this.github.fetchFile(owner, repo, p, repoInfo.defaultBranch);
