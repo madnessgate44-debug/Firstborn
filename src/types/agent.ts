@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// TaskStatus enumerates the Forge task lifecycle states
 export type TaskStatus =
   | 'QUEUED'
   | 'VALIDATING'
