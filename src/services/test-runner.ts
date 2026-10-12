@@ -13,6 +13,7 @@ export interface SafeCommandSpec {
 }
 
 const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
+  'npm install': { executable: 'npm', args: ['install', '--ignore-scripts'] },
   'npm run lint': { executable: 'npm', args: ['run', 'lint'] },
   'npm run test': { executable: 'npm', args: ['run', 'test'] },
   'npm test': { executable: 'npm', args: ['test'] },
@@ -21,6 +22,7 @@ const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
   'npx tsc --noEmit': { executable: 'npx', args: ['tsc', '--noEmit'] },
   'git status': { executable: 'git', args: ['status', '--short'] },
   'git diff': { executable: 'git', args: ['diff'] },
+  'git diff --check': { executable: 'git', args: ['diff', '--check'] },
 };
 
 export class TestRunnerService {
@@ -64,11 +66,11 @@ export class TestRunnerService {
           command: trimmed,
           exitCode: 124, // Timeout
           stdout,
-          stderr: stderr + '\nExecution timed out after 45000ms',
+          stderr: stderr + '\nExecution timed out (npm install: 180000ms; other commands: 45000ms)',
           durationMs: Date.now() - startTime,
           status: 'ERROR',
         });
-      }, 45000);
+      }, trimmed === 'npm install' ? 180000 : 45000);
 
       child.stdout.on('data', (data) => {
         stdout += data.toString();
