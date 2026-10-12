@@ -27,3 +27,6 @@ jobs:
 
       - name: Run Build
         run: npm run build
+
+      - name: Smoke Test Keyless Primary Model
+        run: npm run model:smoke
