@@ -49,6 +49,7 @@ export interface FileChangePlan {
   action: 'create' | 'modify' | 'delete';
   rationale: string;
   content?: string;
+  edits?: { find: string; replace: string }[];
 }
 
 export interface TaskExecutionReport {
