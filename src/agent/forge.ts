@@ -174,6 +174,42 @@ export function validateModelPlanShape(raw: unknown): ModelPlanShapeCheck {
   return { ok: true, requirements, changes };
 }
 
+/**
+ * Reject model output that is only a placeholder comment. Passing lint/tests on a
+ * TODO-only file is not evidence that a coding task was implemented.
+ */
+export function validatePatchSubstance(
+  changes: FileChangePlan[],
+): { valid: boolean; error?: string } {
+  if (!Array.isArray(changes) || changes.length === 0) {
+    return { valid: false, error: 'Empty patch: No file changes proposed.' };
+  }
+
+  const stripComments = (value: string): string => value
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/^\s*#.*$/gm, '')
+    .trim();
+
+  for (const change of changes) {
+    const candidates = change.action === 'create'
+      ? [typeof change.content === 'string' ? change.content : '']
+      : (change.edits ?? []).map((edit) => typeof edit?.replace === 'string' ? edit.replace : '');
+    const placeholderOnly = candidates.some((value) =>
+      /\b(?:TODO|FIXME|implement(?:ation)?\s+(?:this|here)|not implemented)\b/i.test(value)
+      && stripComments(value).length === 0
+    );
+    if (placeholderOnly && !candidates.some((value) => stripComments(value).length > 0)) {
+      return {
+        valid: false,
+        error: `Placeholder-only patch rejected for "${change.path}": the proposed change contains no implementation or test assertions.`,
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
 // Requested branch wins only when it is explicit and not the default; invalid
 // branches are resolved later (and fail closed) by the caller.
 export function resolveTargetBranch(requested: string | undefined, defaultBranch: string): string {
@@ -279,6 +315,8 @@ export class ForgeAgent {
       if ((change.action === 'create' && !hasContent) || (change.action === 'modify' && !hasContent && !hasEdits)) {
         return { valid: false, error: `Invalid patch: "${change.path}" needs complete content for create or valid exact edits for modify.` };
       }
+      const substance = validatePatchSubstance([change]);
+      if (!substance.valid) return { valid: false, error: substance.error };
       const patchSize = hasContent ? Buffer.byteLength(change.content as string, 'utf-8') : Buffer.byteLength(JSON.stringify(change.edits ?? []), 'utf-8');
       if (patchSize > loadForgeLimits().maxPatchBytes) {
         return { valid: false, error: `Patch size limit exceeded: "${change.path}" exceeds the configured per-file patch limit.` };
