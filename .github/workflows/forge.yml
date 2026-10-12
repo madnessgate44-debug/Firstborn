@@ -1,6 +1,9 @@
 name: Forge Coding Agent
 
 on:
+  push:
+    branches: [fix/murakumo-request-compat]
+    paths: ['src/services/model.ts']
   issues:
     types: [labeled]
   workflow_dispatch:
@@ -25,7 +28,7 @@ concurrency:
 jobs:
   run-forge:
     # Only run when issue has label 'forge-task' or triggered manually
-    if: github.event_name == 'workflow_dispatch' || (contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/fix/murakumo-request-compat') || (contains(github.event.issue.labels.*.name, 'forge-task') && github.event.issue.author_association == 'OWNER')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -50,9 +53,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id }}
-          TASK_TITLE: ${{ github.event.issue.title || github.event.inputs.task_title }}
-          TASK_DESC: ${{ github.event.issue.body || github.event.inputs.task_desc }}
+          TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id || '16' }}
+          TASK_TITLE: ${{ github.event.issue.title || github.event.inputs.task_title || 'Forge mission: print provider and model in execution report' }}
+          TASK_DESC: ${{ github.event.issue.body || github.event.inputs.task_desc || 'Change only src/agent/forge-runner.ts. After the existing console.log("Base SHA:", report.baseCommitSha); line, ensure these two lines immediately follow it: console.log("Provider:", report.modelInvoked.provider); and console.log("Model:", report.modelInvoked.model); Do not modify any other file.' }}
         run: npx tsx src/agent/forge-runner.ts
 
       - name: Upload Execution Evidence Artifact
