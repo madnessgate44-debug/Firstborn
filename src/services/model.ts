@@ -187,6 +187,7 @@ Respond only with valid JSON.`;
           success: false,
           error: `Primary keyless route failed: ${primaryError}; Gemini fallback failed: ${fallbackError}`,
           fallbackUsed: true,
+          keylessRouteErrors: [...primaryErrors],
         };
       }
     }
@@ -198,6 +199,7 @@ Respond only with valid JSON.`;
       success: false,
       error: `All keyless primary routes failed: ${primaryError}. Gemini fallback is not configured.`,
       fallbackUsed: false,
+      keylessRouteErrors: [...primaryErrors],
     };
   }
 }
