@@ -509,3 +509,87 @@ Not changed: no permission changes; path/symlink/protected-path validation, `she
 - Live multi-stage missions above the current keyless context/route limits are unproven; deterministic staged tests are used as evidence instead of an unverified live claim.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-PLAN-20261012-02-ADDENDUM`
+- **Timestamp (UTC)**: 2026-10-12T12:20:00Z
+- **Author**: OPENHANDS (auditor; acting under Ahmed's full-authority directive)
+- **Directed To**: CHATGPT
+- **Type**: REPORT + EVIDENCE + PLAN
+- **Supersedes nothing**: strengthens `OPENHANDS-PLAN-20261012-02` with full detail. Append-only.
+- **Baseline inspected**: `main` = `6ef8d95`. Re-fetch before acting.
+
+#### 0. How to read this / how ChatGPT can act
+Everything below is reproducible from the repository and GitHub. Nothing was merged. To verify independently:
+1. `git fetch && git checkout forge/task-r5-staged-20261012 && npm ci && npm run lint && npm run build && npm test` (expect lint 0, build 0, 27 pass).
+2. Open PR #31 and compare its diff against PR #29's branch (that diff is the entire new work).
+3. Read this file's entry and the PR bodies.
+
+#### 1. Live PR / branch table (as of this entry)
+| PR | Title | Head -> Base | State | Mergeable | CI |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| **#29** | Fix npm start, honor targetBranch, add criterion-specific requirement evidence | `forge/task-audit-fixes-20261012` -> `main` | OPEN | MERGEABLE | green |
+| **#31** | R5/R6: staged multi-file execution, configurable ceilings, deterministic resilience | `forge/task-r5-staged-20261012` -> `forge/task-audit-fixes-20261012` | OPEN | MERGEABLE | stacked (no CI by design; see 6B) |
+| **#32** | docs: append updated M1-M5 plan and R3-R6 evidence to COORDINATION.md | `forge/task-plan-20261012` -> `main` | OPEN | MERGEABLE | pass |
+| #30 | docs: append OPENHANDS audit handoff to COORDINATION.md for ChatGPT | `forge/task-handoff-20261012` -> `main` | OPEN | MERGEABLE | green |
+| **#23** | Fix npm start script and correct stale verification matrix | `fix/forge-start-script` -> `main` | **CLOSED (superseded by #29)** | — | — |
+
+PR links:
+- #29 https://github.com/madnessgate44-debug/Firstborn/pull/29
+- #31 https://github.com/madnessgate44-debug/Firstborn/pull/31
+- #32 https://github.com/madnessgate44-debug/Firstborn/pull/32
+- #23 (closed) https://github.com/madnessgate44-debug/Firstborn/pull/23
+
+#### 2. Full change inventory (file by file)
+On `forge/task-r5-staged-20261012` (PR #31), diff vs PR #29 branch is the complete new work:
+| File | Change |
+| :-- | :-- |
+| `src/agent/forge.ts` | `evaluateRequirementEvidence` now returns `PASS`/`PENDING`/**`FAIL`**; a criterion-named failing check yields FAIL, never PASS. Added R6 primitives `classifyFailure`, `withBoundedRetry`, `validateModelPlanShape`. Wired bounded retry + a model-call ceiling into the invocation. `validatePatch` now enforces configurable ceilings. Rewired `findEditAnchorProblems` and `applyChangesToWorktree` onto the shared `applyExactEdits`. |
+| `src/agent/limits.ts` | New. `loadForgeLimits` returns bounded, env-overridable ceilings: files, edits, patch bytes, model calls, repair attempts, model attempts, max runtime. |
+| `src/agent/stages.ts` | New. `applyExactEdits` (single shared edit engine; rejects missing/ambiguous anchors) and `runStagedMission` (ordered, bounded stages; a failed stage or failed check applies nothing further and skips the rest). |
+| `src/services/model.ts` | Prompt schema now requests `checkCommands`/`manualReviewNote` per requirement; removed the hard "2 files / 3 edits" prompt limit in favour of bounded staging. |
+| `src/types/agent.ts` | `TaskRequirement` gains `checkCommands?`, `manualReviewNote?`; `RequirementEvidenceInput` added. |
+| `tests/forge.test.ts` | Updated: named-failing check now asserts `FAIL`; added explicit-`checkCommands`, manual-note, description-criterion, and missing-criteria cases. |
+| `tests/resilience.test.ts` | New. Failure classification, bounded-retry (injected sleep), plan-shape validation, and limit bounds. |
+| `tests/stages.test.ts` | New. Exact-edit apply/reject and staged multi-file apply/halt/check-fail. |
+| `src/App.tsx` (in **#29**, not #31) | Verification-matrix corrections (AC4/AC5 keyless-primary, AC12 exact-command registry, AC11 controller-mediated PR, AC18 confirmed-local-E2E). |
+
+#### 3. Raw verification (observed exit codes; not claims)
+- `npm run lint` -> **EXIT 0**
+- `npm run build` -> **EXIT 0**
+- `npm test` -> **27 passed / 0 failed** (was 10 before this session)
+- Live E2E (real keyless model, isolated worktree): status `VERIFYING`, requirement `REQ-1` = **PASS**, evidence `npm run lint=0`, `callsCount: 1`
+- Negative proof retained from earlier work: startup test fails (exit 1) against a broken `npm start`, restored afterward.
+
+#### 4. Defects the new tests caught and I fixed (honest record)
+1. `loadForgeLimits` read `process.env` even when a test passed an explicit env object — an env-injection bug. Fixed to read the passed-in map. (Caught by `tests/resilience.test.ts`.)
+2. First staged-mission test omitted the stage `check`, so the check callback was never invoked — a wiring gap in the test. Fixed the test; the engine behavior was correct. (Caught by `tests/stages.test.ts`.)
+
+#### 5. Plan (what / how / how long), smallest safe milestone first
+- **M1 — Merge #29.** What: land the matrix correction. How: review then merge. How long: minutes. Blocks #30 and #31 (both stack on it).
+- **M2 — Merge #31 (R5/R6).** What: land staged execution + resilience. How: review the isolated diff; confirm 27 tests. How long: <1h review. Depends on M1.
+- **M3 — Durable, resumable live multi-stage missions.** What: connect `runStagedMission` to the live execute loop with per-stage checks and per-stage report evidence. How: implement + one real multi-file mission on a scratch branch; keep total calls within the model-call ceiling. How long: ~1-2 sessions. Acceptance test: a real 3-file mission applies only validated stages, halts on an injected failure, and every requirement reports evidence.
+- **M4 — Repository hygiene.** What: triage open PRs #4, #17, #18, #20, #21, #24-#27 as keep/supersede/close. How: inspect each; preserve any unique content first. How long: ~1 session. Acceptance test: each open PR has a one-line disposition and no unique content is dropped.
+- **M5 — R7 permissions.** What: the requested "ultimate control". Status: **STILL DEFERRED to ChatGPT; NOT implemented.** How (if ever): a written risk assessment and explicit human sign-off precede any boundary change. How long: not scheduled. Acceptance test: none until risk assessment exists.
+
+#### 6. Explicit non-actions and rationale
+- **A. No privilege escalation performed.** Ahmed granted full authority to finish without asking; that authority was used for code work only. R7 ("ultimate control"/"ALL permissions") is NOT implemented, because widening the agent's permissions without a documented risk assessment violates the standing safety policy. Least privilege is preserved.
+- **B. No merges performed.** #29/#30/#31/#32 are left open for human/ChatGPT review. Merge authority stays external.
+- **C. No safety boundary weakened.** Path/symlink/protected-path validation, `shell:false` exact-command checks, and the secret-free git subprocess env are untouched by #31.
+- **D. CI on #31 shows "no checks" by design:** `.github/workflows/verify.yml` triggers only on `pull_request` targeting `main` (and pushes to `main`/`fix/**`). #31 targets the #29 branch, so no workflow runs; this is expected, not a failure. CI is green on #29 and #32. I verified #31 locally with the full suite instead.
+
+#### 7. Open blockers (unchanged)
+- GitHub Actions cannot create PRs under the current repo setting (`HTTP 403`: "GitHub Actions is not permitted to create or approve pull requests"). The connected controller creates review PRs; the agent preserves the tested branch/commit and does not claim a PR exists. Tracked in #29/#31.
+- Live multi-stage missions above the current keyless context/route limits are unproven; deterministic staged tests are used as evidence rather than an unverified live claim.
+
+#### 8. Requirements-to-evidence matrix (this session)
+| ID | Requirement | Evidence | Status |
+| :-- | :-- | :-- | :-- |
+| R3 | PASS requires a declared/named passing check; named-failing => FAIL | `tests/forge.test.ts` | DONE |
+| R4 | Fold App.tsx matrix fix into primary PR; close #23 | #29 commit `9f6900b`; #23 closed | DONE |
+| R5 | Staged multi-file execution + configurable ceilings | `tests/stages.test.ts`, `tests/resilience.test.ts`, `src/agent/stages.ts`, `src/agent/limits.ts` | DONE (pure engine); live wiring in M3 |
+| R6 | Runtime resilience (retry/validate/ceilings) | `tests/resilience.test.ts`, `src/agent/forge.ts` | DONE |
+| R7 | Permissions ("ultimate control") | none | DEFERRED to ChatGPT |
+
+No secrets, tokens, or credentials appear in this entry.
