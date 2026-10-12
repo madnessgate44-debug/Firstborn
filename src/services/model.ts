@@ -59,10 +59,12 @@ Follow these rules:
 {
   "summary": "Short summary",
   "requirements": [{"id":"REQ-1","description":"...","acceptanceCriteria":"..."}],
-  "changes": [{"path":"relative/path","action":"modify","rationale":"...","edits":[{"find":"exact unique source snippet","replace":"replacement snippet"}]}] OR [{"path":"new/path","action":"create","rationale":"...","content":"complete new file content"}],
+  "changes": [
+    {"path":"relative/path","action":"modify","rationale":"...","edits":[{"find":"exact unique source snippet","replace":"replacement snippet"}]}
+  ],
   "suggestedChecks": ["npm run lint"]
 }
-For existing files, ALWAYS prefer compact edits instead of returning the whole file. Each edit must have an exact, unique "find" string copied from supplied source and a "replace" string. Keep each edit small and independently applicable. Do not edit the same region twice. Use full "content" only when creating a new file. Use only paths in the supplied target repository inventory or clearly justified new paths.
+STRICT OUTPUT LIMIT: this anonymous endpoint caps output at 2048 tokens. Return compact valid JSON only, with no markdown. For existing files, action MUST be "modify" and MUST use "edits"; never return the whole file in "content". For a new file, action MUST be "create" and use "content" instead of "edits". Limit the whole patch to at most 3 files and at most 4 edits total. Keep each find/replace snippet minimal but exact. Every find string must occur exactly once in the supplied source file. Do not repeat unchanged source. If a safe patch cannot fit these limits, return valid JSON with an empty changes array and explain the blocker in summary. Use only paths in the supplied target repository inventory or clearly justified new paths.
 Context Files:
 ${fileContexts}
 User Task:
