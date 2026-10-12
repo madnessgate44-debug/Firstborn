@@ -158,3 +158,9 @@ test('test structure: rejects syntax errors before running checks', () => {
   assert.equal(result.valid, false);
   assert.match(result.error ?? '', /syntax error|unclosed|mismatched delimiter/);
 });
+
+test('test structure: rejects balanced but invalid TypeScript before checks', () => {
+  const result = validateTestStructure('tests/example.test.ts', "test('broken', () => { const value = ; });");
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /Test file syntax error/);
+});
