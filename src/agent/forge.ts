@@ -221,7 +221,7 @@ export function validateTestStructure(
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return { valid: false, error: \`Test file syntax error: \${detail}\` };
+    return { valid: false, error: `Test file syntax error: ${detail}` };
   }
 
   const source = ts.createSourceFile(
@@ -266,7 +266,7 @@ export function validateTestStructure(
   if (nestedLabel) {
     return {
       valid: false,
-      error: \`Nested test declaration rejected in "\${filePath}": a test() or it() call appears inside the callback for "\${nestedLabel}".\`,
+      error: `Nested test declaration rejected in "${filePath}": a test() or it() call appears inside the callback for "${nestedLabel}".`,
     };
   }
   return { valid: true };
@@ -1168,8 +1168,8 @@ export class ForgeAgent {
               head: branchName,
               base: targetBranch,
               body: `### Forge Task Report: ${task.id}
-- **Base Commit**: \`${report.baseCommitSha}\`
-- **Head Commit**: \`${report.headCommitSha}\`
+- **Base Commit**: `${report.baseCommitSha}`
+- **Head Commit**: `${report.headCommitSha}`
 - **Provider**: ${report.modelInvoked.provider}
 - **Model**: ${report.modelInvoked.model}
 - **Fallback Used**: ${report.modelInvoked.fallbackUsed ?? 'unknown'}
