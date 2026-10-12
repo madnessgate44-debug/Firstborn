@@ -162,7 +162,7 @@ Respond only with valid JSON.`;
     }
     const primaryError = primaryErrors.join(' | ');
 
-    if (this.gemini) {
+    if (this.gemini && process.env.FIRSTBORN_KEYLESS_ONLY !== 'true') {
       try {
         const response = await this.gemini.models.generateContent({
           model: 'gemini-2.5-flash',
