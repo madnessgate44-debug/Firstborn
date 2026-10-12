@@ -2,14 +2,14 @@ name: Verification and Build Checks
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main, 'fix/**']
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    # Least privilege: no write permissions, no model execution, no secrets injected
     permissions:
       contents: read
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -18,10 +18,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm install
 
       - name: Run Lint Check
         run: npm run lint
