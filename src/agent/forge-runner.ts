@@ -39,6 +39,8 @@ async function runCli() {
   console.log('Head commit:', report.headCommitSha ?? 'N/A');
   console.log('Requirements:', report.requirements.length);
   console.log('Tests Run:', report.testResults.length);
+  console.log('Tests Passed:', report.testResults.filter(r => r.status === 'PASSED').length);
+  console.log('Tests Failed:', report.testResults.filter(r => r.status !== 'PASSED').length);
   if (report.prUrl) console.log('PR Opened:', report.prUrl);
   if (report.errorMessage) console.log('Error:', report.errorMessage);
   if (report.blockerReason) console.log('Blocker:', report.blockerReason);
