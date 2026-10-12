@@ -105,20 +105,54 @@ Respond only with valid JSON.`;
             method: 'POST',
             headers,
             body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 2048 }),
-            signal: AbortSignal.timeout(45000),
+            signal: AbortSignal.timeout(30000),
           });
-          if (response.status === 429 && attempt === 0) {
-            primaryErrors.push(`${route.provider}: HTTP 429 capacity busy; retrying once`);
-            await new Promise((resolve) => setTimeout(resolve, 1500));
+
+          if (!response.ok) {
+            const responseBody = (await response.text()).slice(0, 300);
+            const message = `${route.provider}: HTTP ${response.status}: ${responseBody}`;
+            primaryErrors.push(message);
+            if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
+              await new Promise((resolve) => setTimeout(resolve, response.status === 429 ? 1500 : 750));
+              continue;
+            }
+            routeSucceeded = true;
             continue;
           }
-          if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
-          const data = await response.json() as { choices?: { message?: { content?: string } }[]; model?: string };
-          const text = data.choices?.[0]?.message?.content;
-          if (!text) throw new Error('Endpoint returned no message content.');
-          return { text, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false };
+
+          const data = await response.json() as {
+            choices?: { text?: unknown; finish_reason?: string; message?: { content?: unknown; refusal?: unknown; reasoning?: unknown } }[];
+            model?: string;
+            output_text?: unknown;
+          };
+          const choice = data.choices?.[0];
+          const rawContent = choice?.message?.content ?? choice?.text ?? data.output_text;
+          const content = typeof rawContent === 'string'
+            ? rawContent
+            : Array.isArray(rawContent)
+              ? rawContent.map((part: any) => typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : typeof part?.content === 'string' ? part.content : '').join('')
+              : '';
+          if (!content.trim()) {
+            const messageKeys = choice?.message && typeof choice.message === 'object'
+              ? Object.keys(choice.message).join(',')
+              : 'none';
+            primaryErrors.push(`${route.provider}: HTTP ${response.status} but no usable text (finish_reason=${choice?.finish_reason || 'unknown'}, message_keys=${messageKeys}, response_model=${data.model || 'unknown'})`);
+            if (attempt === 0) {
+              await new Promise((resolve) => setTimeout(resolve, 750));
+              continue;
+            }
+            routeSucceeded = true;
+            continue;
+          }
+
+          return { text: content, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false };
         } catch (err) {
-          primaryErrors.push(`${route.provider}: ${err instanceof Error ? err.message : String(err)}`);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          primaryErrors.push(`${route.provider}: ${errorMessage}`);
+          if (attempt === 0 && /timeout|aborted|fetch failed/i.test(errorMessage)) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
           routeSucceeded = true;
         }
       }
