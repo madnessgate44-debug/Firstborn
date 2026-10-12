@@ -219,32 +219,45 @@ export class ForgeAgent {
         .filter((p) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
         .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))
         .filter((p) => p !== 'package.json' && p !== 'AGENTS.md');
-      // If the mission names exact files, do not send unrelated source files that can confuse patch anchors.
-      const sourcePaths = (explicitPaths.length > 0 ? explicitPaths : eligibleSourcePaths
+      // Exact user-named paths are authoritative. For inferred context, skip oversized files
+      // and continue searching so an unrelated large file cannot block the whole mission.
+      const sourceCandidates = (explicitPaths.length > 0 ? explicitPaths.slice(0, 5) : eligibleSourcePaths
         .sort((a, b) => {
           const score = (candidate: string) => {
             const lower = candidate.toLowerCase();
             return taskTerms.reduce((total, term) => total + (lower.includes(term) ? 1 : 0), 0);
           };
           return score(b) - score(a) || a.localeCompare(b);
-        }))
-        .slice(0, 5);
-      const sourceResults = await Promise.all(
-        sourcePaths.map(async (p) => {
-          const file = await this.github.fetchFile(owner, repo, p, repoInfo.defaultBranch);
-          return file ? { path: file.path, content: file.content } : null;
-        })
-      );
-      const oversizedSource = sourceResults.find((file) => file !== null && file.content.length > 16000);
-      if (oversizedSource) {
+        }));
+      const targetSourceFiles: { path: string; content: string }[] = [];
+      for (const candidate of sourceCandidates) {
+        if (targetSourceFiles.length >= 5) break;
+        const file = await this.github.fetchFile(owner, repo, candidate, repoInfo.defaultBranch);
+        if (!file) {
+          log('warn', `Could not fetch candidate source file; skipping: ${candidate}`);
+          continue;
+        }
+        if (file.content.length > 16000) {
+          const reason = `source file exceeds 16000 characters: ${file.path}`;
+          if (explicitPaths.length > 0) {
+            report.status = 'BLOCKED';
+            report.blockerReason = `Explicitly requested ${reason}; refusing to guess or patch an incomplete context.`;
+            log('warn', report.blockerReason);
+            return report;
+          }
+          log('warn', `Skipping inferred ${reason} and continuing source selection.`);
+          continue;
+        }
+        targetSourceFiles.push({ path: file.path, content: file.content });
+      }
+      if (targetSourceFiles.length === 0) {
         report.status = 'BLOCKED';
-        report.blockerReason = `file too large to patch safely: ${oversizedSource.path} exceeds 16000 characters.`;
+        report.blockerReason = explicitPaths.length > 0
+          ? 'None of the explicitly requested source files could be safely loaded.'
+          : 'No eligible source files under the 16000-character context limit could be loaded.';
         log('warn', report.blockerReason);
         return report;
       }
-      const targetSourceFiles = sourceResults.filter(
-        (file): file is { path: string; content: string } => file !== null
-      );
 
       // 4. PLANNING (MODEL INVOCATION)
       report.status = 'PLANNING';
