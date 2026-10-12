@@ -77,6 +77,7 @@ Respond only with valid JSON.`;
       { role: 'user', content: fullPrompt },
     ];
 
+    // Keep one bounded attempt per route; failures advance to the next keyless provider.
     const keylessRoutes = [
       {
         baseUrl: this.primaryUrl,
