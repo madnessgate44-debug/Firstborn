@@ -212,15 +212,20 @@ npm start             # boots the HTTP API
 
 ---
 
-## 8. Known external blockers
+## 8. Operational notes and caveats
 
-These are environment limitations, not code defects. A controller should expect them:
+These are verified facts about the current environment, useful when a controller
+interprets results:
 
-- **PR-check approval gate**: workflow runs triggered by `pull_request` on agent-created
-  branches can require manual approval, so checks may show `action_required` with zero
-  jobs until an operator approves them. This is a repository Actions setting.
-- **Native in-workflow PR creation**: opening a PR from `GITHUB_TOKEN` requires the
-  repository setting "Allow GitHub Actions to create and approve pull requests". Until
-  it is enabled, the commit lands on the branch and PR creation is a controller/operator step.
-- **Free-tier variability**: named free models change over time and are rate-limited;
-  the router adapts, but a specific model is never guaranteed.
+- **Native in-workflow PR creation is enabled.** Forge opens its own pull requests from
+  Actions using `GITHUB_TOKEN`; PRs are authored by `github-actions[bot]` (e.g. #21, #25).
+  The repository setting "Allow GitHub Actions to create and approve pull requests" is on.
+- **`pull_request` checks run for bot branches.** Verification workflows triggered by
+  agent-created pull requests execute and pass; they are not gated behind manual approval
+  in the current configuration.
+- **The API token used for automation is a GitHub App installation token.** It cannot read
+  or change repository Actions settings (`GET /repos/{owner}/{repo}/actions/permissions`
+  returns `403`), so those settings must be managed by a repository administrator.
+- **Free-tier variability.** Named free models change over time and are rate-limited; the
+  router adapts and always prefers the strongest available tier, but a specific model is
+  never guaranteed across runs.
