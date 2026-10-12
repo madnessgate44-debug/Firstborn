@@ -16,6 +16,8 @@ export interface ForgeLimits {
   maxRepairAttempts: number;
   modelAttempts: number;
   maxRuntimeMs: number;
+  /** M3: bounded mission-level attempts for exhaustion/durability testing. */
+  maxMissionAttempts: number;
 }
 
 function envInt(env: NodeJS.ProcessEnv, name: string, fallback: number, min: number, max: number): number {
@@ -33,5 +35,6 @@ export function loadForgeLimits(env: NodeJS.ProcessEnv = process.env): ForgeLimi
     maxRepairAttempts: envInt(env, 'FORGE_MAX_REPAIRS', 2, 0, 10),
     modelAttempts: envInt(env, 'FORGE_MODEL_ATTEMPTS', 2, 1, 10),
     maxRuntimeMs: envInt(env, 'FORGE_MAX_RUNTIME_MS', 10 * 60 * 1000, 10_000, 60 * 60 * 1000),
+    maxMissionAttempts: envInt(env, 'FORGE_MAX_MISSION_ATTEMPTS', 1, 1, 5),
   };
 }

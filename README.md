@@ -95,6 +95,7 @@ curl -sS -X POST http://localhost:3000/api/tasks/run \
 | `FORGE_REQUIRE_HUMAN_APPROVAL` | `true` caps the effective profile at `sandbox` (branch only, no PR) until a human approves. |
 | `FORGE_ALLOWED_BRANCH_PREFIX` | Branch prefix the agent may push (default `forge/task-`). |
 | `FORGE_FORBIDDEN_BRANCHES` | Branches that can never be pushed (default `main,master`). |
+| `FORGE_MAX_MISSION_ATTEMPTS` | Bounded mission-level retries for transient base movement (default 1, clamped to 5). |
 
 ### Permission control plane (R7)
 Every GitHub write step consults a single pure decision function
@@ -194,6 +195,8 @@ may be sound but an external precondition is missing; never report it as success
 Every claim in a report is backed by raw evidence:
 
 - `testResults[]` carries the exact command, exit code, and full stdout/stderr.
+- `trace[]` records each mission stage transition (`INSPECT` -> ... -> `PR`) with
+  status, so a run's path is analyzable after the fact.
 - `npm run model:smoke` proves the keyless model path end to end.
 - On GitHub runs, the `forge-evidence` artifact holds the report JSON and preflight record.
 - Locally, reports are written to `.firstborn/evidence/<taskId>.json`.
