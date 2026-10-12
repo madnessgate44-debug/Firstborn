@@ -70,6 +70,7 @@ Follow these rules:
 - Inspect the supplied target-repository files; never pretend to have inspected files not supplied.
 - Number requirements and give testable acceptance criteria before proposing edits.
 - Make the smallest bounded changes. Do not alter unrelated files.
+- Preserve syntax and scope boundaries: never insert a top-level declaration inside an interface, class, function, or other block; choose an exact anchor at the correct scope.
 - Return JSON matching this schema:
 {
   "summary": "Short summary",
