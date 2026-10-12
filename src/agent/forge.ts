@@ -403,8 +403,27 @@ export class ForgeAgent {
           if (!absolutePath.startsWith(worktree + path.sep)) {
             throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
           }
-          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
           const worktreeRealPath = await fs.realpath(worktree);
+          const relativeParent = path.relative(worktree, path.dirname(absolutePath));
+          let checkedParent = worktreeRealPath;
+          for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
+            checkedParent = path.join(checkedParent, segment);
+            let parentStat;
+            try { parentStat = await fs.lstat(checkedParent); } catch (err: any) {
+              if (err?.code !== 'ENOENT') throw err;
+            }
+            if (parentStat?.isSymbolicLink()) {
+              throw new Error(`BLOCKED: patch target parent contains a symlink: ${change.path}`);
+            }
+            if (!parentStat) {
+              await fs.mkdir(checkedParent);
+              parentStat = await fs.lstat(checkedParent);
+            }
+            const resolvedParent = await fs.realpath(checkedParent);
+            if (resolvedParent !== worktreeRealPath && !resolvedParent.startsWith(worktreeRealPath + path.sep)) {
+              throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
+            }
+          }
           const parentRealPath = await fs.realpath(path.dirname(absolutePath));
           if (parentRealPath !== worktreeRealPath && !parentRealPath.startsWith(worktreeRealPath + path.sep)) {
             throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
