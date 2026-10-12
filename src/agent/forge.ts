@@ -216,7 +216,7 @@ export function validateTestStructure(
 
   try {
     transformSync(content, {
-      loader: /\.tsx$/i.test(filePath) ? 'tsx' : 'ts',
+      loader: /\.(?:tsx|jsx)$/i.test(filePath) ? 'tsx' : 'ts',
       sourcefile: filePath,
     });
   } catch (error) {
@@ -229,7 +229,7 @@ export function validateTestStructure(
     content,
     ts.ScriptTarget.Latest,
     true,
-    /\.tsx$/i.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    /\.(?:tsx|jsx)$/i.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
   const isTestCall = (node: ts.Node): node is ts.CallExpression =>
     ts.isCallExpression(node)
