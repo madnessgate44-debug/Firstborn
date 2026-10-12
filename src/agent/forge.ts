@@ -16,6 +16,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import * as ts from 'typescript';
 
 const execFileAsync = promisify(execFile);
 
@@ -178,6 +179,81 @@ export function validateModelPlanShape(raw: unknown): ModelPlanShapeCheck {
  * Reject model output that is only a placeholder comment. Passing lint/tests on a
  * TODO-only file is not evidence that a coding task was implemented.
  */
+/**
+ * Validate an optional exact path allowlist before a model patch can be applied.
+ * Paths are normalized to POSIX form; an empty allowlist preserves legacy behavior.
+ */
+export function validateAllowedPaths(
+  changes: FileChangePlan[],
+  allowedPaths?: string[],
+): { valid: boolean; error?: string } {
+  if (!allowedPaths || allowedPaths.length === 0) return { valid: true };
+  const normalize = (value: string) => path.posix.normalize(value.replace(/\\\\/g, '/')).replace(/^(\\.\\/)+/, '');
+  const allowed = new Set(allowedPaths.map(normalize));
+  for (const change of changes) {
+    const candidate = normalize(change.path);
+    if (!allowed.has(candidate)) {
+      return {
+        valid: false,
+        error: `Patch path rejected: "${change.path}" is outside the allowed file scope (${[...allowed].join(', ')}).`,
+      };
+    }
+  }
+  return { valid: true };
+}
+
+/**
+ * Detect malformed node:test structure before running the test suite.
+ * In particular, nested test()/it() declarations are rejected because Node's
+ * test runner cancels those subtests when the parent completes.
+ */
+export function validateTestStructure(
+  filePath: string,
+  content: string,
+): { valid: boolean; error?: string } {
+  if (!/\.test\.[cm]?[jt]sx?$/i.test(filePath)) return { valid: true };
+  const scriptKind = /\.tsx$/i.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const source = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, scriptKind);
+  if (source.parseDiagnostics.length > 0) {
+    const diagnostic = source.parseDiagnostics[0];
+    const position = source.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
+    return {
+      valid: false,
+      error: `Test file syntax error at ${position.line + 1}:${position.character + 1}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}.`,
+    };
+  }
+
+  let nestedTestName: string | undefined;
+  const isTestCall = (node: ts.CallExpression): boolean => {
+    if (ts.isIdentifier(node.expression)) return ['test', 'it'].includes(node.expression.text);
+    return ts.isPropertyAccessExpression(node.expression)
+      && ['test', 'it'].includes(node.expression.name.text);
+  };
+  const visit = (node: ts.Node, insideTestCallback: boolean): void => {
+    if (ts.isCallExpression(node) && isTestCall(node)) {
+      if (insideTestCallback) {
+        const nameArg = node.arguments[0];
+        nestedTestName = nameArg && ts.isStringLiteralLike(nameArg) ? nameArg.text : '<unnamed test>';
+        return;
+      }
+      node.arguments.forEach((argument, index) => {
+        const callback = index > 0 && (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument));
+        visit(argument, insideTestCallback || callback);
+      });
+      return;
+    }
+    node.forEachChild((child) => visit(child, insideTestCallback));
+  };
+  visit(source, false);
+  if (nestedTestName) {
+    return {
+      valid: false,
+      error: `Nested test declaration rejected in "${filePath}": "${nestedTestName}" is declared inside another test callback.`,
+    };
+  }
+  return { valid: true };
+}
+
 export function validatePatchSubstance(
   changes: FileChangePlan[],
 ): { valid: boolean; error?: string } {
@@ -275,11 +351,13 @@ export class ForgeAgent {
   /**
    * Strict validation of generated patch paths and contents (Fixes AUD-20261012-02 Patch Validation)
    */
-  private validatePatch(changes: FileChangePlan[]): { valid: boolean; error?: string } {
+  private validatePatch(changes: FileChangePlan[], allowedPaths?: string[]): { valid: boolean; error?: string } {
     const limits = loadForgeLimits();
     if (!Array.isArray(changes) || changes.length === 0) {
       return { valid: false, error: 'Empty patch: No file changes proposed.' };
     }
+    const pathScope = validateAllowedPaths(changes, allowedPaths);
+    if (!pathScope.valid) return pathScope;
     if (changes.length > limits.maxFilesPerMission) {
       return { valid: false, error: `Patch exceeds the configured file ceiling: ${changes.length} > ${limits.maxFilesPerMission}.` };
     }
@@ -727,7 +805,7 @@ export class ForgeAgent {
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
 
       // 5. PATCH VALIDATION (Fix AUD-20261012-02 Patch Validation)
-      const patchValidation = this.validatePatch(report.plannedChanges);
+      const patchValidation = this.validatePatch(report.plannedChanges, task.allowedPaths);
       if (!patchValidation.valid) {
         report.status = 'FAILED';
         report.errorMessage = `Patch Validation Rejected: ${patchValidation.error}`;
