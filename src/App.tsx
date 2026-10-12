@@ -560,13 +560,13 @@ export default function App() {
                   id: 'AC4',
                   title: 'Real model/provider path identified with credential docs',
                   status: 'PASS',
-                  evidence: '@google/genai SDK with gemini-2.5-flash verified live via node test.',
+                  evidence: 'Primary path is the keyless freelm router (Kilo/OVHcloud); verified live in Actions run 38243201821 (ovh / Meta-Llama-3.3-70B). Gemini remains an optional fallback only.',
                 },
                 {
                   id: 'AC5',
                   title: 'Free & unattended execution claims supported by evidence',
                   status: 'PASS',
-                  evidence: 'Zero owner cost in AI Studio sandbox; GitHub Actions requires free-tier GEMINI_API_KEY secret.',
+                  evidence: 'Keyless-only run 38243201821 completed end-to-end with no API key: provider ovh, fallbackUsed=false. Owner cost is zero; no GEMINI_API_KEY secret is required.',
                 },
                 {
                   id: 'AC6',
@@ -601,14 +601,14 @@ export default function App() {
                 {
                   id: 'AC11',
                   title: 'Diff review and PR creation real when authorized',
-                  status: 'BLOCKED (Remote) / PASS (Local)',
-                  evidence: 'PR creation code implemented with octokit/fetch; blocked externally until repository exists.',
+                  status: 'PASS',
+                  evidence: 'Forge opened PR #21 and PR #25 itself from Actions (github-actions bot) after committing the tested tree.',
                 },
                 {
                   id: 'AC12',
                   title: 'Security boundaries & permissions enforced',
                   status: 'PASS',
-                  evidence: 'Command prefix whitelist in TestRunnerService; secrets kept server-side; untrusted input treated safely.',
+                  evidence: 'Exact-command registry with shell:false in TestRunnerService; patch path/anchors validated; secrets kept server-side; untrusted input treated safely.',
                 },
                 {
                   id: 'AC13',
@@ -644,7 +644,7 @@ export default function App() {
                   id: 'AC18',
                   title: 'End-to-end milestone has evidence or exact blockers',
                   status: 'PASS',
-                  evidence: 'Local end-to-end execution verified; remote GitHub PR blocker precisely documented.',
+                  evidence: 'Keyless E2E run 38243201821 produced a tested commit and PR #25; evidence artifact and raw logs recorded.',
                 },
               ].map((item) => (
                 <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1">
