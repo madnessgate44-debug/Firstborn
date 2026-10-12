@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { TraceEntry } from '../agent/mission-trace.ts';
+
 export type TaskStatus =
   | 'QUEUED'
   | 'VALIDATING'
@@ -87,6 +89,8 @@ export interface TaskExecutionReport {
   requirements: TaskRequirement[];
   plannedChanges: FileChangePlan[];
   testResults: TestExecutionResult[];
+  /** M3: ordered stage transitions for exhaustion/repeatability analysis. */
+  trace?: TraceEntry[];
   logs: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }[];
   errorMessage?: string;
   blockerReason?: string;

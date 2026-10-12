@@ -93,6 +93,7 @@ Respond only with valid JSON.`;
     ];
 
     const primaryErrors: string[] = [];
+    const routingNotes: string[] = [];
     let invokedProvider = 'freelm free-tier router';
     let invokedModel = 'chat';
 
@@ -114,9 +115,44 @@ Respond only with valid JSON.`;
         },
       });
 
-      // Some anonymous endpoints report HTTP success but return an empty/thinking-only
-      // answer. Treat that as a failed model choice and try another discovered alias.
-      for (const alias of ['chat', 'chat:fast', 'chat:small']) {
+      // 1. DISCOVERY (find the finest free model currently available)
+      // freelm maps aliases to concrete models via tags: `chat:large`/`chat:best`
+      // select the large-tagged (most capable) models, `chat:fast`/`chat:small`
+      // the smaller ones. Enumerate the live candidate set so we can prefer the
+      // strongest route that answers, and report exactly which model was chosen
+      // and what stronger options existed.
+      const discoveredRoutes: { alias: string; provider: string; model: string }[] = [];
+      const capabilityEscalation: string[] = [];
+      try {
+        const concreteByAlias = new Map<string, string[]>();
+        for (const alias of ['chat:large', 'chat:best', 'chat:fast', 'chat:small']) {
+          for (const provider of llm.providers) {
+            try {
+              for (const modelId of provider.resolveModels(alias)) {
+                if (!concreteByAlias.has(modelId)) concreteByAlias.set(modelId, []);
+                concreteByAlias.get(modelId)!.push(`${provider.name}:${alias}`);
+              }
+            } catch {
+              // Alias unsupported for this provider; skip it.
+            }
+          }
+        }
+        for (const [modelId, sources] of concreteByAlias) {
+          discoveredRoutes.push({ alias: sources[0], provider: sources[0].split(':')[0], model: modelId });
+        }
+      } catch {
+        // Discovery is best-effort; the alias probe below still works.
+      }
+      if (discoveredRoutes.length > 0) {
+        routingNotes.push(`discovery enumerated ${discoveredRoutes.length} candidate model(s) across ${new Set(discoveredRoutes.map((r) => r.provider)).size} provider(s)`);
+      }
+
+      // 2. RANKING (try the strongest available model first; degrade only on failure).
+      // `chat:large` resolves to the large-tagged models, so a capable anonymous
+      // route is attempted before any fallback. `chat`/`chat:fast`/`chat:small`
+      // follow the same failover chain, and freelm itself degrades a failing
+      // provider/model internally (hedge, cooldowns, benching) before we step down.
+      for (const alias of ['chat:large', 'chat', 'chat:fast', 'chat:small', 'chat:best']) {
         try {
           const response = await llm.chat(messages, {
             model: alias,
@@ -129,19 +165,30 @@ Respond only with valid JSON.`;
           invokedModel = response.model || invokedModel;
           if (!content) {
             primaryErrors.push(`${alias} via ${invokedProvider}: response contained no usable text`);
+            capabilityEscalation.push(`${alias} returned no usable text`);
             continue;
           }
+          // Prefer the finest model that actually answered: if we had to settle
+          // below the top capability tier, say so explicitly.
+          const triedTopTier = alias === 'chat:large' || alias === 'chat:best';
           return {
             text: content,
             model: invokedModel,
             provider: invokedProvider,
             success: true,
             fallbackUsed: false,
-            keylessRouteErrors: [...primaryErrors],
+            keylessRouteErrors: [
+              ...primaryErrors,
+              ...routingNotes,
+              ...(triedTopTier
+                ? []
+                : [`selected ${alias} (${invokedModel} via ${invokedProvider}) after stronger routes failed: ${capabilityEscalation.join(' | ') || 'none reported'}`]),
+            ],
           };
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           primaryErrors.push(`${alias}: ${errorMessage}`);
+          capabilityEscalation.push(`${alias}: ${errorMessage}`);
         }
       }
     } catch (err) {

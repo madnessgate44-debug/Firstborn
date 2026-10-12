@@ -601,8 +601,8 @@ export default function App() {
                 {
                   id: 'AC11',
                   title: 'Diff review and PR creation real when authorized',
-                  status: 'PASS (controller-mediated)',
-                  evidence: 'Forge pushes a tested commit to an isolated forge/task-* branch and opens a reviewable PR through the connected GitHub controller. Native in-workflow PR creation is externally blocked until the repository setting "Allow GitHub Actions to create and approve pull requests" is enabled.',
+                  status: 'PASS',
+                  evidence: 'Forge pushes a tested commit to an isolated forge/task-* branch and opens a pull request; native in-workflow PR creation is enabled (PRs #21 and #25 authored by github-actions[bot]).',
                 },
                 {
                   id: 'AC12',
@@ -644,7 +644,7 @@ export default function App() {
                   id: 'AC18',
                   title: 'End-to-end milestone has evidence or exact blockers',
                   status: 'PASS',
-                  evidence: 'Keyless local E2E produced a tested commit and PR #28 (closed). Native in-workflow PR creation remains an exact, documented external blocker pending the repository setting.',
+                  evidence: 'Keyless E2E produced a tested commit and an opened PR (run 38243201821 -> PR #25); raw logs and the forge-evidence artifact are recorded.',
                 },
               ].map((item) => (
                 <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1">

@@ -8,6 +8,8 @@ import { GitHubService } from '../services/github.ts';
 import { ModelService } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
 import { loadForgeLimits } from './limits.ts';
+import { evaluatePermissionPolicy, loadPermissionConfig } from './policy.ts';
+import { traceEntry } from './mission-trace.ts';
 import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -383,11 +385,25 @@ export class ForgeAgent {
       requirements: [],
       plannedChanges: [],
       testResults: [],
+      trace: [],
       logs: [],
     };
 
     const log = (level: 'info' | 'warn' | 'error', message: string) => {
       report.logs.push({ timestamp: new Date().toISOString(), level, message });
+    };
+
+    // M3: record each mission stage transition once. Deterministic, derived data.
+    const traced = new Set<string>();
+    const trace = (
+      stage: import('./mission-trace.ts').MissionStageName,
+      status: import('./mission-trace.ts').MissionStageStatus,
+      detail?: string,
+    ) => {
+      const key = `${stage}:${status}`;
+      if (traced.has(key)) return;
+      traced.add(key);
+      report.trace!.push(traceEntry(stage, status, 1, detail));
     };
 
     try {
@@ -423,6 +439,7 @@ export class ForgeAgent {
       }
 
       report.baseCommitSha = repoInfo.latestCommitSha;
+      trace('INSPECT', 'PASSED', `base ${report.baseCommitSha}`);
       log('info', `Target repository verified. Base branch: ${repoInfo.defaultBranch}, Base SHA: ${report.baseCommitSha}`);
 
       // Honor an explicitly requested target branch; fall back to the repository default.
@@ -578,6 +595,7 @@ export class ForgeAgent {
         if (!shape.ok) throw new Error(`Model plan shape rejected: ${shape.error}`);
         report.requirements = shape.requirements.map((req) => ({ ...req, status: 'PENDING' as const }));
         report.plannedChanges = shape.changes;
+        trace('PLAN', 'PASSED', `${shape.requirements.length} requirements, ${shape.changes.length} file changes`);
       };
 
       const maxModelCalls = loadForgeLimits().maxModelCalls;
@@ -679,6 +697,7 @@ export class ForgeAgent {
         return report;
       }
       log('info', `Patch validated successfully: ${report.plannedChanges.length} files pass security checks.`);
+      trace('VALIDATE', 'PASSED', `${report.plannedChanges.length} file changes`);
 
       // 6. Apply the validated patch in an isolated checkout, then test that exact tree.
       report.status = 'TESTING';
@@ -695,20 +714,39 @@ export class ForgeAgent {
           gitEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${this.githubToken}`).toString('base64')}`;
         }
         log('info', `Cloning target branch ${targetBranch} into an isolated temporary worktree.`);
-        await execFileAsync('git', ['clone', '--depth', '1', '--branch', targetBranch, `https://github.com/${owner}/${repo}.git`, worktree], {
-          env: gitEnv,
-          timeout: 120000,
-          maxBuffer: 2 * 1024 * 1024,
-        });
-        const { stdout: checkedOutSha } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: worktree, timeout: 15000 });
-        if (checkedOutSha.trim() !== report.baseCommitSha) {
+        // M3: bounded mission-level retry for transient base movement. The base SHA
+        // never changes within the loop, so this only re-clones; it is exhausted at
+        // FORGE_MAX_MISSION_ATTEMPTS (default 1, i.e. a single attempt as before).
+        const missionAttempts = loadForgeLimits().maxMissionAttempts;
+        let cloneOk = false;
+        let movedDetail = '';
+        for (let attempt = 1; attempt <= missionAttempts && !cloneOk; attempt += 1) {
+          await fs.rm(worktree, { recursive: true, force: true }).catch(() => undefined);
+          if (attempt > 1) trace('INSPECT', 'STARTED', `mission retry ${attempt}/${missionAttempts}`);
+          await execFileAsync('git', ['clone', '--depth', '1', '--branch', targetBranch, `https://github.com/${owner}/${repo}.git`, worktree], {
+            env: gitEnv,
+            timeout: 120000,
+            maxBuffer: 2 * 1024 * 1024,
+          });
+          const { stdout: checkedOutSha } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: worktree, timeout: 15000 });
+          const actual = checkedOutSha.trim();
+          if (actual === report.baseCommitSha) {
+            cloneOk = true;
+            break;
+          }
+          movedDetail = `expected ${report.baseCommitSha}, cloned ${actual}`;
+          log('warn', `Base moved during clone (attempt ${attempt}/${missionAttempts}): ${movedDetail}`);
+        }
+        if (!cloneOk) {
           report.status = 'BLOCKED';
-          report.blockerReason = `Target branch moved during inspection (expected ${report.baseCommitSha}, cloned ${checkedOutSha.trim()}). Retry against the new base.`;
+          report.blockerReason = `Target branch moved during inspection (${movedDetail}). Retry against the new base.`;
+          trace('INSPECT', 'BLOCKED', report.blockerReason);
           log('warn', report.blockerReason);
           return report;
         }
 
         await this.applyChangesToWorktree(worktree, report.plannedChanges);
+        trace('APPLY', 'PASSED', 'validated patch applied to isolated worktree');
 
         const packagePath = path.join(worktree, 'package.json');
         let scripts: Record<string, string> = {};
@@ -773,7 +811,10 @@ export class ForgeAgent {
 
           latestAttemptResults = attemptResults;
           allChecksPassed = attemptResults.length > 0 && attemptResults.every((result) => result.status === 'PASSED');
-          if (allChecksPassed) break;
+          if (allChecksPassed) {
+            trace('TEST', 'PASSED', `${attemptResults.length} target checks passed on attempt ${attempt + 1}`);
+            break;
+          }
 
           if (attempt < 2) {
             const failedResults = attemptResults.filter((result) => result.status !== 'PASSED');
@@ -858,6 +899,7 @@ export class ForgeAgent {
         if (!allChecksPassed) {
           report.status = 'FAILED';
           report.errorMessage = 'Target checks still failed after two bounded patch-repair attempts.';
+          trace('TEST', 'FAILED', 'target checks failed after bounded repairs');
           log('error', report.errorMessage);
           return report;
         }
@@ -879,6 +921,20 @@ export class ForgeAgent {
       const branchName = `forge/task-${task.id.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-${runDiscriminator}`;
       report.branchName = branchName;
 
+      // R7: the permission control plane decides, before any GitHub write, whether
+      // this mission may create a branch, commit, or open a PR. Defaults preserve
+      // least privilege; broader capability must be enabled explicitly.
+      const permission = evaluatePermissionPolicy(
+        {
+          requestedPrCreation: task.allowPrCreation,
+          branchName,
+          targetBranch,
+          repo: `${owner}/${repo}`,
+        },
+        loadPermissionConfig(),
+      );
+      trace('POLICY', permission.allowBranchWrite ? 'PASSED' : 'BLOCKED', `${permission.effectiveProfile}: ${permission.reason}`);
+
       // Extract validated files with content
       const filesToCommit = report.plannedChanges
         .filter((c) => c.content && typeof c.content === 'string')
@@ -895,7 +951,12 @@ export class ForgeAgent {
       if (!task.allowPrCreation) {
         log('info', 'Task verified locally. Pull Request creation not authorized by caller.');
         report.status = 'VERIFYING';
+      } else if (!permission.allowBranchWrite) {
+        report.status = 'BLOCKED';
+        report.blockerReason = `Permission policy denied GitHub write: ${permission.reason}`;
+        log('warn', report.blockerReason);
       } else {
+        log('info', `Permission policy (${permission.effectiveProfile}): ${permission.reason}`);
         log('info', `Creating or updating isolated branch ${branchName} at base SHA ${report.baseCommitSha}...`);
         const branchRes = await this.github.createOrUpdateBranch(owner, repo, branchName, report.baseCommitSha);
 
@@ -920,9 +981,16 @@ export class ForgeAgent {
           if (commitRes.success && commitRes.headSha) {
             report.headCommitSha = commitRes.headSha;
             log('info', `Committed changes. Head SHA: ${report.headCommitSha}`);
+            trace('COMMIT', 'PASSED', report.headCommitSha);
 
-            // Open Pull Request with genuine head and base
+            // Open Pull Request with genuine head and base (requires 'review' profile)
             log('info', 'Opening Pull Request on GitHub...');
+            if (!permission.allowOpenPr) {
+              report.status = 'BLOCKED';
+              report.blockerReason = `Permission policy withheld Pull Request: ${permission.reason}`;
+              log('warn', report.blockerReason);
+              return report;
+            }
             const prRes = await this.github.openPullRequest({
               owner,
               repo,
@@ -945,6 +1013,7 @@ export class ForgeAgent {
               report.status = 'PR_OPENED';
               report.prUrl = prRes.url;
               report.prNumber = prRes.number;
+              trace('PR', 'PASSED', prRes.url);
               log('info', `Pull Request opened: ${prRes.url}`);
             } else {
               report.status = 'BLOCKED';
