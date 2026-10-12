@@ -182,7 +182,9 @@ export class ForgeAgent {
         contextFiles
       );
 
-      report.modelInvoked.provider = modelResult.provider;\n      report.modelInvoked.model = modelResult.model;\n      if (!modelResult.success) {
+      report.modelInvoked.provider = modelResult.provider;
+      report.modelInvoked.model = modelResult.model;
+      if (!modelResult.success) {
         report.status = 'FAILED';
         report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
         log('error', report.errorMessage);
