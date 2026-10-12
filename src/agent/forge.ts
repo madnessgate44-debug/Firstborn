@@ -147,21 +147,33 @@ export class ForgeAgent {
       const repoFilePaths = await this.github.listRepositoryFiles(owner, repo, repoInfo.defaultBranch);
       log('info', `Found ${repoFilePaths.length} files in target repository tree.`);
 
-      let packageJsonContent = '{}';
-      try {
-        packageJsonContent = await fs.readFile(path.resolve(process.cwd(), 'package.json'), 'utf-8');
-      } catch {
-        // Fallback
-      }
+      // Read the target repository's package manifest and bounded real source files.
+      const packageJsonRemote = await this.github.fetchFile(owner, repo, 'package.json', repoInfo.defaultBranch);
+      const packageJsonContent = packageJsonRemote?.content || '{}';
+      const sourcePaths = repoFilePaths
+        .filter((p) => /\\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
+        .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))
+        .filter((p) => p !== 'package.json' && p !== 'AGENTS.md')
+        .slice(0, 10);
+      const sourceResults = await Promise.all(
+        sourcePaths.map(async (p) => {
+          const file = await this.github.fetchFile(owner, repo, p, repoInfo.defaultBranch);
+          return file ? { path: file.path, content: file.content.slice(0, 16000) } : null;
+        })
+      );
+      const targetSourceFiles = sourceResults.filter(
+        (file): file is { path: string; content: string } => file !== null
+      );
 
       // 4. PLANNING (MODEL INVOCATION)
       report.status = 'PLANNING';
-      log('info', 'Invoking model to generate requirements matrix and minimal patch.');
+      log('info', `Invoking model with target manifest and ${targetSourceFiles.length} actual target source files.`);
 
       const contextFiles = [
         { path: 'AGENTS.md', content: instructionText },
         { path: 'package.json', content: packageJsonContent },
-        { path: 'FILE_TREE_INVENTORY.txt', content: repoFilePaths.slice(0, 50).join('\n') },
+        { path: 'FILE_TREE_INVENTORY.txt', content: repoFilePaths.slice(0, 100).join('\\n') },
+        ...targetSourceFiles,
       ];
 
       report.modelInvoked.callsCount += 1;
@@ -170,7 +182,7 @@ export class ForgeAgent {
         contextFiles
       );
 
-      if (!modelResult.success) {
+      report.modelInvoked.provider = modelResult.provider;\n      report.modelInvoked.model = modelResult.model;\n      if (!modelResult.success) {
         report.status = 'FAILED';
         report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
         log('error', report.errorMessage);
