@@ -21,7 +21,7 @@ export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
   private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, '');
-  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'murakumo/free';
+  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'mishima';
 
   constructor() {
     const key = process.env.GEMINI_API_KEY?.trim();
@@ -83,7 +83,7 @@ Respond only with valid JSON.`;
       {
         baseUrl: this.primaryUrl,
         model: this.primaryModel,
-        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous free model',
+        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous model',
         authorization: '',
       },
       {
@@ -98,7 +98,7 @@ Respond only with valid JSON.`;
         provider: 'llmfaucet anonymous gateway',
         authorization: 'Bearer free',
       },
-    ];
+    ].filter((route, index, all) => all.findIndex((candidate) => candidate.baseUrl === route.baseUrl && candidate.model === route.model) === index);
     const primaryErrors: string[] = [];
     for (const route of keylessRoutes) {
       let routeSucceeded = false;
