@@ -1009,6 +1009,42 @@ export class ForgeAgent {
             }
           }
 
+          // Validate the complete post-edit test files, not isolated replacement snippets.
+          // This catches malformed syntax and forbidden nested node:test declarations before
+          // the patch can be considered successful, while still feeding diagnostics into repair.
+          for (const change of report.plannedChanges) {
+            if (change.action === 'delete' || !/\\.test\\.[cm]?[jt]sx?$/i.test(change.path)) continue;
+            let structureResult: TestExecutionResult | undefined;
+            try {
+              const testContent = await fs.readFile(path.join(worktree, change.path), 'utf-8');
+              const structure = validateTestStructure(change.path, testContent);
+              if (!structure.valid) {
+                structureResult = {
+                  command: `forge test-structure preflight (${change.path})`,
+                  exitCode: 1,
+                  stdout: '',
+                  stderr: structure.error ?? 'Test structure validation failed.',
+                  durationMs: 0,
+                  status: 'FAILED',
+                };
+              }
+            } catch (error) {
+              structureResult = {
+                command: `forge test-structure preflight (${change.path})`,
+                exitCode: 1,
+                stdout: '',
+                stderr: error instanceof Error ? error.message : String(error),
+                durationMs: 0,
+                status: 'FAILED',
+              };
+            }
+            if (structureResult) {
+              report.testResults.push(structureResult);
+              attemptResults.push(structureResult);
+              log('warn', `Target test-structure preflight failed for ${change.path}: ${structureResult.stderr}`);
+            }
+          }
+
           for (const cmd of checksToRun) {
             log('info', `Testing proposed patch (attempt ${attempt + 1}/3): ${cmd}`);
             const result = await this.testRunner.runCheck(cmd, worktree);
@@ -1092,7 +1128,7 @@ export class ForgeAgent {
               log('error', report.errorMessage);
               return report;
             }
-            const repairValidation = this.validatePatch(report.plannedChanges);
+            const repairValidation = this.validatePatch(report.plannedChanges, task.allowedPaths);
             if (!repairValidation.valid) {
               report.status = 'FAILED';
               report.errorMessage = `Target-check repair was rejected: ${repairValidation.error}`;
