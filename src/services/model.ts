@@ -85,7 +85,7 @@ Respond only with valid JSON.`;
         // Always include the no-signup Kilo/OVHcloud routes as last resorts.
         keyless: true,
         maxAttempts: 12,
-        timeout: 75,
+        timeout: 35,
         hedge: true,
         onEvent: (event) => {
           if (event.kind === 'error') {
@@ -97,30 +97,40 @@ Respond only with valid JSON.`;
           }
         },
       });
-      const response = await llm.chat(messages, {
-        model: 'chat:large',
-        temperature: 0.1,
-        max_tokens: 1024,
-        signal: AbortSignal.timeout(80000),
-      });
-      const content = response.text.trim();
-      invokedProvider = response.provider || invokedProvider;
-      invokedModel = response.model || invokedModel;
-      if (!content) {
-        primaryErrors.push(`${invokedProvider}: response contained no usable text`);
-      } else {
-        return {
-          text: content,
-          model: invokedModel,
-          provider: invokedProvider,
-          success: true,
-          fallbackUsed: false,
-          keylessRouteErrors: [...primaryErrors],
-        };
+
+      // Some anonymous endpoints report HTTP success but return an empty/thinking-only
+      // answer. Treat that as a failed model choice and try another discovered alias.
+      for (const alias of ['chat:large', 'chat:fast', 'chat:small']) {
+        try {
+          const response = await llm.chat(messages, {
+            model: alias,
+            temperature: 0.1,
+            max_tokens: 1024,
+            signal: AbortSignal.timeout(40000),
+          });
+          const content = response.text.trim();
+          invokedProvider = response.provider || invokedProvider;
+          invokedModel = response.model || invokedModel;
+          if (!content) {
+            primaryErrors.push(`${alias} via ${invokedProvider}: response contained no usable text`);
+            continue;
+          }
+          return {
+            text: content,
+            model: invokedModel,
+            provider: invokedProvider,
+            success: true,
+            fallbackUsed: false,
+            keylessRouteErrors: [...primaryErrors],
+          };
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          primaryErrors.push(`${alias}: ${errorMessage}`);
+        }
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      primaryErrors.push(`freelm routing failed: ${errorMessage}`);
+      primaryErrors.push(`freelm initialization failed: ${errorMessage}`);
     }
 
     const primaryError = primaryErrors.join(' | ') || 'freelm returned no usable text without a reported provider error';
