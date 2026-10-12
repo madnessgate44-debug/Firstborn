@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveTargetBranch, evaluateRequirementEvidence, validatePatchSubstance } from '../src/agent/forge.ts';
+import { resolveTargetBranch, evaluateRequirementEvidence, validatePatchSubstance, validateAllowedPaths, validateTestStructure } from '../src/agent/forge.ts';
 import { isKeylessOnly } from '../src/services/model.ts';
 
 test('resolveTargetBranch: explicit non-default branch wins', () => {
@@ -120,4 +120,41 @@ test('isKeylessOnly: explicit environment values are normalized without global m
   for (const value of [undefined, '', 'false']) {
     assert.equal(isKeylessOnly({ FIRSTBORN_KEYLESS_ONLY: value } as NodeJS.ProcessEnv), false, String(value));
   }
+});
+
+test('allowed paths: rejects any model-selected file outside the explicit scope', () => {
+  const result = validateAllowedPaths([
+    { path: 'tests/mission-trace.test.ts', action: 'modify', rationale: 'wrong target', edits: [{ find: 'x', replace: 'y' }] },
+  ], ['tests/forge.test.ts']);
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /outside the allowed file scope/);
+});
+
+test('allowed paths: accepts a change within the explicit scope', () => {
+  const result = validateAllowedPaths([
+    { path: 'tests/forge.test.ts', action: 'modify', rationale: 'expected target', edits: [{ find: 'x', replace: 'y' }] },
+  ], ['tests/forge.test.ts']);
+  assert.equal(result.valid, true);
+});
+
+test('test structure: rejects nested node:test declarations', () => {
+  const result = validateTestStructure('tests/example.test.ts', `import { test } from 'node:test';
+test('outer', () => {
+  test('inner', () => {});
+});`);
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /Nested test declaration rejected/);
+});
+
+test('test structure: accepts sibling node:test declarations', () => {
+  const result = validateTestStructure('tests/example.test.ts', `import { test } from 'node:test';
+test('first', () => {});
+test('second', () => {});`);
+  assert.equal(result.valid, true);
+});
+
+test('test structure: rejects syntax errors before running checks', () => {
+  const result = validateTestStructure('tests/example.test.ts', `test('unfinished', () => {`);
+  assert.equal(result.valid, false);
+  assert.match(result.error ?? '', /syntax error/);
 });
