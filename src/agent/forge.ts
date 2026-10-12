@@ -560,7 +560,7 @@ export class ForgeAgent {
 - **Keyless Route Errors**: ${(report.modelInvoked.keylessRouteErrors ?? []).join(' | ') || 'none reported'}
 - **Status**: ${report.status}
 - **Tests**: ${report.testResults.map((r) => `${r.command}: ${r.status}`).join(', ')}
-,
+`,
             });
 
             if (prRes.success) {
