@@ -12,6 +12,7 @@ export interface ModelGenerationResult {
   success: boolean;
   error?: string;
   fallbackUsed?: boolean;
+  keylessRouteErrors?: string[];
 }
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
@@ -147,7 +148,7 @@ Respond only with valid JSON.`;
             continue;
           }
 
-          return { text: content, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false };
+          return { text: content, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false, keylessRouteErrors: [...primaryErrors] };
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           primaryErrors.push(`${route.provider}: ${errorMessage}`);
@@ -175,6 +176,7 @@ Respond only with valid JSON.`;
           provider: 'Google AI Studio / Gemini',
           success: true,
           fallbackUsed: true,
+          keylessRouteErrors: [...primaryErrors],
         };
       } catch (err) {
         const fallbackError = err instanceof Error ? err.message : String(err);
@@ -185,6 +187,7 @@ Respond only with valid JSON.`;
           success: false,
           error: `Primary keyless route failed: ${primaryError}; Gemini fallback failed: ${fallbackError}`,
           fallbackUsed: true,
+          keylessRouteErrors: [...primaryErrors],
         };
       }
     }
@@ -196,6 +199,7 @@ Respond only with valid JSON.`;
       success: false,
       error: `All keyless primary routes failed: ${primaryError}. Gemini fallback is not configured.`,
       fallbackUsed: false,
+      keylessRouteErrors: [...primaryErrors],
     };
   }
 }

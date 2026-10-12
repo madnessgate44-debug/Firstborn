@@ -156,9 +156,7 @@ export class GitHubService {
     }
   }
 
-  /**
-   * Creates branch if it does not exist, or updates it if it already exists (Fixes branch retry collision)
-   */
+  /** Create a new isolated branch; never reset or reuse an existing task ref. */
   async createOrUpdateBranch(
     owner: string,
     repo: string,
@@ -186,27 +184,9 @@ export class GitHubService {
         return { success: true };
       }
 
-      // 2. If already exists (422), update the existing ref
       if (createRes.status === 422) {
-        const updateRes = await fetch(
-          `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branchName}`,
-          {
-            method: 'PATCH',
-            headers: {
-              ...this.getHeaders(),
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              sha: baseSha,
-              force: true,
-            }),
-          }
-        );
-        if (updateRes.ok) {
-          return { success: true };
-        }
-        const err = await updateRes.text();
-        return { success: false, error: `Branch ref update failed (${updateRes.status}): ${err}` };
+        const err = await createRes.text();
+        return { success: false, error: `BLOCKED: branch ref already exists; refusing to reuse it (HTTP 422): ${err}` };
       }
 
       const err = await createRes.text();
@@ -310,7 +290,6 @@ export class GitHubService {
           headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify({
             sha: commitData.sha,
-            force: true,
           }),
         }
       );

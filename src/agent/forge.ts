@@ -232,9 +232,16 @@ export class ForgeAgent {
       const sourceResults = await Promise.all(
         sourcePaths.map(async (p) => {
           const file = await this.github.fetchFile(owner, repo, p, repoInfo.defaultBranch);
-          return file ? { path: file.path, content: file.content.slice(0, 16000) } : null;
+          return file ? { path: file.path, content: file.content } : null;
         })
       );
+      const oversizedSource = sourceResults.find((file) => file !== null && file.content.length > 16000);
+      if (oversizedSource) {
+        report.status = 'BLOCKED';
+        report.blockerReason = `file too large to patch safely: ${oversizedSource.path} exceeds 16000 characters.`;
+        log('warn', report.blockerReason);
+        return report;
+      }
       const targetSourceFiles = sourceResults.filter(
         (file): file is { path: string; content: string } => file !== null
       );
@@ -258,6 +265,8 @@ export class ForgeAgent {
 
       report.modelInvoked.provider = modelResult.provider;
       report.modelInvoked.model = modelResult.model;
+      report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
+      report.modelInvoked.keylessRouteErrors = modelResult.keylessRouteErrors ?? [];
       if (!modelResult.success) {
         report.status = 'FAILED';
         report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
@@ -394,10 +403,45 @@ export class ForgeAgent {
           if (!absolutePath.startsWith(worktree + path.sep)) {
             throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
           }
-          const exists = await fs.access(absolutePath).then(() => true).catch(() => false);
+          const worktreeRealPath = await fs.realpath(worktree);
+          const relativeParent = path.relative(worktree, path.dirname(absolutePath));
+          let checkedParent = worktreeRealPath;
+          for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
+            checkedParent = path.join(checkedParent, segment);
+            let parentStat;
+            try { parentStat = await fs.lstat(checkedParent); } catch (err: any) {
+              if (err?.code !== 'ENOENT') throw err;
+            }
+            if (parentStat?.isSymbolicLink()) {
+              throw new Error(`BLOCKED: patch target parent contains a symlink: ${change.path}`);
+            }
+            if (!parentStat) {
+              await fs.mkdir(checkedParent);
+              parentStat = await fs.lstat(checkedParent);
+            }
+            const resolvedParent = await fs.realpath(checkedParent);
+            if (resolvedParent !== worktreeRealPath && !resolvedParent.startsWith(worktreeRealPath + path.sep)) {
+              throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
+            }
+          }
+          const parentRealPath = await fs.realpath(path.dirname(absolutePath));
+          if (parentRealPath !== worktreeRealPath && !parentRealPath.startsWith(worktreeRealPath + path.sep)) {
+            throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
+          }
+          let targetStat;
+          try { targetStat = await fs.lstat(absolutePath); } catch (err: any) {
+            if (err?.code !== 'ENOENT') throw err;
+          }
+          if (targetStat?.isSymbolicLink()) throw new Error(`BLOCKED: refusing to patch symlink: ${change.path}`);
+          if (targetStat) {
+            const targetRealPath = await fs.realpath(absolutePath);
+            if (targetRealPath !== worktreeRealPath && !targetRealPath.startsWith(worktreeRealPath + path.sep)) {
+              throw new Error(`BLOCKED: patch target resolves outside the worktree: ${change.path}`);
+            }
+          }
+          const exists = Boolean(targetStat);
           if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
           if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
-          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
           if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
             let current = await fs.readFile(absolutePath, 'utf-8');
             for (const edit of change.edits) {
@@ -472,7 +516,8 @@ export class ForgeAgent {
 
       // 7. GITHUB BRANCH, COMMIT & PR CREATION
       report.status = 'VERIFYING';
-      const branchName = `forge/task-${task.id.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`;
+      const runDiscriminator = process.env.GITHUB_RUN_ID || `${Date.now()}`;
+      const branchName = `forge/task-${task.id.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-${runDiscriminator}`;
       report.branchName = branchName;
 
       // Extract validated files with content
@@ -528,16 +573,12 @@ export class ForgeAgent {
               body: `### Forge Task Report: ${task.id}
 - **Base Commit**: \`${report.baseCommitSha}\`
 - **Head Commit**: \`${report.headCommitSha}\`
-- **Branch**: \`${branchName}\`
-
-#### Requirements Traceability
-${report.requirements.map((r) => `- [ ] **${r.id}**: ${r.description} (${r.status}; criterion-specific proof pending)`).join('\n')}
-
-#### Verified Checks
-${report.testResults.map((t) => `- \`${t.command}\`: Exit ${t.exitCode} (${t.status}) in ${t.durationMs}ms`).join('\n')}
-
-#### Changed Files
-${report.plannedChanges.map((c) => `- \`${c.path}\` (${c.action}): ${c.rationale}`).join('\n')}
+- **Provider**: ${report.modelInvoked.provider}
+- **Model**: ${report.modelInvoked.model}
+- **Fallback Used**: ${report.modelInvoked.fallbackUsed ?? 'unknown'}
+- **Keyless Route Errors**: ${(report.modelInvoked.keylessRouteErrors ?? []).join(' | ') || 'none reported'}
+- **Status**: ${report.status}
+- **Tests**: ${report.testResults.map((r) => `${r.command}: ${r.status}`).join(', ')}
 `,
             });
 

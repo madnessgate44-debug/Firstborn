@@ -66,6 +66,8 @@ export interface TaskExecutionReport {
     provider: string;
     model: string;
     callsCount: number;
+    fallbackUsed?: boolean;
+    keylessRouteErrors?: string[];
   };
   requirements: TaskRequirement[];
   plannedChanges: FileChangePlan[];
