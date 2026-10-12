@@ -85,6 +85,7 @@ test('patch substance: rejects a TODO-only newly created file', () => {
   const result = validatePatchSubstance([{
     path: 'tests/model.test.ts',
     action: 'create',
+    rationale: 'Regression test for placeholder-only patches',
     content: '// TODO: implement test for isKeylessOnly helper',
   }]);
   assert.equal(result.valid, false);
@@ -95,6 +96,7 @@ test('patch substance: rejects a TODO-only edit replacement', () => {
   const result = validatePatchSubstance([{
     path: 'tests/model.test.ts',
     action: 'modify',
+    rationale: 'Regression test for placeholder-only patches',
     edits: [{ find: 'old test', replace: '// TODO: implement test' }],
   }]);
   assert.equal(result.valid, false);
