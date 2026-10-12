@@ -21,7 +21,7 @@ app.use(express.json());
 const reportsStore = new Map<string, any>();
 
 const requireGitHubToken: RequestHandler = async (req, res, next) => {
-  const token = (req.headers.authorization || '').replace(/^Bearer\\s+/i, '').trim();
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
   if (!token) {
     res.status(401).json({ error: 'A valid GitHub token is required for this operation.' });
     return;
@@ -40,6 +40,13 @@ const requireGitHubToken: RequestHandler = async (req, res, next) => {
       res.status(401).json({ error: 'GitHub rejected the supplied token. No task was run.' });
       return;
     }
+    const user = (await response.json()) as { login?: string };
+    const allowedLogins = (process.env.FORGE_ALLOWED_LOGINS || 'madnessgate44-debug')
+      .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (!user.login || !allowedLogins.includes(user.login.toLowerCase())) {
+      res.status(403).json({ error: 'This GitHub account is not authorized for Forge.' });
+      return;
+    }
     next();
   } catch {
     res.status(503).json({ error: 'Could not validate the GitHub token. No task was run.' });
@@ -50,6 +57,14 @@ const requireGitHubToken: RequestHandler = async (req, res, next) => {
 function sanitizeTaskId(rawId: string): string {
   const sanitized = rawId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
   return sanitized || `task-${Date.now()}`;
+}
+
+const allowedRepos = (process.env.FORGE_ALLOWED_REPOS || 'madnessgate44-debug/Firstborn')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+const isAllowedRepo = (r: unknown) => typeof r === 'string' && allowedRepos.includes(r.toLowerCase());
+
+function getRequestToken(req: { headers: { authorization?: string } }): string | undefined {
+  return req.headers.authorization?.replace(/^Bearer\s+/i, '').trim() || undefined;
 }
 
 // 1. Health & Capability inspection
@@ -71,12 +86,13 @@ app.get('/api/health', (req, res) => {
 // 2. Inspect Target Repository
 app.get('/api/github/inspect', requireGitHubToken, async (req, res) => {
   const target = (req.query.repo as string) || 'madnessgate44-debug/Firstborn';
-  const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
+  const token = getRequestToken(req);
   const [owner, repo] = target.split('/');
 
   if (!owner || !repo) {
     return res.status(400).json({ error: 'Invalid repo query parameter. Expected owner/repo.' });
   }
+  if (!isAllowedRepo(target)) return res.status(403).json({ error: 'Repository not allowed.' });
 
   const github = new GitHubService(token);
   const info = await github.inspectRepository(owner, repo);
@@ -86,16 +102,18 @@ app.get('/api/github/inspect', requireGitHubToken, async (req, res) => {
 // 3. Submit and execute a Task through Forge
 app.post('/api/tasks/run', requireGitHubToken, async (req, res) => {
   const { id, title, description, targetRepo, targetBranch, allowPrCreation } = req.body;
-  const token = (req.headers.authorization as string)?.replace('Bearer ', '') || undefined;
+  const token = getRequestToken(req);
 
   const taskId = sanitizeTaskId(id || `task-${Date.now()}`);
+  const repoToRun = targetRepo || 'madnessgate44-debug/Firstborn';
+  if (!isAllowedRepo(repoToRun)) return res.status(403).json({ error: 'Repository not allowed.' });
   const agent = new ForgeAgent(token);
 
   const report = await agent.executeTask({
     id: taskId,
     title,
     description,
-    targetRepo: targetRepo || 'madnessgate44-debug/Firstborn',
+    targetRepo: repoToRun,
     targetBranch: targetBranch || 'main',
     createdAt: new Date().toISOString(),
     author: 'operator-mobile',
