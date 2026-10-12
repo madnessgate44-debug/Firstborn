@@ -16,12 +16,27 @@ export type TaskStatus =
   | 'BLOCKED'
   | 'CANCELLED';
 
+export type RequirementStatus = 'PENDING' | 'PASS' | 'FAIL' | 'BLOCKED';
+
 export interface TaskRequirement {
   id: string;
   description: string;
   acceptanceCriteria: string;
-  status: 'PENDING' | 'PASS' | 'FAIL' | 'BLOCKED';
+  status: RequirementStatus;
   evidence?: string;
+  /** Checks the model predicts verify this requirement. */
+  checkCommands?: string[];
+  /** Reason this requirement cannot be verified automatically. */
+  manualReviewNote?: string;
+}
+
+export interface RequirementEvidenceInput {
+  acceptanceCriteria?: string;
+  description?: string;
+  /** Checks the model predicts verify this requirement. */
+  checkCommands?: string[];
+  /** Reason this requirement cannot be verified automatically. */
+  manualReviewNote?: string;
 }
 
 export interface TaskDefinition {

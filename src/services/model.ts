@@ -74,13 +74,13 @@ Follow these rules:
 - Return JSON matching this schema:
 {
   "summary": "Short summary",
-  "requirements": [{"id":"REQ-1","description":"...","acceptanceCriteria":"..."}],
+  "requirements": [{"id":"REQ-1","description":"...","acceptanceCriteria":"...","checkCommands":["npm run lint"],"manualReviewNote":"only if no automated check applies"}],
   "changes": [
     {"path":"relative/path","action":"modify","rationale":"...","edits":[{"find":"exact unique source snippet","replace":"replacement snippet"}]}
   ],
   "suggestedChecks": ["npm run lint"]
 }
-STRICT OUTPUT LIMIT: reserve output well below the anonymous endpoint's 2048-token ceiling by using max_tokens=1024. Return compact valid JSON only, with no markdown. For existing files, action MUST be "modify" and MUST use "edits"; never return the whole file in "content". For a new file, action MUST be "create" and use "content" instead of "edits". Limit the whole patch to at most 2 files and at most 3 edits total. Keep each find/replace snippet minimal but exact. Every find string must occur exactly once in the supplied source file. Do not repeat unchanged source. If a safe patch cannot fit these limits, return valid JSON with an empty changes array and explain the blocker in summary. Use only paths in the supplied target repository inventory or clearly justified new paths.
+STRICT OUTPUT LIMIT: reserve output well below the anonymous endpoint's 2048-token ceiling by using max_tokens=1024. Return compact valid JSON only, with no markdown. For existing files, action MUST be "modify" and MUST use "edits"; never return the whole file in "content". For a new file, action MUST be "create" and use "content" instead of "edits". Prefer the smallest patch that satisfies the requirements; if the mission needs more than two files or three edits, return only the first bounded stage and state the remaining work in summary rather than truncating the JSON. Keep each find/replace snippet minimal but exact. Every find string must occur exactly once in the supplied source file. Do not repeat unchanged source. For each requirement, list the exact checks in checkCommands that verify it, or set manualReviewNote when no automated check exists. If a safe patch cannot fit these limits, return valid JSON with an empty changes array and explain the blocker in summary. Use only paths in the supplied target repository inventory or clearly justified new paths.
 Context Files:
 ${fileContexts}
 User Task:

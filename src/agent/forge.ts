@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TaskDefinition, TaskExecutionReport, FileChangePlan } from '../types/agent.ts';
+import { TaskDefinition, TaskExecutionReport, FileChangePlan, RequirementEvidenceInput } from '../types/agent.ts';
 import { GitHubService } from '../services/github.ts';
 import { ModelService } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
+import { loadForgeLimits } from './limits.ts';
+import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -30,8 +32,6 @@ const PROTECTED_PATH_PATTERNS = [
   /^scripts\//i,
 ];
 
-// Maximum allowed patch content size per file (100KB)
-const MAX_FILE_PATCH_BYTES = 100 * 1024;
 // Keep the total source context bounded for anonymous models with small context windows.
 const MAX_SOURCE_CONTEXT_CHARS = 24000;
 
@@ -49,6 +49,129 @@ function parseModelJson(text: string): any {
   return JSON.parse(normalized);
 }
 
+// --- R6 resilience primitives -------------------------------------------------
+
+export type FailureClass = 'RETRYABLE' | 'FATAL';
+
+/**
+ * Classify a runtime failure so callers can retry transient conditions and stop
+ * on permanent ones. Deterministic and pure so it is unit-testable.
+ */
+export function classifyFailure(error: unknown): FailureClass {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const status = (error as { status?: number })?.status;
+  if (status === 429 || status === 408 || (typeof status === 'number' && status >= 500)) return 'RETRYABLE';
+  if (/abort|timeout|timed out|econnreset|enotfound|socket hang up|fetch failed|rate limit|429|5\d\d/.test(message)) {
+    return 'RETRYABLE';
+  }
+  return 'FATAL';
+}
+
+export interface BoundedRetryOptions {
+  attempts: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  /** Injected sleep so tests never wait on wall-clock time. */
+  sleep?: (ms: number) => Promise<void>;
+  isRetryable?: (error: unknown) => boolean;
+}
+
+/**
+ * Run an async operation with bounded retries and exponential backoff. Never
+ * loops unbounded, never retries a fatal classification, and reports the exact
+ * number of attempts so the caller can log truthful evidence.
+ */
+export async function withBoundedRetry<T>(
+  operation: () => Promise<T>,
+  options: BoundedRetryOptions
+): Promise<{ ok: true; value: T; attempts: number } | { ok: false; error: unknown; attempts: number }> {
+  const attempts = Math.max(1, Math.floor(options.attempts));
+  const base = options.baseDelayMs ?? 250;
+  const max = options.maxDelayMs ?? 2000;
+  const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const retryable = options.isRetryable ?? ((error: unknown) => classifyFailure(error) === 'RETRYABLE');
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return { ok: true, value: await operation(), attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !retryable(error)) {
+        return { ok: false, error, attempts: attempt };
+      }
+      const delay = Math.min(max, base * 2 ** (attempt - 1));
+      await sleep(delay);
+    }
+  }
+  return { ok: false, error: lastError, attempts };
+}
+
+export interface ModelPlanShapeCheck {
+  ok: boolean;
+  error?: string;
+  requirements: { id: string; description: string; acceptanceCriteria: string; checkCommands?: string[]; manualReviewNote?: string }[];
+  changes: FileChangePlan[];
+}
+
+/**
+ * Deterministically validate and normalize a raw model plan. Malformed shapes
+ * are reported as structured errors instead of throwing deep in the mapper, so
+ * a single bad field cannot silently corrupt the report.
+ */
+export function validateModelPlanShape(raw: unknown): ModelPlanShapeCheck {
+  const empty: ModelPlanShapeCheck = { ok: true, requirements: [], changes: [] };
+  if (!raw || typeof raw !== 'object') {
+    return { ...empty, ok: false, error: 'Model plan was not a JSON object.' };
+  }
+  const plan = raw as Record<string, unknown>;
+
+  if (plan.requirements !== undefined && !Array.isArray(plan.requirements)) {
+    return { ...empty, ok: false, error: 'Model plan "requirements" must be an array when present.' };
+  }
+  if (plan.changes !== undefined && !Array.isArray(plan.changes)) {
+    return { ...empty, ok: false, error: 'Model plan "changes" must be an array when present.' };
+  }
+
+  const requirements = (plan.requirements ?? []).map((req, index) => {
+    const item = (req ?? {}) as Record<string, unknown>;
+    return {
+      id: typeof item.id === 'string' && item.id ? item.id : `REQ-${index + 1}`,
+      description: typeof item.description === 'string' ? item.description : '',
+      acceptanceCriteria: typeof item.acceptanceCriteria === 'string' ? item.acceptanceCriteria : '',
+      checkCommands: Array.isArray(item.checkCommands)
+        ? item.checkCommands.filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+        : undefined,
+      manualReviewNote: typeof item.manualReviewNote === 'string' ? item.manualReviewNote : undefined,
+    };
+  });
+
+  const changes: FileChangePlan[] = [];
+  for (const change of (plan.changes ?? []) as unknown[]) {
+    const item = (change ?? {}) as Record<string, unknown>;
+    if (typeof item.path !== 'string' || item.path.length === 0) {
+      return { ...empty, ok: false, error: 'A change is missing a "path".' };
+    }
+    if (!['create', 'modify', 'delete'].includes(String(item.action))) {
+      return { ...empty, ok: false, error: `Change "${item.path}" has an invalid action "${String(item.action)}".` };
+    }
+    if (item.edits !== undefined && !Array.isArray(item.edits)) {
+      return { ...empty, ok: false, error: `Change "${item.path}" has non-array edits.` };
+    }
+    changes.push({
+      path: item.path,
+      action: item.action as FileChangePlan['action'],
+      rationale: typeof item.rationale === 'string' ? item.rationale : '',
+      content: typeof item.content === 'string' ? item.content : undefined,
+      edits: Array.isArray(item.edits)
+        ? (item.edits as { find: string; replace: string }[])
+        : undefined,
+    });
+  }
+
+  return { ok: true, requirements, changes };
+}
+
 // Requested branch wins only when it is explicit and not the default; invalid
 // branches are resolved later (and fail closed) by the caller.
 export function resolveTargetBranch(requested: string | undefined, defaultBranch: string): string {
@@ -56,28 +179,45 @@ export function resolveTargetBranch(requested: string | undefined, defaultBranch
   return trimmed && trimmed !== defaultBranch ? trimmed : defaultBranch;
 }
 
-// A requirement is only PASS when a check named in its own acceptance criteria
-// or description actually passed. Unrelated green checks cannot satisfy it.
+// A requirement is only PASS when a check named in its own acceptance criteria,
+// description, or explicit checkCommands actually passed. Unrelated green checks
+// cannot satisfy it, and a named-but-failing check yields FAIL, never PASS.
 export function evaluateRequirementEvidence(
-  requirement: { acceptanceCriteria?: string; description?: string },
+  requirement: RequirementEvidenceInput,
   results: { command: string; status: string; exitCode: number }[]
-): { status: 'PASS' | 'PENDING'; evidence: string } {
+): { status: 'PASS' | 'PENDING' | 'FAIL'; evidence: string } {
   const attemptEvidence = results.map((result) => `${result.command}=${result.exitCode}`).join(', ');
   const criterion = `${requirement.acceptanceCriteria ?? ''} ${requirement.description ?? ''}`.toLowerCase();
+
+  const matchesCommand = (command: string): boolean => {
+    const lower = command.toLowerCase();
+    const scriptName = lower === 'npm test' ? 'test' : lower.replace(/^npm run /, '');
+    return criterion.includes(lower) || criterion.includes(scriptName);
+  };
+
+  const explicit = (requirement.checkCommands ?? []).map((c) => c.toLowerCase());
   const referencedChecks = results.filter((result) => {
-    const command = result.command.toLowerCase();
-    const scriptName = command === 'npm test' ? 'test' : command.replace(/^npm run /, '');
-    return criterion.includes(command) || criterion.includes(scriptName);
+    const lower = result.command.toLowerCase();
+    return explicit.includes(lower) || matchesCommand(result.command);
   });
-  if (referencedChecks.length > 0 && referencedChecks.every((result) => result.status === 'PASSED')) {
+
+  const failed = referencedChecks.filter((result) => result.status !== 'PASSED');
+  if (failed.length > 0) {
+    return {
+      status: 'FAIL',
+      evidence: `Criterion-named check failed: ${failed.map((result) => `${result.command}=${result.exitCode}`).join(', ')}.`,
+    };
+  }
+  if (referencedChecks.length > 0) {
     return {
       status: 'PASS',
       evidence: `Criterion-matched checks passed: ${referencedChecks.map((result) => `${result.command}=${result.exitCode}`).join(', ')}.`,
     };
   }
+  const manual = requirement.manualReviewNote ? ` Manual review: ${requirement.manualReviewNote}.` : ' Manual review required.';
   return {
     status: 'PENDING',
-    evidence: `No criterion-specific passing check was identified. Latest target-check attempt: ${attemptEvidence}. Manual review required.`,
+    evidence: `No criterion-specific passing check was identified. Latest target-check attempt: ${attemptEvidence}.${manual}`,
   };
 }
 
@@ -98,8 +238,16 @@ export class ForgeAgent {
    * Strict validation of generated patch paths and contents (Fixes AUD-20261012-02 Patch Validation)
    */
   private validatePatch(changes: FileChangePlan[]): { valid: boolean; error?: string } {
+    const limits = loadForgeLimits();
     if (!Array.isArray(changes) || changes.length === 0) {
       return { valid: false, error: 'Empty patch: No file changes proposed.' };
+    }
+    if (changes.length > limits.maxFilesPerMission) {
+      return { valid: false, error: `Patch exceeds the configured file ceiling: ${changes.length} > ${limits.maxFilesPerMission}.` };
+    }
+    const totalEdits = changes.reduce((sum, change) => sum + (Array.isArray(change.edits) ? change.edits.length : 0), 0);
+    if (totalEdits > limits.maxEditsPerMission) {
+      return { valid: false, error: `Patch exceeds the configured edit ceiling: ${totalEdits} > ${limits.maxEditsPerMission}.` };
     }
 
     for (const change of changes) {
@@ -130,8 +278,8 @@ export class ForgeAgent {
         return { valid: false, error: `Invalid patch: "${change.path}" needs complete content for create or valid exact edits for modify.` };
       }
       const patchSize = hasContent ? Buffer.byteLength(change.content as string, 'utf-8') : Buffer.byteLength(JSON.stringify(change.edits ?? []), 'utf-8');
-      if (patchSize > MAX_FILE_PATCH_BYTES) {
-        return { valid: false, error: `Patch size limit exceeded: "${change.path}" exceeds 100KB limit.` };
+      if (patchSize > loadForgeLimits().maxPatchBytes) {
+        return { valid: false, error: `Patch size limit exceeded: "${change.path}" exceeds the configured per-file patch limit.` };
       }
     }
 
@@ -147,29 +295,13 @@ export class ForgeAgent {
 
     for (const change of changes) {
       if (change.action !== 'modify' || !Array.isArray(change.edits) || change.edits.length === 0) continue;
-      let current = sourceByPath.get(change.path);
-      if (typeof current !== 'string') {
+      const source = sourceByPath.get(change.path);
+      if (typeof source !== 'string') {
         problems.push(`${change.path}: source content was not supplied to validate the edit anchors.`);
         continue;
       }
-
-      for (const edit of change.edits) {
-        if (!edit || typeof edit.find !== 'string' || edit.find.length === 0 || typeof edit.replace !== 'string') {
-          problems.push(`${change.path}: malformed exact-edit entry.`);
-          break;
-        }
-        const first = current.indexOf(edit.find);
-        if (first < 0) {
-          problems.push(`${change.path}: exact anchor not found: ${JSON.stringify(edit.find.slice(0, 100))}`);
-          break;
-        }
-        const second = current.indexOf(edit.find, first + edit.find.length);
-        if (second >= 0) {
-          problems.push(`${change.path}: anchor is ambiguous: ${JSON.stringify(edit.find.slice(0, 100))}`);
-          break;
-        }
-        current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
-      }
+      const result = applyExactEdits(source, change.edits);
+      if (!result.ok) problems.push(`${change.path}: ${result.error}`);
     }
     return problems;
   }
@@ -223,17 +355,12 @@ export class ForgeAgent {
       if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
       if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
       if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
-        let current = await fs.readFile(absolutePath, 'utf-8');
-        for (const edit of change.edits) {
-          const first = current.indexOf(edit.find);
-          if (first < 0) throw new Error(`Exact edit anchor not found in ${change.path}: ${edit.find.slice(0, 100)}`);
-          const second = current.indexOf(edit.find, first + edit.find.length);
-          if (second >= 0) throw new Error(`Ambiguous edit anchor occurs more than once in ${change.path}: ${edit.find.slice(0, 100)}`);
-          current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
-        }
-        await fs.writeFile(absolutePath, current, 'utf-8');
+        const current = await fs.readFile(absolutePath, 'utf-8');
+        const applied = applyExactEdits(current, change.edits);
+        if (!applied.ok) throw new Error(`Exact edit rejected in ${change.path}: ${applied.error}`);
+        await fs.writeFile(absolutePath, applied.content, 'utf-8');
         // The GitHub commit API receives the verified full file from the tested worktree.
-        change.content = current;
+        change.content = applied.content;
       } else {
         await fs.writeFile(absolutePath, change.content as string, 'utf-8');
       }
@@ -417,6 +544,18 @@ export class ForgeAgent {
         `Task: ${task.title}\nDetails: ${task.description}`,
         contextFiles
       );
+      // R6: retry transient anonymous-route failures with bounded backoff; a
+      // fatal failure is never retried. The single bounded retry keeps total
+      // model calls within the configured ceiling.
+      if (!modelResult.success && classifyFailure(modelResult.error) === 'RETRYABLE') {
+        log('warn', `Model route reported a retryable failure; one bounded retry. Detail: ${modelResult.error}`);
+        const retry = await withBoundedRetry(
+          () => this.model.generatePlanAndPatch(`Task: ${task.title}\nDetails: ${task.description}`, contextFiles),
+          { attempts: loadForgeLimits().modelAttempts, baseDelayMs: 500 }
+        );
+        report.modelInvoked.callsCount += retry.attempts;
+        if (retry.ok) modelResult = retry.value;
+      }
 
       report.modelInvoked.provider = modelResult.provider;
       report.modelInvoked.model = modelResult.model;
@@ -433,25 +572,30 @@ export class ForgeAgent {
       }
 
       const applyPlanToReport = (parsedPlan: any) => {
-        report.requirements = (parsedPlan.requirements || []).map((req: any) => ({
-          id: req.id,
-          description: req.description,
-          acceptanceCriteria: req.acceptanceCriteria,
-          status: 'PENDING',
-        }));
-        report.plannedChanges = (parsedPlan.changes || []).map((ch: any) => ({
-          path: ch.path,
-          action: ch.action,
-          rationale: ch.rationale,
-          content: ch.content,
-          edits: ch.edits,
-        }));
+        // R6: validate shape deterministically so a malformed field cannot
+        // silently corrupt the report.
+        const shape = validateModelPlanShape(parsedPlan);
+        if (!shape.ok) throw new Error(`Model plan shape rejected: ${shape.error}`);
+        report.requirements = shape.requirements.map((req) => ({ ...req, status: 'PENDING' as const }));
+        report.plannedChanges = shape.changes;
+      };
+
+      const maxModelCalls = loadForgeLimits().maxModelCalls;
+      const guardModelCall = (label: string): boolean => {
+        if (report.modelInvoked.callsCount >= maxModelCalls) {
+          report.status = 'BLOCKED';
+          report.blockerReason = `Model-call ceiling reached (${maxModelCalls}); stopping safely before ${label}.`;
+          log('warn', report.blockerReason);
+          return false;
+        }
+        return true;
       };
 
       let parsedPlan: any;
       try {
         parsedPlan = parseModelJson(modelResult.text);
       } catch (err: any) {
+        if (!guardModelCall('JSON repair attempt')) return report;
         log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
         report.modelInvoked.callsCount += 1;
         modelResult = await this.model.generatePlanAndPatch(
