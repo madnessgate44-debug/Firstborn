@@ -1,6 +1,6 @@
 const routes = [
   {
-    base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\\/+$/, ''),
+    base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, ''),
     model: process.env.FREE_MODEL_NAME || 'qwen3.8-27b-throughput-5090',
     provider: 'Murakumo anonymous Qwen3.8 coding route',
     authorization: '',
