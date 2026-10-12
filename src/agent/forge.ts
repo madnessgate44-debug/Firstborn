@@ -35,6 +35,15 @@ const MAX_FILE_PATCH_BYTES = 100 * 1024;
 // Keep the total source context bounded for anonymous models with small context windows.
 const MAX_SOURCE_CONTEXT_CHARS = 24000;
 
+// Anonymous models sometimes wrap otherwise valid JSON in Markdown fences.
+// Normalize only that wrapper; JSON.parse remains the strict structural validator.
+function parseModelJson(text: string): any {
+  let normalized = text.trim();
+  const fenced = normalized.match(/^\`\`\`(?:json)?\\s*([\\s\\S]*?)\\s*\`\`\`$/i);
+  if (fenced) normalized = fenced[1].trim();
+  return JSON.parse(normalized);
+}
+
 export class ForgeAgent {
   private github: GitHubService;
   private model: ModelService;
@@ -319,7 +328,7 @@ export class ForgeAgent {
 
       let parsedPlan: any;
       try {
-        parsedPlan = JSON.parse(modelResult.text);
+        parsedPlan = parseModelJson(modelResult.text);
       } catch (err: any) {
         log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
         report.modelInvoked.callsCount += 1;
@@ -336,7 +345,7 @@ export class ForgeAgent {
           return report;
         }
         try {
-          parsedPlan = JSON.parse(modelResult.text);
+          parsedPlan = parseModelJson(modelResult.text);
         } catch (repairErr: any) {
           report.status = 'FAILED';
           report.errorMessage = `Model output remained invalid JSON after one repair attempt: ${repairErr.message}`;
@@ -366,7 +375,7 @@ export class ForgeAgent {
           return report;
         }
         try {
-          parsedPlan = JSON.parse(modelResult.text);
+          parsedPlan = parseModelJson(modelResult.text);
         } catch (err: any) {
           report.status = 'FAILED';
           report.errorMessage = `Failed to parse repaired model JSON: ${err.message}`;
