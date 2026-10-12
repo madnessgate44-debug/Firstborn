@@ -567,9 +567,10 @@ export class ForgeAgent {
             if (install.status !== 'PASSED') {
               log('warn', `Dependency installation failed on attempt ${attempt + 1}; retrying once before classifying the environment as blocked.`);
               await new Promise((resolve) => setTimeout(resolve, 1000));
-              install = await this.testRunner.runCheck('npm install', worktree);
-              report.testResults.push(install);
-              attemptResults.push(install);
+              const retryInstall = await this.testRunner.runCheck('npm install', worktree);
+              report.testResults.push(retryInstall);
+              attemptResults[attemptResults.length - 1] = retryInstall;
+              install = retryInstall;
             }
             if (install.status !== 'PASSED') {
               report.status = 'FAILED';
