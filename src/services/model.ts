@@ -59,10 +59,10 @@ Follow these rules:
 {
   "summary": "Short summary",
   "requirements": [{"id":"REQ-1","description":"...","acceptanceCriteria":"..."}],
-  "changes": [{"path":"relative/path","action":"modify|create","rationale":"...","content":"full file content"}],
+  "changes": [{"path":"relative/path","action":"modify","rationale":"...","edits":[{"find":"exact unique source snippet","replace":"replacement snippet"}]}] OR [{"path":"new/path","action":"create","rationale":"...","content":"complete new file content"}],
   "suggestedChecks": ["npm run lint"]
 }
-Use only paths in the supplied target repository inventory or clearly justified new paths.
+For existing files, ALWAYS prefer compact edits instead of returning the whole file. Each edit must have an exact, unique "find" string copied from supplied source and a "replace" string. Keep each edit small and independently applicable. Do not edit the same region twice. Use full "content" only when creating a new file. Use only paths in the supplied target repository inventory or clearly justified new paths.
 Context Files:
 ${fileContexts}
 User Task:
@@ -104,7 +104,7 @@ Respond only with valid JSON.`;
           const response = await fetch(`${route.baseUrl}/chat/completions`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 2048 }),
+            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 2048, reasoning: { effort: 'low' } }),
             signal: AbortSignal.timeout(30000),
           });
 

@@ -67,10 +67,14 @@ export class ForgeAgent {
       if (!['modify', 'create'].includes(change.action)) {
         return { valid: false, error: `Unsupported or dangerous patch action "${change.action}". Only create and modify are supported.` };
       }
-      if (typeof change.content !== 'string' || change.content.length === 0) {
-        return { valid: false, error: `Invalid patch content: "${change.path}" has empty or invalid content.` };
+      const hasContent = typeof change.content === 'string' && change.content.length > 0;
+      const hasEdits = Array.isArray(change.edits) && change.edits.length > 0
+        && change.edits.every((edit) => edit && typeof edit.find === 'string' && edit.find.length > 0 && typeof edit.replace === 'string');
+      if ((change.action === 'create' && !hasContent) || (change.action === 'modify' && !hasContent && !hasEdits)) {
+        return { valid: false, error: `Invalid patch: "${change.path}" needs complete content for create or valid exact edits for modify.` };
       }
-      if (Buffer.byteLength(change.content, 'utf-8') > MAX_FILE_PATCH_BYTES) {
+      const patchSize = hasContent ? Buffer.byteLength(change.content as string, 'utf-8') : Buffer.byteLength(JSON.stringify(change.edits ?? []), 'utf-8');
+      if (patchSize > MAX_FILE_PATCH_BYTES) {
         return { valid: false, error: `Patch size limit exceeded: "${change.path}" exceeds 100KB limit.` };
       }
     }
@@ -232,6 +236,7 @@ export class ForgeAgent {
         action: ch.action,
         rationale: ch.rationale,
         content: ch.content,
+        edits: ch.edits,
       }));
 
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
@@ -285,7 +290,21 @@ export class ForgeAgent {
           if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
           if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
           await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-          await fs.writeFile(absolutePath, change.content as string, 'utf-8');
+          if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
+            let current = await fs.readFile(absolutePath, 'utf-8');
+            for (const edit of change.edits) {
+              const first = current.indexOf(edit.find);
+              if (first < 0) throw new Error(`Exact edit anchor not found in ${change.path}: ${edit.find.slice(0, 100)}`);
+              const second = current.indexOf(edit.find, first + edit.find.length);
+              if (second >= 0) throw new Error(`Ambiguous edit anchor occurs more than once in ${change.path}: ${edit.find.slice(0, 100)}`);
+              current = current.slice(0, first) + edit.replace + current.slice(first + edit.find.length);
+            }
+            await fs.writeFile(absolutePath, current, 'utf-8');
+            // The GitHub commit API receives the verified full file from the tested worktree.
+            change.content = current;
+          } else {
+            await fs.writeFile(absolutePath, change.content as string, 'utf-8');
+          }
         }
 
         const packagePath = path.join(worktree, 'package.json');

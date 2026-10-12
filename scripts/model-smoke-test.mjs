@@ -35,6 +35,7 @@ for (const route of routes) {
         ],
         temperature: 0,
         max_tokens: 64,
+        reasoning: { effort: 'low' },
       }),
       signal: AbortSignal.timeout(30000),
     });
