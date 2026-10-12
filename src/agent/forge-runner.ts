@@ -33,6 +33,8 @@ async function runCli() {
   console.log('--- FORGE EXECUTION REPORT ---');
   console.log('Status:', report.status);
   console.log('Base SHA:', report.baseCommitSha);
+  console.log('Provider:', report.modelInvoked.provider);
+  console.log('Model:', report.modelInvoked.model);
   console.log('Branch:', report.branchName ?? 'N/A');
   console.log('Head commit:', report.headCommitSha ?? 'N/A');
   console.log('Requirements:', report.requirements.length);
