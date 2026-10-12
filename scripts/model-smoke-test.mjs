@@ -1,10 +1,17 @@
 const routes = [
   {
     base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, ''),
-    model: process.env.FREE_MODEL_NAME || 'qwen3.8-27b-throughput-5090',
-    provider: 'Murakumo anonymous Qwen3.8 coding route',
+    model: process.env.FREE_MODEL_NAME || 'qwen3.8-27b-throughput-b70',
+    provider: 'Murakumo anonymous Qwen3.8 throughput-b70 coding route',
     authorization: '',
-    timeoutMs: process.env.FREE_MODEL_BASE_URL ? 30000 : 420000,
+    timeoutMs: process.env.FREE_MODEL_BASE_URL ? 30000 : 60000,
+  },
+  {
+    base: 'https://api.murakumo.cloud/v1',
+    model: 'qwen3.8-27b-throughput-5090',
+    provider: 'Murakumo anonymous Qwen3.8 5090 fallback route',
+    authorization: '',
+    timeoutMs: 420000,
   },
   {
     base: 'https://api.murakumo.cloud/v1',
