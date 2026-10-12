@@ -158,10 +158,21 @@ export class ForgeAgent {
       // Read the target repository's package manifest and bounded real source files.
       const packageJsonRemote = await this.github.fetchFile(owner, repo, 'package.json', repoInfo.defaultBranch);
       const packageJsonContent = packageJsonRemote?.content || '{}';
+      const taskTerms = `${task.title} ${task.description}`
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((term) => term.length > 2);
       const sourcePaths = repoFilePaths
         .filter((p) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
         .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))
         .filter((p) => p !== 'package.json' && p !== 'AGENTS.md')
+        .sort((a, b) => {
+          const score = (candidate: string) => {
+            const lower = candidate.toLowerCase();
+            return taskTerms.reduce((total, term) => total + (lower.includes(term) ? 1 : 0), 0);
+          };
+          return score(b) - score(a) || a.localeCompare(b);
+        })
         .slice(0, 10);
       const sourceResults = await Promise.all(
         sourcePaths.map(async (p) => {
