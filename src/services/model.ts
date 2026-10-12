@@ -84,7 +84,7 @@ Respond only with valid JSON.`;
         provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous inference',
         authorization: '',
         timeoutMs: process.env.FREE_MODEL_BASE_URL ? 30000 : 60000,
-        maxAttempts: 2,
+        maxAttempts: 1,
       },
       {
         baseUrl: 'https://api.murakumo.cloud/v1',
@@ -92,7 +92,7 @@ Respond only with valid JSON.`;
         provider: 'Murakumo anonymous Qwen3.8 throughput-b70 coding route',
         authorization: '',
         timeoutMs: 60000,
-        maxAttempts: 2,
+        maxAttempts: 1,
       },
       {
         baseUrl: 'https://api.murakumo.cloud/v1',
@@ -100,7 +100,7 @@ Respond only with valid JSON.`;
         provider: 'Murakumo anonymous free model',
         authorization: '',
         timeoutMs: 30000,
-        maxAttempts: 2,
+        maxAttempts: 1,
       },
       {
         baseUrl: 'https://api.llmfaucet.dev/v1',
@@ -108,7 +108,7 @@ Respond only with valid JSON.`;
         provider: 'llmfaucet anonymous gateway',
         authorization: 'Bearer free',
         timeoutMs: 30000,
-        maxAttempts: 2,
+        maxAttempts: 1,
       },
     ];
     const primaryErrors: string[] = [];
