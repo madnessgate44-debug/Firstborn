@@ -50,6 +50,8 @@ export interface TaskDefinition {
   createdAt: string;
   author: string;
   allowPrCreation: boolean;
+  /** Optional exact path allowlist supplied by a trusted workflow caller. */
+  allowedPaths?: string[];
 }
 
 export interface TestExecutionResult {
