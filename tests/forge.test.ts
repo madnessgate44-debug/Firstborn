@@ -41,12 +41,30 @@ test('evidence: unrelated passing checks cannot produce a false PASS', () => {
   assert.match(result.evidence, /No criterion-specific passing check/);
 });
 
-test('evidence: a named but failing check stays PENDING', () => {
+test('evidence: a named but failing check yields FAIL, never PASS', () => {
   const result = evaluateRequirementEvidence(
     { acceptanceCriteria: 'npm run lint must pass' },
     [failing]
   );
+  assert.equal(result.status, 'FAIL');
+  assert.match(result.evidence, /Criterion-named check failed/);
+});
+
+test('evidence: explicit checkCommands bind evidence even when prose does not name it', () => {
+  const result = evaluateRequirementEvidence(
+    { acceptanceCriteria: 'the health endpoint responds', checkCommands: ['npm run build'] },
+    [{ command: 'npm run build', status: 'PASSED', exitCode: 0 }]
+  );
+  assert.equal(result.status, 'PASS');
+});
+
+test('evidence: a manualReviewNote is surfaced when no check applies', () => {
+  const result = evaluateRequirementEvidence(
+    { acceptanceCriteria: 'the wording reads clearly', manualReviewNote: 'requires human proofreading' },
+    [passing]
+  );
   assert.equal(result.status, 'PENDING');
+  assert.match(result.evidence, /requires human proofreading/);
 });
 
 test('evidence: criterion in description is also honored', () => {
