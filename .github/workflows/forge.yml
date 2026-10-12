@@ -24,8 +24,9 @@ on:
 
 concurrency:
   group: forge-${{ github.event.issue.number || github.event.inputs.task_id || github.run_id }}
-  # Queue same-task runs instead of interrupting a run that may already be committing.
+  # Preserve active runs and queue pending runs instead of silently replacing them.
   cancel-in-progress: false
+  queue: max
 
 jobs:
   run-forge:
