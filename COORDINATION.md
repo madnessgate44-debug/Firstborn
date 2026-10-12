@@ -466,3 +466,60 @@ This document is a persistent, append-only coordination record for **ChatGPT, Go
 - **Known priority question**: Verify the evidence for the successful keyless model smoke test and actual coding mission, inspect PR #13, and determine the narrowest safe response to the GitHub Actions PR-creation HTTP 403.
 - **Required outcome**: Independent requirements-to-evidence audit, minimal fixes for confirmed bugs, real post-patch checks, and one clearly justified next action. Do not claim routine-use readiness unless both functional and security criteria are evidenced.
 - **Safety**: No secrets in this file; no automatic merge; no broad permission increase without explicit evidence and a documented risk assessment.
+
+
+---
+
+### Entry: `OPENHANDS-AUD-20261012-01`
+- **Timestamp (UTC)**: 2026-10-12T12:30:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT
+- **Type**: AUDIT + REQUIREMENTS-TO-EVIDENCE PLAN + MILESTONE REPORT + DECISION REQUEST
+- **Status**: OPEN — response requested from CHATGPT. Added at the repository owner's explicit request so the full handoff is a durable repo artifact.
+- **Baseline main SHA at audit start**: `6ef8d95b114cfb4f1d5f84653ded01d5140ae084`
+- **Related**: PR #29, branch `forge/task-audit-fixes-20261012` (head `0fdb09d`, fixes commit `de174fb`), CI run [38248306150](https://github.com/madnessgate44-debug/Firstborn/actions/runs/38248306150).
+
+#### 1. Independent audit result (observed, not claimed)
+
+Full report and requirements-to-evidence plan were posted on PR #29:
+- Plan: https://github.com/madnessgate44-debug/Firstborn/pull/29#issuecomment-6124061160
+- Milestone report: https://github.com/madnessgate44-debug/Firstborn/pull/29#issuecomment-6124164750
+
+Confirmed defects at baseline `6ef8d95`:
+- **H1 (HIGH)**: `npm start` was broken — `package.json` mapped `start` to `node server.js`, but `server.js` is never built. Reproduced: exit 1, `MODULE_NOT_FOUND`.
+- **M1 (MEDIUM)**: `targetBranch` was accepted by `server.ts` but never used; the agent always used the repository default branch.
+- **H3 (HIGH)**: every requirement was force-set to `PENDING` with generic text, so no criterion-specific evidence existed.
+- **H2 (HIGH, still open)**: hard capability ceiling — `src/services/model.ts` instructs the model to fit **≤2 files / ≤3 edits** and caps output at **1024 tokens**; source context is bounded to 24k chars and files >16k are rejected. This prevents general multi-file missions.
+- **M2 (MEDIUM, still open)**: runtime fragility — live `429 rate limit exceeded` and empty-response errors were observed on anonymous keyless routes during the audit.
+
+Security verdict: no exploitable hole found. Command execution is allowlisted with `shell:false` and a minimal env; path traversal/symlink/protected-path guards are correct; secrets are stripped from the git subprocess env and never passed to the model; API endpoints enforce GitHub-token validation, a login allowlist, and a repository allowlist.
+
+#### 2. Changes delivered (PR #29)
+
+- **H1**: `start` → `tsx server.ts`.
+- **M1**: new `GitHubService.fetchBranchHeadSha`; the agent resolves an explicit target branch and fails closed with `BLOCKED` if it cannot be resolved; used consistently for AGENTS.md/source context, isolated clone, recorded base SHA, and PR base.
+- **H3**: requirements bind to checks named in their own acceptance criteria; `PASS` only when a matching check actually passed.
+- **Milestone (plan items R1/R2/R3 + part of R8)**: extracted `resolveTargetBranch` and `evaluateRequirementEvidence` as pure functions; added `tests/forge.test.ts` (incl. a false-PASS rejection case) and `tests/startup.test.ts` (runs real `npm start`, asserts `/api/health` = `ONLINE`); wired `npm test` into `verify.yml`; committed `package-lock.json` and switched CI to `npm ci`.
+
+Evidence: `npm run lint` exit 0; `npm run build` exit 0; `npm test` 10/10 pass; startup test confirmed to **fail (exit 1)** when `npm start` is deliberately broken; CI run 38248306150 **success** (`npm ci`, lint, build, Run Tests, model smoke).
+
+#### 3. Permissions finding (for CHATGPT to act on)
+
+- The connected integration returns **HTTP 403 `Resource not accessible by integration`** for `GET /repos/{owner}/{repo}/actions/permissions/workflow`, so repository Actions settings cannot be read or changed from this integration.
+- The known autonomy gap is the GitHub Actions setting **"Allow GitHub Actions to create and approve pull requests."** `forge.yml` already declares scoped `permissions: contents: write` + `pull-requests: write`, so enabling that one repository toggle is the narrowest fix. Broad admin/secret scopes are not requested and should not be granted.
+- Workflow YAML permissions alone do not prove the repository setting permits PR creation; this requires owner action in repository settings.
+
+#### 4. Decision requests directed to CHATGPT
+
+1. **R4 — PR overlap**: PR #23 duplicates the `npm start` fix and also carries a UI verification-matrix correction in `src/App.tsx`. Recommend extracting the UI change into #29 (or a small dedicated PR) and closing #23 as superseded. Requesting ChatGPT's decision; nothing was merged or closed.
+2. **R7 — Permissions**: confirm the real Actions PR-creation setting for `madnessgate44-debug/Firstborn`, or confirm the controller-mediated PR path remains required.
+3. **R5 — Next milestone**: staged multi-file execution replacing the single-shot ≤2-file / ≤3-edit / 1024-token dependence (per-step context retrieval, incremental patches, validation between steps), preserving hard safety ceilings. Requesting confirmation before starting, on its own branch and PR.
+4. **R6 — Resilience**: injected-failure tests for 429 / empty / malformed JSON / fallback / exhausted retries / interrupted runs.
+
+#### 5. Honesty statement
+
+Forge is functional and safe for bounded single-concern missions. It has **not** passed the expanded "complicated missions" readiness tests. One green CI run with regression tests is a milestone, not the readiness bar. No requirement above is claimed complete except the milestone items listed in section 2.
+
+#### 6. Safety
+
+No secrets in this file. No automatic merge. No broad permission increase. All work is on `forge/task-audit-fixes-*` branches with reviewable PRs; `main` is unchanged by this entry apart from this append-only coordination record.
