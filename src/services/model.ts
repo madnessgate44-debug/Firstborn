@@ -20,7 +20,7 @@ export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
   private readonly primaryUrl = (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, '');
-  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'mishima';
+  private readonly primaryModel = process.env.FREE_MODEL_NAME || 'murakumo/free';
 
   constructor() {
     const key = process.env.GEMINI_API_KEY?.trim();
@@ -35,7 +35,7 @@ export class ModelService {
 
   getProviderInfo() {
     return {
-      primaryProvider: 'Murakumo anonymous inference; llmfaucet keyless gateway as secondary route',
+      primaryProvider: 'Murakumo anonymous free models with capacity fallback; llmfaucet best-effort secondary route',
       primaryModel: this.primaryModel,
       primaryRequiresApiKey: false,
       fallbackProvider: 'Google AI Studio / Gemini',
@@ -78,7 +78,13 @@ Respond only with valid JSON.`;
       {
         baseUrl: this.primaryUrl,
         model: this.primaryModel,
-        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous inference',
+        provider: process.env.FREE_MODEL_BASE_URL ? 'Configured keyless OpenAI-compatible endpoint' : 'Murakumo anonymous free model',
+        authorization: '',
+      },
+      {
+        baseUrl: 'https://api.murakumo.cloud/v1',
+        model: 'mishima',
+        provider: 'Murakumo anonymous fallback model',
         authorization: '',
       },
       {
@@ -90,22 +96,31 @@ Respond only with valid JSON.`;
     ];
     const primaryErrors: string[] = [];
     for (const route of keylessRoutes) {
-      try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (route.authorization) headers.Authorization = route.authorization;
-        const response = await fetch(`${route.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ model: route.model, messages, temperature: 0.1 }),
-          signal: AbortSignal.timeout(45000),
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
-        const data = await response.json() as { choices?: { message?: { content?: string } }[]; model?: string };
-        const text = data.choices?.[0]?.message?.content;
-        if (!text) throw new Error('Endpoint returned no message content.');
-        return { text, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false };
-      } catch (err) {
-        primaryErrors.push(`${route.provider}: ${err instanceof Error ? err.message : String(err)}`);
+      let routeSucceeded = false;
+      for (let attempt = 0; attempt < 2 && !routeSucceeded; attempt += 1) {
+        try {
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (route.authorization) headers.Authorization = route.authorization;
+          const response = await fetch(`${route.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 2048 }),
+            signal: AbortSignal.timeout(45000),
+          });
+          if (response.status === 429 && attempt === 0) {
+            primaryErrors.push(`${route.provider}: HTTP 429 capacity busy; retrying once`);
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            continue;
+          }
+          if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+          const data = await response.json() as { choices?: { message?: { content?: string } }[]; model?: string };
+          const text = data.choices?.[0]?.message?.content;
+          if (!text) throw new Error('Endpoint returned no message content.');
+          return { text, model: data.model || route.model, provider: route.provider, success: true, fallbackUsed: false };
+        } catch (err) {
+          primaryErrors.push(`${route.provider}: ${err instanceof Error ? err.message : String(err)}`);
+          routeSucceeded = true;
+        }
       }
     }
     const primaryError = primaryErrors.join(' | ');
