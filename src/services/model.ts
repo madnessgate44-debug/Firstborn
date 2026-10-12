@@ -104,7 +104,7 @@ Respond only with valid JSON.`;
           const response = await fetch(`${route.baseUrl}/chat/completions`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 2048, reasoning: { effort: 'low' } }),
+            body: JSON.stringify({ model: route.model, messages, temperature: 0.1, max_tokens: 2048, reasoning: { effort: 'none' } }),
             signal: AbortSignal.timeout(30000),
           });
 
