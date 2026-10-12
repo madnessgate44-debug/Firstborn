@@ -49,6 +49,38 @@ function parseModelJson(text: string): any {
   return JSON.parse(normalized);
 }
 
+// Requested branch wins only when it is explicit and not the default; invalid
+// branches are resolved later (and fail closed) by the caller.
+export function resolveTargetBranch(requested: string | undefined, defaultBranch: string): string {
+  const trimmed = requested?.trim();
+  return trimmed && trimmed !== defaultBranch ? trimmed : defaultBranch;
+}
+
+// A requirement is only PASS when a check named in its own acceptance criteria
+// or description actually passed. Unrelated green checks cannot satisfy it.
+export function evaluateRequirementEvidence(
+  requirement: { acceptanceCriteria?: string; description?: string },
+  results: { command: string; status: string; exitCode: number }[]
+): { status: 'PASS' | 'PENDING'; evidence: string } {
+  const attemptEvidence = results.map((result) => `${result.command}=${result.exitCode}`).join(', ');
+  const criterion = `${requirement.acceptanceCriteria ?? ''} ${requirement.description ?? ''}`.toLowerCase();
+  const referencedChecks = results.filter((result) => {
+    const command = result.command.toLowerCase();
+    const scriptName = command === 'npm test' ? 'test' : command.replace(/^npm run /, '');
+    return criterion.includes(command) || criterion.includes(scriptName);
+  });
+  if (referencedChecks.length > 0 && referencedChecks.every((result) => result.status === 'PASSED')) {
+    return {
+      status: 'PASS',
+      evidence: `Criterion-matched checks passed: ${referencedChecks.map((result) => `${result.command}=${result.exitCode}`).join(', ')}.`,
+    };
+  }
+  return {
+    status: 'PENDING',
+    evidence: `No criterion-specific passing check was identified. Latest target-check attempt: ${attemptEvidence}. Manual review required.`,
+  };
+}
+
 export class ForgeAgent {
   private github: GitHubService;
   private model: ModelService;
@@ -267,10 +299,7 @@ export class ForgeAgent {
       log('info', `Target repository verified. Base branch: ${repoInfo.defaultBranch}, Base SHA: ${report.baseCommitSha}`);
 
       // Honor an explicitly requested target branch; fall back to the repository default.
-      const requestedBranch = task.targetBranch?.trim();
-      const targetBranch = requestedBranch && requestedBranch !== repoInfo.defaultBranch
-        ? requestedBranch
-        : repoInfo.defaultBranch;
+      const targetBranch = resolveTargetBranch(task.targetBranch, repoInfo.defaultBranch);
       if (targetBranch !== repoInfo.defaultBranch) {
         const branchSha = await this.github.fetchBranchHeadSha(owner, repo, targetBranch);
         if (!branchSha) {
@@ -690,23 +719,11 @@ export class ForgeAgent {
         }
 
         // Bind each requirement to the concrete evidence available for it rather than
-        // forcing a blanket PENDING. A requirement passes only when a check named in its
-        // own acceptance criteria actually passed; otherwise it stays PENDING for review.
-        const attemptEvidence = latestAttemptResults.map((result) => `${result.command}=${result.exitCode}`).join(', ');
+        // forcing a blanket PENDING (see evaluateRequirementEvidence).
         report.requirements.forEach((req) => {
-          const criterion = `${req.acceptanceCriteria ?? ''} ${req.description ?? ''}`.toLowerCase();
-          const referencedChecks = latestAttemptResults.filter((result) => {
-            const command = result.command.toLowerCase();
-            const scriptName = command === 'npm test' ? 'test' : command.replace(/^npm run /, '');
-            return criterion.includes(command) || criterion.includes(scriptName);
-          });
-          if (referencedChecks.length > 0 && referencedChecks.every((result) => result.status === 'PASSED')) {
-            req.status = 'PASS';
-            req.evidence = `Criterion-matched checks passed: ${referencedChecks.map((result) => `${result.command}=${result.exitCode}`).join(', ')}.`;
-          } else {
-            req.status = 'PENDING';
-            req.evidence = `No criterion-specific passing check was identified. Latest target-check attempt: ${attemptEvidence}. Manual review required.`;
-          }
+          const evaluation = evaluateRequirementEvidence(req, latestAttemptResults);
+          req.status = evaluation.status;
+          req.evidence = evaluation.evidence;
         });
       } finally {
         await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
