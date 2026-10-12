@@ -82,7 +82,7 @@ jobs:
               outcome = os.environ.get('FORGE_STEP_OUTCOME', 'unknown')
               data['workflowOutcome'] = outcome
               data['status'] = 'WORKFLOW_STEP_COMPLETED' if outcome == 'success' else 'WORKFLOW_STEP_FAILED'
-              evidence.write_text(json.dumps(data, indent=2) + '\\n')
+              evidence.write_text(json.dumps(data, indent=2) + '\n')
           PY
 
       - name: Upload Execution Evidence Artifact
