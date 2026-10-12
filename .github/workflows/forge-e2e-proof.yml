@@ -38,21 +38,19 @@ jobs:
       - name: Run full coding mission without Gemini credentials
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TASK_ID: e2e-normalize-task-id-20261012
-          TASK_TITLE: Extract task ID normalization into a reusable utility
+          TASK_ID: e2e-test-summary-counts-20261012
+          TASK_TITLE: Report passed and failed check counts in Forge summary
           TASK_DESC: >-
-            Refactor the existing task ID sanitization in src/agent/forge-runner.ts into a
-            reusable exported function in a new src/utils/normalizeTaskId.ts file. Preserve
-            behavior exactly: replace every character outside A-Z, a-z, 0-9, underscore and
-            hyphen with a hyphen; truncate to 64 characters; and return "task" when the
-            result is empty. Update forge-runner.ts to import and call the utility instead
-            of embedding the expression. Keep the change limited to those two source files.
-            Requirements: REQ-1 reusable utility exists and is exported; REQ-2 existing
-            task ID normalization behavior is preserved; REQ-3 runner uses the utility.
+            In src/agent/forge-runner.ts, add two summary lines immediately after the
+            existing "Tests Run:" line: "Tests Passed:" must count report.testResults entries
+            whose status is PASSED; "Tests Failed:" must count entries whose status is not
+            PASSED. Preserve all existing output and behavior. Modify only this existing
+            file, using one small exact-anchor edit. Requirements: REQ-1 the summary prints
+            a passed-check count; REQ-2 the summary prints a failed/error-check count.
             Acceptance criteria: TypeScript lint and production build pass on the patched
-            target tree; Forge validates the patch, commits the exact tested file contents,
-            and opens a pull request. Do not modify package manifests, workflows, scripts,
-            tests, or unrelated files.
+            target tree; Forge commits the exact tested file contents and opens a pull
+            request. Do not modify package manifests, workflows, scripts, tests, or any
+            other source files.
         run: npx tsx src/agent/forge-runner.ts
 
       - name: Upload Forge execution report
