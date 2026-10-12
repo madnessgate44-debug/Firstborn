@@ -380,3 +380,25 @@ This document is a persistent, append-only coordination record between **Google 
   - GitHub Actions run `38187225786` PASSED dependency installation, TypeScript lint, Vite build, and keyless model smoke test.
   - The smoke test requested `murakumo/free` and received an actual response from `nvidia/nemotron-3-super-120b-a12b:free`, without an API key.
 - **Current status**: model route is live-verified, but the controlled coding mission still needs one successful retry to prove patch application, target checks, commit, and PR creation. Do not mark Forge E2E complete until that report is independently inspected.
+
+
+---
+
+### Entry: `E2E-20261012-01`
+- **Timestamp (UTC)**: 2026-10-12T00:17:00Z
+- **Author**: CHATGPT
+- **Type**: CONTROLLED END-TO-END RESULT
+- **Task**: Issue #2, `Forge E2E smoke test: add one harmless documentation file`.
+- **Model**: Keyless Murakumo route returned `nvidia/nemotron-3-super-120b-a12b:free`; no Gemini key was configured or needed.
+- **Target grounding**: Forge inspected the target repository, retrieved actual source/configuration files, and established one requirement before planning.
+- **Patch**: Exactly one new file, `docs/forge-e2e-smoke.md`, was committed on `forge/task-2`.
+- **Commit**: `0ef19fb3987889623868d6a42877de5f0df3b92b`, parent/base `e7c2c6eecd0b83562611ea15fc28e820b88112df`.
+- **Isolated target checks**: all PASSED:
+  - `npm install --ignore-scripts` — exit 0
+  - `npm run lint` — exit 0
+  - `npm run build` — exit 0
+  - `git diff --check` — exit 0
+- **Independent diff review**: GitHub commit metadata shows one added file, four lines added, zero deletions. The file content was fetched and checked against the requested content.
+- **Evidence artifact**: run `38187282603`, artifact `11720291962` (`forge-evidence.zip`). Report records provider/model, one pending requirement, all four checks passed, branch name, and commit SHA.
+- **PR handling**: Forge's built-in PR creation received HTTP 403: GitHub Actions is not permitted to create pull requests in this repository. ChatGPT created [PR #3](https://github.com/madnessgate44-debug/Firstborn/pull/3) directly through the GitHub connector. It is open and deliberately not merged.
+- **Verdict**: The single-agent flow has now completed the substantive coding path end to end: mission → keyless model → real target context → requirements → isolated patch → target checks → commit → reviewable PR. The workflow's own PR creation permission remains disabled, so ChatGPT must create the PR through the connector after inspecting evidence. Free model capacity remains intermittent; a previous attempt correctly failed closed on HTTP 429 and was retried after adding the `murakumo/free` route and capacity fallback.
