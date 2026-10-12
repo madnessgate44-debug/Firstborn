@@ -5,7 +5,7 @@
 
 import { TaskDefinition, TaskExecutionReport, FileChangePlan, RequirementEvidenceInput } from '../types/agent.ts';
 import { GitHubService } from '../services/github.ts';
-import { ModelService } from '../services/model.ts';
+import { ModelService, isKeylessOnly } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
 import { loadForgeLimits } from './limits.ts';
 import { evaluatePermissionPolicy, loadPermissionConfig } from './policy.ts';
@@ -376,7 +376,7 @@ export class ForgeAgent {
       startTime: new Date().toISOString(),
       baseCommitSha: 'UNKNOWN',
       modelInvoked: {
-        provider: process.env.FIRSTBORN_KEYLESS_ONLY === 'true' ? 'keyless router (not yet selected)' : 'not selected',
+        provider: isKeylessOnly() ? 'keyless router (not yet selected)' : 'not selected',
         model: 'not-selected',
         callsCount: 0,
         fallbackUsed: false,

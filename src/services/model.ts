@@ -27,12 +27,23 @@ const KEYLESS_CREDENTIAL_ENV_NAMES = [
   'FREELM_CEREBRAS_KEYS', 'FREELM_MISTRAL_KEYS', 'FREELM_NIM_KEYS', 'FREELM_KILO_KEYS',
 ];
 
+/**
+ * GitHub capitalizes repository-variable names, so the flag can arrive as
+ * `True`/`TRUE`, not just `true`. Normalize before comparing, otherwise the
+ * keyless-only safety lock silently fails to engage.
+ */
+function isKeylessOnly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.FIRSTBORN_KEYLESS_ONLY ?? '').trim().toLowerCase() === 'true';
+}
+
+export { isKeylessOnly };
+
 export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
 
   constructor() {
-    if (process.env.FIRSTBORN_KEYLESS_ONLY === 'true') {
+    if (isKeylessOnly()) {
       for (const name of KEYLESS_CREDENTIAL_ENV_NAMES) delete process.env[name];
       process.env.FREELM_KEYLESS = '1';
     }
@@ -53,8 +64,8 @@ export class ModelService {
       primaryRequiresApiKey: false,
       fallbackProvider: 'Google AI Studio / Gemini',
       fallbackModel: 'gemini-2.5-flash',
-      fallbackConfigured: this.geminiConfigured && process.env.FIRSTBORN_KEYLESS_ONLY !== 'true',
-      costStatus: process.env.FIRSTBORN_KEYLESS_ONLY === 'true'
+      fallbackConfigured: this.geminiConfigured && !isKeylessOnly(),
+      costStatus: isKeylessOnly()
         ? 'Strict keyless-only mode: provider credentials are removed and Gemini fallback is disabled.'
         : 'freelm prefers configured free-tier providers and can fall back to anonymous keyless endpoints; Gemini fallback is optional.',
     };
@@ -198,7 +209,7 @@ Respond only with valid JSON.`;
 
     const primaryError = primaryErrors.join(' | ') || 'freelm returned no usable text without a reported provider error';
 
-    if (this.gemini && process.env.FIRSTBORN_KEYLESS_ONLY !== 'true') {
+    if (this.gemini && !isKeylessOnly()) {
       try {
         const response = await this.gemini.models.generateContent({
           model: 'gemini-2.5-flash',
@@ -233,7 +244,7 @@ Respond only with valid JSON.`;
       model: 'chat:large',
       provider: 'keyless model routes unavailable',
       success: false,
-      error: `All keyless primary routes failed: ${primaryError}. ${process.env.FIRSTBORN_KEYLESS_ONLY === 'true' ? 'Gemini fallback is disabled by FIRSTBORN_KEYLESS_ONLY=true.' : 'Gemini fallback is not configured.'}`,
+      error: `All keyless primary routes failed: ${primaryError}. ${isKeylessOnly() ? 'Gemini fallback is disabled by FIRSTBORN_KEYLESS_ONLY=true.' : 'Gemini fallback is not configured.'}`,
       fallbackUsed: false,
       keylessRouteErrors: [...primaryErrors],
     };
