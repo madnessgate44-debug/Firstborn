@@ -1,21 +1,31 @@
 const routes = [
   {
-    base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\/+$/, ''),
-    model: process.env.FREE_MODEL_NAME || 'murakumo/free',
-    provider: 'Murakumo anonymous free model',
+    base: (process.env.FREE_MODEL_BASE_URL || 'https://api.murakumo.cloud/v1').replace(/\\/+$/, ''),
+    model: process.env.FREE_MODEL_NAME || 'qwen3.8-27b-throughput-5090',
+    provider: 'Murakumo anonymous Qwen3.8 coding route',
     authorization: '',
+    timeoutMs: process.env.FREE_MODEL_BASE_URL ? 30000 : 420000,
+  },
+  {
+    base: 'https://api.murakumo.cloud/v1',
+    model: 'murakumo/free',
+    provider: 'Murakumo anonymous free alias fallback',
+    authorization: '',
+    timeoutMs: 30000,
   },
   {
     base: 'https://api.murakumo.cloud/v1',
     model: 'mishima',
     provider: 'Murakumo anonymous fallback model',
     authorization: '',
+    timeoutMs: 60000,
   },
   {
     base: 'https://api.llmfaucet.dev/v1',
     model: 'auto:coding',
     provider: 'llmfaucet anonymous gateway',
     authorization: 'Bearer free',
+    timeoutMs: 30000,
   },
 ];
 
@@ -37,7 +47,7 @@ for (const route of routes) {
         max_tokens: 64,
         reasoning: { effort: 'none' },
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(route.timeoutMs),
     });
 
     if (response.status === 429) {
