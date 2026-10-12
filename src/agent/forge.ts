@@ -272,11 +272,23 @@ export function validateTestStructure(
     return { valid: false, error: `Test file has an unclosed "${open.char}" delimiter at offset ${open.index}.` };
   }
 
-  const testCalls = /\\b(?:test|it)\\s*\\(/g;
+  const testCallIndexes: number[] = [];
+  for (const testName of ['test', 'it']) {
+    let at = code.indexOf(testName);
+    while (at >= 0) {
+      const before = at === 0 ? '' : code[at - 1];
+      let after = at + testName.length;
+      while (after < code.length && /\s/.test(code[after])) after += 1;
+      const boundaryBefore = !before || !/[A-Za-z0-9_$]/.test(before);
+      if (boundaryBefore && code.slice(at, at + testName.length) === testName && code[after] === '(') {
+        testCallIndexes.push(at);
+      }
+      at = code.indexOf(testName, at + testName.length);
+    }
+  }
+  testCallIndexes.sort((left, right) => left - right);
   const callbackRanges: { start: number; end: number; name: string }[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = testCalls.exec(code)) !== null) {
-    const callStart = match.index;
+  for (const callStart of testCallIndexes) {
     const openParen = code.indexOf('(', callStart);
     let depth = 0;
     let closeParen = -1;
@@ -307,7 +319,6 @@ export function validateTestStructure(
       }
     }
     if (bodyClose < 0) continue;
-
     const parent = callbackRanges.find((range) => callStart > range.start && callStart < range.end);
     if (parent) {
       return {
@@ -315,7 +326,13 @@ export function validateTestStructure(
         error: `Nested test declaration rejected in "${filePath}": a test() or it() call appears inside the callback for "${parent.name}".`,
       };
     }
-    const label = content.slice(openParen + 1, closeParen).match(/^\\s*(['"])(.*?)\\1/s)?.[2] ?? '<unnamed test>';
+    const firstArgument = content.slice(openParen + 1, closeParen).trim();
+    let label = '<unnamed test>';
+    if (firstArgument.startsWith("'") || firstArgument.startsWith('"')) {
+      const quote = firstArgument[0];
+      const labelEnd = firstArgument.indexOf(quote, 1);
+      if (labelEnd > 0) label = firstArgument.slice(1, labelEnd);
+    }
     callbackRanges.push({ start: bodyOpen, end: bodyClose, name: label });
   }
   return { valid: true };
