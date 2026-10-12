@@ -8,6 +8,7 @@ import { GitHubService } from '../services/github.ts';
 import { ModelService } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
 import { loadForgeLimits } from './limits.ts';
+import { evaluatePermissionPolicy, loadPermissionConfig } from './policy.ts';
 import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -879,6 +880,19 @@ export class ForgeAgent {
       const branchName = `forge/task-${task.id.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-${runDiscriminator}`;
       report.branchName = branchName;
 
+      // R7: the permission control plane decides, before any GitHub write, whether
+      // this mission may create a branch, commit, or open a PR. Defaults preserve
+      // least privilege; broader capability must be enabled explicitly.
+      const permission = evaluatePermissionPolicy(
+        {
+          requestedPrCreation: task.allowPrCreation,
+          branchName,
+          targetBranch,
+          repo: `${owner}/${repo}`,
+        },
+        loadPermissionConfig(),
+      );
+
       // Extract validated files with content
       const filesToCommit = report.plannedChanges
         .filter((c) => c.content && typeof c.content === 'string')
@@ -895,7 +909,12 @@ export class ForgeAgent {
       if (!task.allowPrCreation) {
         log('info', 'Task verified locally. Pull Request creation not authorized by caller.');
         report.status = 'VERIFYING';
+      } else if (!permission.allowBranchWrite) {
+        report.status = 'BLOCKED';
+        report.blockerReason = `Permission policy denied GitHub write: ${permission.reason}`;
+        log('warn', report.blockerReason);
       } else {
+        log('info', `Permission policy (${permission.effectiveProfile}): ${permission.reason}`);
         log('info', `Creating or updating isolated branch ${branchName} at base SHA ${report.baseCommitSha}...`);
         const branchRes = await this.github.createOrUpdateBranch(owner, repo, branchName, report.baseCommitSha);
 
@@ -921,8 +940,14 @@ export class ForgeAgent {
             report.headCommitSha = commitRes.headSha;
             log('info', `Committed changes. Head SHA: ${report.headCommitSha}`);
 
-            // Open Pull Request with genuine head and base
+            // Open Pull Request with genuine head and base (requires 'review' profile)
             log('info', 'Opening Pull Request on GitHub...');
+            if (!permission.allowOpenPr) {
+              report.status = 'BLOCKED';
+              report.blockerReason = `Permission policy withheld Pull Request: ${permission.reason}`;
+              log('warn', report.blockerReason);
+              return report;
+            }
             const prRes = await this.github.openPullRequest({
               owner,
               repo,

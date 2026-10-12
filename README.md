@@ -91,6 +91,18 @@ curl -sS -X POST http://localhost:3000/api/tasks/run \
 | `FORGE_ALLOWED_REPOS` | Comma-separated repository allowlist (default: this repo). |
 | `FORGE_ALLOWED_LOGINS` | Comma-separated operator allowlist (default: the owner). |
 | `PORT` | HTTP port for `server.ts` (default 3000). |
+| `FORGE_PERMISSION_PROFILE` | `readonly` \| `sandbox` \| `review` (default) \| `publish`. Controls branch/commit/PR authority. Merge is never granted. |
+| `FORGE_REQUIRE_HUMAN_APPROVAL` | `true` caps the effective profile at `sandbox` (branch only, no PR) until a human approves. |
+| `FORGE_ALLOWED_BRANCH_PREFIX` | Branch prefix the agent may push (default `forge/task-`). |
+| `FORGE_FORBIDDEN_BRANCHES` | Branches that can never be pushed (default `main,master`). |
+
+### Permission control plane (R7)
+Every GitHub write step consults a single pure decision function
+(`evaluatePermissionPolicy`) before acting. The default is least privilege:
+commit to an isolated `forge/task-*` branch and open a reviewable PR; `main` is
+denied by policy; merging is not representable. See
+`docs/R7_PERMISSION_RISK_ASSESSMENT.md` for the risk assessment and the full
+profile table.
 
 ---
 
