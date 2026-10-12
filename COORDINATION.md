@@ -721,3 +721,41 @@ Remaining before exhaustion testing: merge PR #34 (human authority). The engine,
 trace, bounded limits, and doc are complete and verified.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-FIX-20261012-03`
+- **Timestamp (UTC)**: 2026-10-12T16:10:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: DEFECT FIX (safety lock failed open)
+- **Branch**: `fix/keyless-flag-case-insensitive` (PR #35). Base `main` = `59778f6`.
+
+#### Defect (owner-reported, confirmed genuine)
+`FIRSTBORN_KEYLESS_ONLY` was compared with exact `=== 'true'`. GitHub
+repository-variable values commonly arrive capitalized (`True`), so the
+keyless-only safety lock **silently never engaged**: credentials were not
+stripped, `FREELM_KEYLESS` was not forced, Gemini fallback stayed enabled.
+A guard that fails open with no warning is the worst kind.
+
+#### Fix
+Single normalized helper `isKeylessOnly()` (`src/services/model.ts`), used in
+`model.ts` and `forge.ts`. Lowercase `true` behaviour unchanged. Regression test
+added (`True`/`TRUE`/` true ` engage; `false`/`no`/`0`/empty do not).
+
+#### Audited for the same class
+All other boolean flags route through `envFlag` (`policy.ts`), which already
+lowercases. `FIRSTBORN_KEYLESS_ONLY` was the only occurrence.
+
+#### Evidence
+`lint` 0 · `tests` 43/43 · `build` 0 · `model:smoke` PASS (keyless-only mode).
+Live: `FIRSTBORN_KEYLESS_ONLY=True` -> report `provider: kilo` (keyless router);
+previously `provider: not selected`.
+
+#### Owner's Actions panel values — verified correct
+- `FIRSTBORN_KEYLESS_ONLY=True` -> **correct** (was inert before this fix).
+- `FORGE_PERMISSION_PROFILE=review` -> correct; effective profile will be
+  `sandbox` while `FORGE_REQUIRE_HUMAN_APPROVAL=true`.
+- `FORGE_REQUIRE_HUMAN_APPROVAL=true` -> correct.
+
+No secrets, tokens, or credentials appear in this entry.
