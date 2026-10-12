@@ -414,6 +414,11 @@ export class ForgeAgent {
         );
         report.modelInvoked.provider = modelResult.provider;
         report.modelInvoked.model = modelResult.model;
+        report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
+        report.modelInvoked.keylessRouteErrors = [
+          ...(report.modelInvoked.keylessRouteErrors ?? []),
+          ...(modelResult.keylessRouteErrors ?? []),
+        ];
         if (!modelResult.success) {
           report.status = 'FAILED';
           report.errorMessage = `Model JSON repair failed: ${modelResult.error}`;
@@ -444,6 +449,11 @@ export class ForgeAgent {
         );
         report.modelInvoked.provider = modelResult.provider;
         report.modelInvoked.model = modelResult.model;
+        report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
+        report.modelInvoked.keylessRouteErrors = [
+          ...(report.modelInvoked.keylessRouteErrors ?? []),
+          ...(modelResult.keylessRouteErrors ?? []),
+        ];
         if (!modelResult.success) {
           report.status = 'FAILED';
           report.errorMessage = `Model patch repair failed: ${modelResult.error}`;
