@@ -577,14 +577,12 @@ export class ForgeAgent {
             ).join('\n\n--- FAILED CHECK ---\n\n');
             log('warn', `Target checks failed; requesting one bounded model repair with ${failedResults.length} failing check(s).`);
             report.modelInvoked.callsCount += 1;
-            const repairContext = [
-              ...contextFiles,
-              { path: 'FAILED_CHECKS.txt', content: failureDetails },
-              { path: 'PREVIOUS_PATCH_SUMMARY.txt', content: report.plannedChanges.map((change) => `${change.action} ${change.path}: ${change.rationale}`).join('\n') },
-            ];
+            const previousPatchSummary = report.plannedChanges
+              .map((change) => `${change.action} ${change.path}: ${change.rationale}`)
+              .join('\n');
             const repairResult = await this.model.generatePlanAndPatch(
-              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (one bounded retry). The previous patch was applied but failed these target checks; the exact diagnostics are in FAILED_CHECKS.txt. Re-read the original source and diagnostics, fix the actual cause (including missing imports or type/syntax errors), and return a complete replacement JSON plan for the same task. Preserve the original task scope. Do not weaken, skip, or silence checks. Existing files must use exact-anchor edits copied verbatim from the original supplied source. If adding declarations, preserve top-level/interface/class boundaries. Do not modify package manifests, workflows, scripts, secrets, or security controls.`,
-              repairContext
+              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (one bounded retry). The previous patch was applied but failed target checks. Fix the actual cause (including missing imports or type/syntax errors), and return a complete replacement JSON plan for the same task. Preserve the original task scope. Do not weaken, skip, or silence checks. Existing files must use exact-anchor edits copied verbatim from the original supplied source. If adding declarations, preserve top-level/interface/class boundaries. Do not modify package manifests, workflows, scripts, secrets, or security controls.\n\nPREVIOUS PATCH SUMMARY:\n${previousPatchSummary}\n\nFAILED CHECK DIAGNOSTICS:\n${failureDetails}`,
+              contextFiles
             );
             report.modelInvoked.provider = repairResult.provider;
             report.modelInvoked.model = repairResult.model;
