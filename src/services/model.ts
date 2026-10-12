@@ -41,8 +41,10 @@ export class ModelService {
       primaryRequiresApiKey: false,
       fallbackProvider: 'Google AI Studio / Gemini',
       fallbackModel: 'gemini-2.5-flash',
-      fallbackConfigured: this.geminiConfigured,
-      costStatus: 'Primary route is anonymous shared free capacity with variable limits; Gemini fallback requires an already-configured API key.',
+      fallbackConfigured: this.geminiConfigured && process.env.FIRSTBORN_KEYLESS_ONLY !== 'true',
+      costStatus: process.env.FIRSTBORN_KEYLESS_ONLY === 'true'
+        ? 'Strict keyless-only mode: Gemini fallback is disabled for this execution.'
+        : 'Primary route is anonymous shared free capacity with variable limits; Gemini fallback requires an already-configured API key.',
     };
   }
 
