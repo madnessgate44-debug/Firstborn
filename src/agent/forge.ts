@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TaskDefinition, TaskExecutionReport, FileChangePlan, RequirementEvidenceInput } from '../types/agent.ts';
+import { TaskDefinition, TaskExecutionReport, FileChangePlan, RequirementEvidenceInput, TestExecutionResult } from '../types/agent.ts';
 import { GitHubService } from '../services/github.ts';
 import { ModelService, isKeylessOnly } from '../services/model.ts';
 import { TestRunnerService } from '../services/test-runner.ts';
