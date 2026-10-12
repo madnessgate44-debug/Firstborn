@@ -215,9 +215,11 @@ export class ForgeAgent {
       startTime: new Date().toISOString(),
       baseCommitSha: 'UNKNOWN',
       modelInvoked: {
-        provider: 'Google AI Studio / Gemini',
-        model: 'gemini-2.5-flash',
+        provider: process.env.FIRSTBORN_KEYLESS_ONLY === 'true' ? 'keyless router (not yet selected)' : 'not selected',
+        model: 'not-selected',
         callsCount: 0,
+        fallbackUsed: false,
+        keylessRouteErrors: [],
       },
       requirements: [],
       plannedChanges: [],
@@ -373,7 +375,10 @@ export class ForgeAgent {
       report.modelInvoked.provider = modelResult.provider;
       report.modelInvoked.model = modelResult.model;
       report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
-      report.modelInvoked.keylessRouteErrors = modelResult.keylessRouteErrors ?? [];
+      report.modelInvoked.keylessRouteErrors = [
+          ...(report.modelInvoked.keylessRouteErrors ?? []),
+          ...(modelResult.keylessRouteErrors ?? []),
+        ];
       if (!modelResult.success) {
         report.status = 'FAILED';
         report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
@@ -582,7 +587,10 @@ export class ForgeAgent {
                 path: change.path,
                 action: change.action,
                 rationale: change.rationale,
-                edits: change.edits,
+                edits: change.edits?.map((edit) => ({
+                  find: edit.find.slice(0, 500),
+                  replace: edit.replace.slice(0, 800),
+                })),
                 contentPreview: typeof change.content === 'string' ? change.content.slice(0, 1200) : undefined,
               }, null, 2))
               .join('\n');
@@ -593,7 +601,10 @@ export class ForgeAgent {
             report.modelInvoked.provider = repairResult.provider;
             report.modelInvoked.model = repairResult.model;
             report.modelInvoked.fallbackUsed = repairResult.fallbackUsed ?? false;
-            report.modelInvoked.keylessRouteErrors = repairResult.keylessRouteErrors ?? [];
+            report.modelInvoked.keylessRouteErrors = [
+              ...(report.modelInvoked.keylessRouteErrors ?? []),
+              ...(repairResult.keylessRouteErrors ?? []),
+            ];
             if (!repairResult.success) {
               report.status = 'FAILED';
               report.errorMessage = `Target-check repair model call failed: ${repairResult.error}`;
