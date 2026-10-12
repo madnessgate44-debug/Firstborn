@@ -2,7 +2,7 @@ name: Forge Coding Agent
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [labeled]
   workflow_dispatch:
     inputs:
       task_id:
@@ -17,6 +17,10 @@ on:
         description: 'Task Detailed Description'
         required: true
         default: 'Verify tests and baseline commit integrity'
+
+concurrency:
+  group: forge-${{ github.event.issue.number || github.event.inputs.task_id || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   run-forge:
