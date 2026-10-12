@@ -33,6 +33,7 @@ export interface TaskDefinition {
   createdAt: string;
   author: string;
   allowPrCreation: boolean;
+  missionProofRun?: boolean;
 }
 
 export interface TestExecutionResult {
