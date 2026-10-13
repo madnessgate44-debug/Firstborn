@@ -168,51 +168,69 @@ Respond only with valid JSON.`;
       // route is attempted before any fallback. `chat`/`chat:fast`/`chat:small`
       // follow the same failover chain, and freelm itself degrades a failing
       // provider/model internally (hedge, cooldowns, benching) before we step down.
-      for (const alias of ['chat:large', 'chat', 'chat:fast', 'chat:small', 'chat:best']) {
-        try {
-          const response = await llm.chat(messages, {
-            model: alias,
-            temperature: 0.1,
-            max_tokens: 1024,
-            // Some top-tier keyless routes are reasoning models (e.g. the kilo
-            // nemotron route) that spend the whole 1024-token budget on hidden
-            // reasoning_content and return empty text with finish_reason=length.
-            // Disabling reasoning keeps the compact JSON answer within budget.
-            reasoning_effort: 'none',
-            signal: AbortSignal.timeout(40000),
-          });
-          const content = response.text.trim();
-          invokedProvider = response.provider || invokedProvider;
-          invokedModel = response.model || invokedModel;
-          if (!content) {
-            const finishReason = response.choices?.[0]?.finish_reason ?? 'unknown';
-            const detail = finishReason === 'length' ? 'output token budget was exhausted' : 'response contained no usable text';
-            primaryErrors.push(`${alias} via ${invokedProvider}/${invokedModel}: ${detail} (finish_reason=${finishReason})`);
-            capabilityEscalation.push(`${alias}: ${detail}`);
-            continue;
-          }
-          // Prefer the finest model that actually answered: if we had to settle
-          // below the top capability tier, say so explicitly.
-          const triedTopTier = alias === 'chat:large' || alias === 'chat:best';
-          return {
-            text: content,
-            model: invokedModel,
-            provider: invokedProvider,
-            success: true,
-            fallbackUsed: false,
-            keylessRouteErrors: [
-              ...primaryErrors,
-              ...routingNotes,
-              ...(triedTopTier
-                ? []
-                : [`selected ${alias} (${invokedModel} via ${invokedProvider}) after stronger routes failed: ${capabilityEscalation.join(' | ') || 'none reported'}`]),
-            ],
-          };
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          primaryErrors.push(`${alias}: ${errorMessage}`);
-          capabilityEscalation.push(`${alias}: ${errorMessage}`);
+      // Bounded retry: a free route can stay cooled down longer than one
+      // chat() wait (maxWait). If a whole sweep fails for availability reasons,
+      // wait with backoff and sweep again, up to a hard deadline, so a prolonged
+      // 429 still returns an answer instead of failing the request.
+      const deadline = Date.now() + 90000;
+      for (let round = 0; round < 3; round++) {
+        if (round > 0) {
+          const waitMs = round === 1 ? 5000 : 15000;
+          if (Date.now() + waitMs > deadline) break;
+          primaryErrors.push(`retry round ${round + 1}: no route was ready in the previous sweep; waited ${waitMs}ms before retrying`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
         }
+        let availabilityFailure = false;
+        for (const alias of ['chat:large', 'chat', 'chat:fast', 'chat:small', 'chat:best']) {
+          if (Date.now() > deadline) break;
+          try {
+            const response = await llm.chat(messages, {
+              model: alias,
+              temperature: 0.1,
+              max_tokens: 1024,
+              // Some top-tier keyless routes are reasoning models (e.g. the kilo
+              // nemotron route) that spend the whole 1024-token budget on hidden
+              // reasoning_content and return empty text with finish_reason=length.
+              // Disabling reasoning keeps the compact JSON answer within budget.
+              reasoning_effort: 'none',
+              signal: AbortSignal.timeout(40000),
+            });
+            const content = response.text.trim();
+            invokedProvider = response.provider || invokedProvider;
+            invokedModel = response.model || invokedModel;
+            if (!content) {
+              const finishReason = response.choices?.[0]?.finish_reason ?? 'unknown';
+              const detail = finishReason === 'length' ? 'output token budget was exhausted' : 'response contained no usable text';
+              primaryErrors.push(`${alias} via ${invokedProvider}/${invokedModel}: ${detail} (finish_reason=${finishReason})`);
+              capabilityEscalation.push(`${alias}: ${detail}`);
+              continue;
+            }
+            // Prefer the finest model that actually answered: if we had to settle
+            // below the top capability tier, say so explicitly.
+            const triedTopTier = alias === 'chat:large' || alias === 'chat:best';
+            return {
+              text: content,
+              model: invokedModel,
+              provider: invokedProvider,
+              success: true,
+              fallbackUsed: false,
+              keylessRouteErrors: [
+                ...primaryErrors,
+                ...routingNotes,
+                ...(triedTopTier
+                  ? []
+                  : [`selected ${alias} (${invokedModel} via ${invokedProvider}) after stronger routes failed: ${capabilityEscalation.join(' | ') || 'none reported'}`]),
+              ],
+            };
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            availabilityFailure = true;
+            primaryErrors.push(`${alias}: ${errorMessage}`);
+            capabilityEscalation.push(`${alias}: ${errorMessage}`);
+          }
+        }
+        // An empty-text sweep is a content problem; waiting will not change it.
+        if (!availabilityFailure) break;
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
