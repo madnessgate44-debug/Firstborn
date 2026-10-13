@@ -4,7 +4,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { FreeLLM, PROVIDER_ENV, envKeys } from 'freelm';
+import { FreeLLM, KEYLESS, PROVIDER_ENV, envKeys, type FreeLLMEvent } from 'freelm';
 
 export interface ModelGenerationResult {
   text: string;
@@ -14,9 +14,80 @@ export interface ModelGenerationResult {
   error?: string;
   fallbackUsed?: boolean;
   keylessRouteErrors?: string[];
+  /** Which routing tier produced this answer. */
+  tier?: TaskTier;
 }
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
+
+/**
+ * 'free' keeps a call on the no-signup public endpoints (Kilo, OVHcloud) and
+ * only escalates to configured keys if the free path cannot answer, so trivial
+ * work never spends a Groq/Gemini key. 'hard' goes straight to the keyed
+ * providers for speed and reliability.
+ */
+export type TaskTier = 'free' | 'hard';
+
+export interface ModelGenerationOptions {
+  tier?: TaskTier;
+}
+
+const KEYLESS_MODEL_CHAIN = [
+  'Mistral-Small-3.2-24B-Instruct-2506', // ovh, keyless, ~1.1s
+  'Meta-Llama-3_3-70B-Instruct',         // ovh, keyless, ~2.0s
+  'Qwen3.8-27B',                         // ovh, keyless
+  'poolside/laguna-s-2.1:free',          // kilo, keyless
+];
+
+const KEYED_MODEL_CHAIN = [
+  'qwen/qwen3.8-27b',                    // groq, proven fast (~140ms in CI)
+  'openai/gpt-oss-20b',                  // groq, 1000 rpd
+  'openai/gpt-oss-120b',                 // groq / nim
+  'gemini-3.5-flash-lite',               // gemini free, 1M ctx, non-reasoning
+  'gemini-3.1-flash-lite',               // gemini free, 1M ctx
+  'gemini-flash-lite-latest',            // gemini alias
+  ...KEYLESS_MODEL_CHAIN,                // keyless backstop
+];
+
+interface SweepOutcome { text: string; model: string; provider: string }
+
+/**
+ * Try each model in `chain` in order on one client until one returns usable
+ * text. A reasoning model can return HTTP 200 with empty content; that is
+ * treated as unusable and the sweep moves on. The whole sweep is bounded by
+ * `budgetMs` so a saturated free tier cannot grind for minutes.
+ */
+async function runSweep(
+  llm: FreeLLM,
+  chain: string[],
+  messages: ChatMessage[],
+  opts: { maxTokens: number; perCallTimeoutMs: number; budgetMs: number; errors: string[] },
+): Promise<SweepOutcome | null> {
+  const deadline = Date.now() + opts.budgetMs;
+  for (const model of chain) {
+    if (Date.now() >= deadline) {
+      opts.errors.push(`model sweep budget of ${opts.budgetMs}ms exhausted on this tier`);
+      break;
+    }
+    try {
+      const response = await llm.chat(messages, {
+        model,
+        temperature: 0.1,
+        max_tokens: opts.maxTokens,
+        signal: AbortSignal.timeout(Math.min(opts.perCallTimeoutMs, Math.max(1000, deadline - Date.now()))),
+      });
+      const content = (response.text ?? '').trim();
+      if (!content) {
+        opts.errors.push(`${model} via ${response.provider || 'unknown'}: response contained no usable text`);
+        continue;
+      }
+      return { text: content, model: response.model || model, provider: response.provider || 'free-tier router' };
+    } catch (err) {
+      opts.errors.push(`${model}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return null;
+}
 
 const KEYLESS_CREDENTIAL_ENV_NAMES = [
   'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY',
@@ -60,7 +131,14 @@ export class ModelService {
     };
   }
 
-  async generatePlanAndPatch(prompt: string, contextFiles: { path: string; content: string }[]): Promise<ModelGenerationResult> {
+  async generatePlanAndPatch(
+    prompt: string,
+    contextFiles: { path: string; content: string }[],
+    options: ModelGenerationOptions = {},
+  ): Promise<ModelGenerationResult> {
+    // Calls that do not name a tier default to 'hard'; set FORGE_DEFAULT_TIER=free
+    // to make every unspecified call try the no-signup endpoints first.
+    const tier: TaskTier = options.tier ?? (process.env.FORGE_DEFAULT_TIER === 'free' ? 'free' : 'hard');
     const fileContexts = contextFiles
       .map((f) => `--- FILE: ${f.path} ---\n${f.content}\n--- END FILE ---`)
       .join('\n\n');
@@ -93,112 +171,57 @@ Respond only with valid JSON.`;
     ];
 
     const primaryErrors: string[] = [];
-    let invokedProvider = 'freelm free-tier router';
-    let invokedModel = 'chat';
 
-    try {
-      const llm = FreeLLM.fromEnv({
-        // Always include the no-signup Kilo/OVHcloud routes as last resorts.
-        keyless: true,
-        maxAttempts: 6,
-        timeout: 30,
-        hedge: false,
-        onEvent: (event) => {
-          if (event.kind === 'error') {
-            primaryErrors.push(`${event.provider || 'unknown provider'} / ${event.model || 'unknown model'}: ${event.error || `HTTP ${event.status ?? 'unknown'}`}`);
-          }
-          if (event.kind === 'success') {
-            invokedProvider = event.provider || invokedProvider;
-            invokedModel = event.model || invokedModel;
-          }
-        },
-      });
+    // Tunables shared by every tier.
+    const maxTokens = Number(process.env.FORGE_MAX_TOKENS ?? 2048);
+    const perCallTimeoutMs = Number(process.env.FORGE_MODEL_TIMEOUT_MS ?? 20000);
+    const budgetMs = Number(process.env.FORGE_MODEL_BUDGET_MS ?? 45000);
+    const freeBudgetMs = Number(process.env.FORGE_FREE_BUDGET_MS ?? 15000);
+    const envChain = process.env.FORGE_MODEL_CHAIN?.split(',').map((s) => s.trim()).filter(Boolean);
+    const hasProviderKeys = PROVIDER_ENV.some((spec) => envKeys(spec).length > 0);
+    const keylessOnly = process.env.FIRSTBORN_KEYLESS_ONLY === 'true';
 
-      // Prefer concrete, long-output-capable NON-reasoning models. Measured on the
-      // free routes: the 120B "reasoning" models spend the whole token budget on
-      // hidden reasoning and return empty content (the "no usable text" failure),
-      // while these answer with clean, bounded output. `model` accepts an ordered
-      // fallback list; freelm picks the first routable one and benches it on 429.
-      const envChain = process.env.FORGE_MODEL_CHAIN?.split(',').map((s) => s.trim()).filter(Boolean);
-      // Provider-diverse chain so ONE exhausted key/model cannot stall a mission.
-      // Quotas are per-model (Groq: 30 rpm / 1000 rpd; Gemini free: ~20 rpd/model,
-      // 1M ctx), so listing several models per provider multiplies usable calls,
-      // and comma-joined keys (GROQ_API_KEY="k1,k2") multiply it again. freelm routes
-      // each id to a provider that knows it and benches only that model on a 429.
-      const hasProviderKeys = PROVIDER_ENV.some((spec) => envKeys(spec).length > 0);
-      const keyedChain = [
-        'qwen/qwen3.8-27b',                // groq, proven fast (~140ms in CI)
-        'openai/gpt-oss-20b',              // groq, 1000 rpd; reasoning, needs the full token budget
-        'openai/gpt-oss-120b',             // groq / nim
-        'gemini-3.5-flash-lite',           // gemini free, 1M ctx, non-reasoning
-        'gemini-3.1-flash-lite',           // gemini free, 1M ctx
-        'gemini-flash-lite-latest',        // gemini alias
-        'Mistral-Small-3.2-24B-Instruct-2506', // keyless ovh, ~1.1s
-        'Meta-Llama-3_3-70B-Instruct',     // keyless ovh, ~2.0s
-        'poolside/laguna-s-2.1:free',      // keyless kilo
-      ];
-      // No keys: the keyed ids 404, so lead with the models that actually answer.
-      const keylessChain = [
-        'Mistral-Small-3.2-24B-Instruct-2506', // ovh, keyless, ~1.1s
-        'Meta-Llama-3_3-70B-Instruct',     // ovh, keyless, ~2.0s
-        'Qwen3.8-27B',                     // ovh, keyless
-        'poolside/laguna-s-2.1:free',      // kilo, keyless
-      ];
-      const preferredModels: string[] = envChain && envChain.length > 0
-        ? envChain
-        : (hasProviderKeys ? keyedChain : keylessChain);
-      const modelChain = preferredModels; // tried one by one so an empty/thinking answer moves on
-      const maxTokens = Number(process.env.FORGE_MAX_TOKENS ?? 2048);
-      const perCallTimeoutMs = Number(process.env.FORGE_MODEL_TIMEOUT_MS ?? 20000);
-      // Hard wall-clock budget for the whole fallback sweep. Without it, a saturated
-      // keyless tier can grind for minutes across every model and pass before failing.
-      const budgetMs = Number(process.env.FORGE_MODEL_BUDGET_MS ?? 45000);
-      const sweepDeadline = Date.now() + budgetMs;
-      try {
-        for (const model of modelChain) {
-          if (Date.now() >= sweepDeadline) {
-            primaryErrors.push(`model sweep budget of ${budgetMs}ms exhausted; not waiting further on the keyless tier`);
-            break;
-          }
-          try {
-            const response = await llm.chat(messages, {
-              model,
-              temperature: 0.1,
-              max_tokens: maxTokens,
-              signal: AbortSignal.timeout(Math.min(perCallTimeoutMs, Math.max(1000, sweepDeadline - Date.now()))),
-            });
-            const content = (response.text ?? '').trim();
-            if (!content) {
-              // Reasoning-only models return HTTP 200 with empty content; treat that
-              // as unusable and move to the next model instead of aborting.
-              primaryErrors.push(`${model} via ${response.provider || 'unknown'}: response contained no usable text`);
-              continue;
-            }
-            return {
-              text: content,
-              model: response.model || model,
-              provider: response.provider || invokedProvider,
-              success: true,
-              fallbackUsed: false,
-              keylessRouteErrors: [...primaryErrors],
-            };
-          } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            primaryErrors.push(`${model}: ${errorMessage}`);
-          }
+    const clientOpts = {
+      maxAttempts: 6,
+      timeout: 30,
+      hedge: false as const,
+      onEvent: (event: FreeLLMEvent) => {
+        if (event.kind === 'error') {
+          primaryErrors.push(`${event.provider || 'unknown provider'} / ${event.model || 'unknown model'}: ${event.error || `HTTP ${event.status ?? 'unknown'}`}`);
         }
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        primaryErrors.push(`freelm initialization failed: ${errorMessage}`);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      primaryErrors.push(`freelm initialization failed: ${errorMessage}`);
+      },
+    };
+    // A client with ONLY the no-signup endpoints, so a free-tier call provably
+    // cannot spend a Groq/Gemini key.
+    const freeClient = () => new FreeLLM(KEYLESS.map((K) => new K()), clientOpts);
+    const anyClient = () => FreeLLM.fromEnv({ keyless: true, ...clientOpts });
+
+    const sweepOpts = (budget: number) => ({ maxTokens, perCallTimeoutMs, budgetMs: budget, errors: primaryErrors });
+
+    // 1. HARD: straight to the keyed providers (and their keyless backstop) for
+    //    speed/reliability. An explicit FORGE_MODEL_CHAIN overrides everything.
+    if (!keylessOnly && (tier === 'hard' || envChain?.length)) {
+      const chain = envChain?.length ? envChain : KEYED_MODEL_CHAIN;
+      const out = await runSweep(anyClient(), chain, messages, sweepOpts(budgetMs));
+      if (out) return { ...out, success: true, fallbackUsed: false, tier: 'hard', keylessRouteErrors: [...primaryErrors] };
     }
 
-    const primaryError = primaryErrors.join(' | ') || 'freelm returned no usable text without a reported provider error';
+    // 2. FREE: keep trivial/easy work on the no-signup endpoints. Escalate to the
+    //    keyed providers only if the free path cannot answer.
+    if (!keylessOnly) {
+      const freeOut = await runSweep(freeClient(), envChain?.length ? envChain : KEYLESS_MODEL_CHAIN, messages, sweepOpts(freeBudgetMs));
+      if (freeOut) return { ...freeOut, success: true, fallbackUsed: false, tier: 'free', keylessRouteErrors: [...primaryErrors] };
+      const hardOut = await runSweep(anyClient(), envChain?.length ? envChain : KEYED_MODEL_CHAIN, messages, sweepOpts(budgetMs));
+      if (hardOut) return { ...hardOut, success: true, fallbackUsed: true, tier: 'hard', keylessRouteErrors: [...primaryErrors] };
+    } else {
+      // Strict keyless-only: never touch a key, by construction.
+      const out = await runSweep(freeClient(), envChain?.length ? envChain : KEYLESS_MODEL_CHAIN, messages, sweepOpts(budgetMs));
+      if (out) return { ...out, success: true, fallbackUsed: false, tier: 'free', keylessRouteErrors: [...primaryErrors] };
+    }
 
-    if (this.gemini && process.env.FIRSTBORN_KEYLESS_ONLY !== 'true') {
+    const primaryError = primaryErrors.join(' | ') || 'free-tier router returned no usable text without a reported provider error';
+
+    if (this.gemini && !keylessOnly) {
       try {
         const response = await this.gemini.models.generateContent({
           model: 'gemini-2.5-flash',
@@ -212,6 +235,7 @@ Respond only with valid JSON.`;
           provider: 'Google AI Studio / Gemini',
           success: true,
           fallbackUsed: true,
+          tier: 'hard',
           keylessRouteErrors: [...primaryErrors],
         };
       } catch (err) {
@@ -219,9 +243,9 @@ Respond only with valid JSON.`;
         return {
           text: '',
           model: 'auto:coding -> gemini-2.5-flash',
-          provider: 'keyless model routes + Gemini fallback',
+          provider: 'free-tier routes + Gemini fallback',
           success: false,
-          error: `Primary keyless route failed: ${primaryError}; Gemini fallback failed: ${fallbackError}`,
+          error: `Free/keyed routes failed: ${primaryError}; Gemini fallback failed: ${fallbackError}`,
           fallbackUsed: true,
           keylessRouteErrors: [...primaryErrors],
         };
@@ -231,9 +255,9 @@ Respond only with valid JSON.`;
     return {
       text: '',
       model: 'chat:large',
-      provider: 'keyless model routes unavailable',
+      provider: 'model routes unavailable',
       success: false,
-      error: `All keyless primary routes failed: ${primaryError}. ${process.env.FIRSTBORN_KEYLESS_ONLY === 'true' ? 'Gemini fallback is disabled by FIRSTBORN_KEYLESS_ONLY=true.' : 'Gemini fallback is not configured.'}`,
+      error: `All model routes failed: ${primaryError}. ${keylessOnly ? 'Gemini fallback is disabled by FIRSTBORN_KEYLESS_ONLY=true.' : 'Gemini fallback is not configured.'}`,
       fallbackUsed: false,
       keylessRouteErrors: [...primaryErrors],
     };

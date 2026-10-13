@@ -965,3 +965,32 @@ PASS  Mistral-Small-3.2-24B-Instruct-2506         969ms  via ovh (keyless)
 Groq (`qwen3.8-27b`, `gpt-oss-20b`, `gpt-oss-120b`) -> Gemini (`gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-flash-lite-latest`) -> keyless OVH/Kilo. Two independent keyed providers plus two keyless backstops.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-TIERED-ROUTING-20261012-11`
+- **Timestamp (UTC)**: 2026-10-12T19:10:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: FEATURE
+- **Input addressed**: "Don't use Groq/Gemini for easy work that a free model can do."
+
+#### What changed
+`ModelService.generatePlanAndPatch` now takes a task tier.
+- **`free`** — runs on a client built from `KEYLESS` providers only (Kilo, OVHcloud). By construction it holds **no keys**, so it provably cannot spend a Groq/Gemini key. Escalates to the keyed providers only if the free path cannot answer.
+- **`hard`** (default) — keyed providers first (Groq -> Gemini), then keyless backstop. Unchanged reliability path.
+
+Callers in `src/agent/forge.ts`: the cheap **planning / bootstrap-plan** calls now pass `{ tier: 'free' }`; the actual per-file **implementation** and **repair** calls stay keyed (`hard`).
+
+New env: `FORGE_FREE_BUDGET_MS` (default 15000) bounds the free sweep; `FORGE_DEFAULT_TIER=free` makes unspecified calls try free first.
+
+#### Evidence
+- `npm run lint`: EXIT 0.
+- `npm test`: **28 passed / 0 failed**, including a new offline test asserting every `KEYLESS` provider has `constructor.keyless === true` and a keyed provider does not — i.e. the free tier is key-free without any network call.
+- Live check (local, keyless shell): `tier=free -> ovh`; `tier=hard -> ovh` (no keys locally).
+- Live check with a dummy `GROQ_API_KEY` present: `tier=free -> ovh` (did **not** touch the key), `tier=hard` attempted Groq then fell back. Decisive proof that free calls skip the keys.
+
+#### Effect
+Easy work stays on the free public endpoints. A key is only spent when the free path fails, or on implementation/repair calls.
+
+No secrets, tokens, or credentials appear in this entry.

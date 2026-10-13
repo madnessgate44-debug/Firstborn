@@ -721,12 +721,13 @@ export class ForgeAgent {
       report.modelInvoked.callsCount += 1;
       let modelResult = await this.model.generatePlanAndPatch(
         `Task: ${task.title}\nDetails: ${task.description}`,
-        contextFiles
+        contextFiles,
+        { tier: 'free' }
       );
       if (!modelResult.success && classifyFailure(modelResult.error) === 'RETRYABLE') {
         log('warn', `Model route reported a retryable failure; one bounded retry. Detail: ${modelResult.error}`);
         const retry = await withBoundedRetry(
-          () => this.model.generatePlanAndPatch(`Task: ${task.title}\nDetails: ${task.description}`, contextFiles),
+          () => this.model.generatePlanAndPatch(`Task: ${task.title}\nDetails: ${task.description}`, contextFiles, { tier: 'free' }),
           { attempts: loadForgeLimits().modelAttempts, baseDelayMs: 500 }
         );
         report.modelInvoked.callsCount += retry.attempts;
@@ -752,7 +753,8 @@ export class ForgeAgent {
           report.modelInvoked.callsCount += 1;
           modelResult = await this.model.generatePlanAndPatch(
             `Task: ${task.title}\nDetails: ${task.description}\n\nReturn a compact JSON plan with a "requirements" array (each with id, description, acceptanceCriteria using an existing repo check such as "npm run lint" or "npm test") and a "changes" array (may be empty; the implementation will be produced per file afterwards). Keep the JSON small and complete.`,
-            contextFiles
+            contextFiles,
+            { tier: 'free' }
           );
           recordModel(modelResult);
           if (!modelResult.success) continue;

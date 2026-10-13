@@ -96,3 +96,20 @@ test('loadForgeLimits: every ceiling is bounded and env-overridable', () => {
   const clamped = loadForgeLimits({ FORGE_MAX_MODEL_CALLS: '9999' } as NodeJS.ProcessEnv);
   assert.equal(clamped.maxModelCalls, 50);
 });
+
+test('free-tier routing: keyless providers are provably key-free, keyed providers are not', async () => {
+  const freelm = await import('freelm');
+  const keyless = freelm.KEYLESS.map((K) => new K());
+  assert.ok(keyless.length > 0, 'expected at least one keyless provider');
+  for (const provider of keyless) {
+    assert.equal(
+      (provider.constructor as unknown as { keyless: boolean }).keyless,
+      true,
+      `${provider.name} must be keyless so a free-tier call cannot spend a key`
+    );
+  }
+  const groq = freelm.PROVIDER_ENV.find((spec) => spec.name === 'groq');
+  assert.ok(groq, 'expected a groq provider spec');
+  const keyed = freelm.buildProvider(groq, ['dummy-key']);
+  assert.equal((keyed.constructor as unknown as { keyless: boolean }).keyless, false, 'a keyed provider must not be keyless');
+});
