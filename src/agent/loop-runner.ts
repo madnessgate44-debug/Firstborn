@@ -14,7 +14,7 @@ import { ModelService } from '../services/model.ts';
 import { GitHubService } from '../services/github.ts';
 import { loadPermissionConfig, evaluatePermissionPolicy } from './policy.ts';
 import { buildForgeTools } from './tools.ts';
-import { runAgentLoop, loadLoopLimits, FINISH_TOOL, type Authorization } from './loop.ts';
+import { runAgentLoop, loadLoopLimits, type Authorization, type LoopResult } from './loop.ts';
 
 const MEMORY_FILE = 'AGENTS.md';
 
@@ -75,18 +75,34 @@ async function main(): Promise<void> {
     return { allowed: true };
   };
 
-  const result = await runAgentLoop({
-    goal,
-    tools,
-    brain: (state) => model.chooseNextAction(state),
-    authorize,
-    limits: loadLoopLimits(),
-    workspace: branch,
-    memory,
-    onStep: (step) => {
-      console.log(`[loop ${step.index}] ${step.action.tool} -> ${step.observation.ok ? 'ok' : 'FAILED'}: ${step.observation.output.slice(0, 200)}`);
-    },
-  });
+  let result: LoopResult;
+  try {
+    result = await runAgentLoop({
+      goal,
+      tools,
+      brain: (state) => model.chooseNextAction(state),
+      authorize,
+      limits: loadLoopLimits(),
+      workspace: branch,
+      memory,
+      onStep: (step) => {
+        console.log(`[loop ${step.index}] ${step.action.tool} -> ${step.observation.ok ? 'ok' : 'FAILED'}: ${step.observation.output.slice(0, 200)}`);
+      },
+    });
+  } finally {
+    // A finished mission must release Chromium even if the brain finishes
+    // without explicitly choosing browser_close. Otherwise Node can remain
+    // alive with Playwright handles open after the evidence file is written.
+    const closeBrowser = tools.find((tool) => tool.name === 'browser_close');
+    if (closeBrowser) {
+      try {
+        const closed = await closeBrowser.run({}, { goal, workspace: branch, step: 0 });
+        console.log(`[loop cleanup] browser_close -> ${closed.ok ? 'ok' : 'FAILED'}: ${closed.output}`);
+      } catch (error) {
+        console.error('[loop cleanup] Failed to close browser:', error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
 
   console.log('--- FORGE LOOP REPORT ---');
   console.log('Goal:', goal);
