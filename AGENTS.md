@@ -43,3 +43,31 @@
    - Open Pull Requests only when verified checks pass and branch existence is confirmed.
    - Never auto-merge, push directly to default/main branch, or execute destructive actions without explicit human confirmation.
    - If an operation is blocked or lacks permission, honestly mark it `BLOCKED` with the raw reason.
+
+## Forreyra — Browser Capability Map
+
+Forge drives a real headless Chromium through `BrowserService`
+(`src/services/browser.ts`). The browser is named **Forreyra**.
+
+- **Agent tools** (`buildBrowserTools` in `src/agent/tools.ts`):
+  `browser_open`, `browser_view`, `browser_click`, `browser_type`,
+  `browser_press`, `browser_scroll`, `browser_extract`, `browser_query`,
+  `browser_close`.
+- **CLI** (`scripts/forreyra.ts`, `npm run forreyra`): chained actions
+  `open`, `click:<n>`, `type:<n>=<text>`, `press:<key>`, `scroll:up|down`,
+  `extract[:<regex>]`, `query:<question>`, `view`.
+- **MCP server** (`src/mcp/forreyra-server.ts`, `npm run forreyra:mcp`):
+  the ten tools above plus `browser_screenshot` (returns a PNG).
+- **Plain-English query** (`src/services/query.ts`, merged in #80): ask
+  `query:what is the price` or "how many rows are in the table" and get
+  structured data back, no regex. `planQuery` maps a question to a typed plan
+  (title, headings, links, emails, phones, prices, table, count, labeled,
+  search); `runQuery` resolves it against page data. Pure and deterministic:
+  same question, same plan, same result. A miss is reported, never invented.
+- Browser read-only repeats are steered to `think` (anti-loop guard in
+  `src/services/model.ts`).
+
+## Verification Commands
+
+- `npm run lint` — `tsc --noEmit`; expect exit 0.
+- `npm test` — full suite on real Chromium; expect all pass, 0 skipped.
