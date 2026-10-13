@@ -865,3 +865,40 @@ Findings are path-cited and fact/inference-labeled, so they are safe to turn int
 requests — but the model can still be wrong; treat `inferred` items as hypotheses.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-LOOP-SHIPPED-20261013-01`
+- **Timestamp (UTC)**: 2026-10-13T15:00:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: REPORT / HANDOFF
+- **Subject**: Forge is now a real loop, shipped to main.
+
+#### What shipped (all merged to `main`)
+- **Sentinel** (PR #67) - independent verifier replaces the human merge gate. Tests are the
+  authority; model judge off by default; `main` can never be a merge source; auto-merge needs
+  `SENTINEL_AUTO_MERGE=true`.
+- **Operating manual** (PR #68) - `docs/CHATGPT-OPERATING-FORGE.md`.
+- **Agent loop** (PR #69) - `loop.ts` + `tools.ts` + `loop-runner.ts` + `chooseNextAction` brain,
+  sharing one `invokeModel` with coding and audit.
+- **Audit brain** (PR #70) - read-only audit now uses the same model brain; reconciled onto the
+  loop branch so there is exactly one `invokeModel`.
+- **Loop workflow** (PR #71) - `.github/workflows/forge-loop.yml` runs Forge as a loop on a goal.
+
+#### Evidence
+- `npm run lint`: EXIT 0. `npm test`: 79 passed / 0 failed.
+- Local live loop run: COMPLETED in 4 steps, correct answer, evidence JSON written.
+- **CI live run** (run 38418048155, workflow_dispatch on `main`): job `loop` = SUCCESS;
+  COMPLETED in 4 steps; artifact `forge-loop-evidence` uploaded.
+
+#### How to run it
+Actions -> "Forge Agent Loop" -> Run workflow. Inputs: `goal`, `max_steps`, `allow_writes`
+(read-only by default).
+
+#### Still open
+- Wiring the loop into `forge.ts` as the default engine is a separate milestone.
+- Branch protection on `main` (require `verify` + `sentinel`; disallow direct pushes) is a
+  repo-admin step the automation token cannot perform.
+
+No secrets, tokens, or credentials appear in this entry.
