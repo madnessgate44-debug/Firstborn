@@ -115,6 +115,11 @@ Respond only with valid JSON.`;
         maxAttempts: 12,
         timeout: 35,
         hedge: true,
+        // Free routes briefly cooldown after a 429. Wait out short cooldowns
+        // (bounded) instead of failing the whole call with "none ready", so a
+        // prompt still returns a real answer under transient rate limiting.
+        wait: true,
+        maxWait: 15,
         onEvent: (event) => {
           if (event.kind === 'error') {
             primaryErrors.push(`${event.provider || 'unknown provider'} / ${event.model || 'unknown model'}: ${event.error || `HTTP ${event.status ?? 'unknown'}`}`);
