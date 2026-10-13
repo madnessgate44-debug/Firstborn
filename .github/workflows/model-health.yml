@@ -33,23 +33,35 @@ jobs:
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
       - name: Check configured model keys
-        # Forward every provider key freelm understands so any key added as a repo
-        # secret is detected automatically. Unset secrets arrive empty and are ignored.
+        # Forward every key variable freelm understands (both the primary names
+        # and the FREELM_*_KEYS rotation variants) so any key added as a repo
+        # secret is detected automatically. Unset secrets arrive empty.
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FREELM_GROQ_KEYS: ${{ secrets.FREELM_GROQ_KEYS }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_AI_STUDIO_KEY: ${{ secrets.GOOGLE_AI_STUDIO_KEY }}
+          FREELM_GOOGLE_KEYS: ${{ secrets.FREELM_GOOGLE_KEYS }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FREELM_OPENROUTER_KEYS: ${{ secrets.FREELM_OPENROUTER_KEYS }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
+          FREELM_NIM_KEYS: ${{ secrets.FREELM_NIM_KEYS }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          FREELM_CEREBRAS_KEYS: ${{ secrets.FREELM_CEREBRAS_KEYS }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          FREELM_MISTRAL_KEYS: ${{ secrets.FREELM_MISTRAL_KEYS }}
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          FREELM_ZAI_KEYS: ${{ secrets.FREELM_ZAI_KEYS }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          CO_API_KEY: ${{ secrets.CO_API_KEY }}
+          FREELM_COHERE_KEYS: ${{ secrets.FREELM_COHERE_KEYS }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FREELM_CLOUDFLARE_KEYS: ${{ secrets.FREELM_CLOUDFLARE_KEYS }}
           KILO_API_KEY: ${{ secrets.KILO_API_KEY }}
+          FREELM_KILO_KEYS: ${{ secrets.FREELM_KILO_KEYS }}
         run: npm run model:check
 
       - name: Keyless fallback smoke
