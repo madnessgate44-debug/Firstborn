@@ -105,7 +105,11 @@ jobs:
           path: .firstborn/evidence/
 
   run-readonly-audit:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'audit'
+    # Two entry points: an explicit workflow_dispatch (inputs.mode=audit), and an
+    # issue labeled 'forge-audit' carrying the target repo. The issue path exists
+    # because some controllers can open issues/labels but cannot dispatch
+    # workflows; it is restricted to issues authored by the repository owner.
+    if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'audit') || (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'forge-audit') && github.event.issue.author_association == 'OWNER')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The audit job cannot write to GitHub or open PRs.
@@ -132,9 +136,34 @@ jobs:
             npm install --ignore-scripts
           fi
 
+      - name: Resolve audit target repository
+        id: target
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          INPUT_TARGET: ${{ inputs.target_repo }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+          body = os.environ.get('ISSUE_BODY') or ''
+          target = ''
+          url = re.search(r'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', body)
+          if url:
+              target = f"{url.group(1)}/{url.group(2)}"
+          else:
+              for token in re.findall(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', body):
+                  # Skip hostnames: a real owner segment has no dot.
+                  if '.' not in token.split('/')[0]:
+                      target = token
+                      break
+          if not target:
+              target = os.environ.get('INPUT_TARGET') or ''
+          print(f"repo={target}")
+          PY
+
       - name: Run read-only repository audit
         env:
-          FORGE_TARGET_REPO: ${{ inputs.target_repo }}
+          FORGE_TARGET_REPO: ${{ steps.target.outputs.repo }}
         run: npx tsx src/agent/audit-runner.ts
 
       - name: Upload read-only audit evidence
