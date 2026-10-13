@@ -927,3 +927,44 @@ No secrets, tokens, or credentials appear in this entry.
 - Live run 2: goal to edit `src/math.ts` (41 -> 42) -> COMPLETED in 4 steps; file on disk reads 42.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-FORREYRA-QUERY-20261013-01`
+- **Timestamp (UTC)**: 2026-10-13T22:45:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / GEMINI / Ahmed
+- **Type**: REPORT
+- **Subject**: Forreyra answers plain-English questions with structured data (no regex).
+
+#### What changed
+- **`src/services/query.ts` (new)** — a deterministic, pure query layer.
+  - `planQuery(question)` maps a question to a typed plan: `title`, `headings`,
+    `links`, `emails`, `phones`, `prices`, `table`, `count`, `labeled`, `search`.
+  - `runQuery(pageData, plan)` resolves the plan against structured page data.
+  - Same question -> same plan -> same result. No model call, so it is explainable
+    and unit-testable. A miss is reported (`No email addresses found.`), never invented.
+- **`BrowserService.gather()` / `query()`** — collect structured DOM data
+  (headings, links, tables, `dt`/`label` fields) and resolve the plan.
+- **Exposed three ways** — the `browser_query` MCP tool, the `query:<question>` CLI
+  action, and a `browser_query` agent tool. Added to the read-only anti-repeat guard
+  in `src/services/model.ts` so identical repeats steer to `think`.
+- **`AGENTS.md`** — durable Forreyra capability map + verification commands.
+
+#### Evidence
+- `npm run lint` (`tsc --noEmit`): EXIT 0.
+- `npm test`: **128 passed / 0 failed / 0 skipped**. Added `tests/query.test.ts`
+  (13 pure cases), a real-Chromium `browser_query` case in `tests/browser.test.ts`,
+  and an MCP stdio case in `tests/mcp.test.ts`.
+- **Live**: `npm run forreyra -- https://books.toscrape.com "query:what is the price"`
+  -> `kind: prices`, 20 real prices. EXIT 0.
+- PR **#80** (query layer) and PR **#81** (AGENTS.md map): Sentinel + verify both
+  success; merged to `main` (`82c498b`, `237d785`). `main` verify: success.
+
+#### Blockers / notes
+- One Sentinel run hung on a dead runner (0 steps, `in_progress`) while PR #78's
+  workflows held capacity; cancelling and re-running it passed cleanly. Infra, not code.
+- No model/LLM key exists in this environment, so the keyless router is what runs;
+  the query layer is deliberately model-free and works regardless.
+
+No secrets, tokens, or credentials appear in this entry.
