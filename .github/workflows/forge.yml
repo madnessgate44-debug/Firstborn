@@ -87,18 +87,28 @@ jobs:
           TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id }}
         run: |
           # Bot-authored PRs are held at action_required until a human approves
-          # (GitHub change 2026-06-11). Approving needs actions:write. If this token
-          # is not permitted to approve, the step prints a notice and does not fail.
+          # (GitHub change 2026-06-11). The held run is created a few seconds after
+          # the PR is opened, so poll for it. Approving needs actions:write; if this
+          # token is not permitted, the step prints a notice and does not fail.
           BRANCH="forge/task-${TASK_ID}-${{ github.run_id }}"
-          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?status=action_required&per_page=50" \
-            --jq "[.workflow_runs[] | select(.head_branch==\"$BRANCH\")][0].id" 2>/dev/null || echo "")
-          if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-            echo "Approving held verification run $RUN_ID on $BRANCH"
-            gh api -X POST "repos/${{ github.repository }}/actions/runs/$RUN_ID/approve" \
-              && echo "APPROVED $RUN_ID" \
-              || echo "NOTICE: token not permitted to approve $RUN_ID; verification remains pending human approval."
-          else
-            echo "No held verification run found for $BRANCH."
+          APPROVED=0
+          for attempt in 1 2 3 4 5 6; do
+            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?status=action_required&per_page=50" \
+              --jq "[.workflow_runs[] | select(.head_branch==\"$BRANCH\")][0].id" 2>/dev/null || echo "")
+            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+              if gh api -X POST "repos/${{ github.repository }}/actions/runs/$RUN_ID/approve"; then
+                echo "APPROVED $RUN_ID on $BRANCH (attempt $attempt)"
+                APPROVED=1
+              else
+                echo "NOTICE: token not permitted to approve $RUN_ID; verification remains pending human approval."
+              fi
+              break
+            fi
+            echo "Held run for $BRANCH not visible yet (attempt $attempt); waiting..."
+            sleep 10
+          done
+          if [ "$APPROVED" != "1" ]; then
+            echo "No held verification run approved for $BRANCH."
           fi
 
       - name: Finalize workflow evidence
