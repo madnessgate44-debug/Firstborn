@@ -8,12 +8,27 @@
  * (allowPrCreation) AND the permission profile permits branch writes, so the loop
  * can never widen its own authority.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { ModelService } from '../services/model.ts';
+import { GitHubService } from '../services/github.ts';
 import { loadPermissionConfig, evaluatePermissionPolicy } from './policy.ts';
 import { buildForgeTools } from './tools.ts';
 import { runAgentLoop, loadLoopLimits, FINISH_TOOL, type Authorization } from './loop.ts';
+
+const MEMORY_FILE = 'AGENTS.md';
+
+/** Load repository guidance (AGENTS.md) from the workspace, falling back to GitHub. */
+async function loadMemory(workspace: string, owner: string, repo: string, ref: string, token?: string): Promise<string | undefined> {
+  const local = path.join(workspace, MEMORY_FILE);
+  try {
+    if (existsSync(local)) return readFileSync(local, 'utf8');
+  } catch {
+    /* fall through to GitHub */
+  }
+  const remote = await new GitHubService(token).fetchFile(owner, repo, MEMORY_FILE, ref);
+  return remote?.content;
+}
 
 async function main(): Promise<void> {
   const goal = (process.env.FORGE_LOOP_GOAL ?? '').trim();
@@ -41,6 +56,7 @@ async function main(): Promise<void> {
   );
 
   const tools = buildForgeTools({ owner, repo, ref, token, allowMutation: policy.allowBranchWrite, workspace });
+  const memory = await loadMemory(workspace, owner, repo, ref, token);
   const model = new ModelService();
 
   const authorize: Authorization = (action) => {
@@ -57,6 +73,7 @@ async function main(): Promise<void> {
     authorize,
     limits: loadLoopLimits(),
     workspace: branch,
+    memory,
     onStep: (step) => {
       console.log(`[loop ${step.index}] ${step.action.tool} -> ${step.observation.ok ? 'ok' : 'FAILED'}: ${step.observation.output.slice(0, 200)}`);
     },
