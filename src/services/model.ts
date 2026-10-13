@@ -103,6 +103,54 @@ Respond only with valid JSON.`;
       { role: 'user', content: fullPrompt },
     ];
 
+    return this.invokeModel(messages, fullPrompt);
+  }
+
+  /**
+   * Loop brain (M2). Given the goal and the action history so far, choose the
+   * single next action. Reuses the same routing/fallback as coding and audit via
+   * invokeModel. Falls back to finish on any unusable output so the loop ends
+   * safely rather than spinning.
+   */
+  async chooseNextAction(state: {
+    goal: string;
+    history: { index: number; action: { tool: string; input?: Record<string, unknown> }; observation: { ok: boolean; output: string } }[];
+    tools: { name: string; description: string }[];
+  }): Promise<{ tool: string; input?: Record<string, unknown> }> {
+    const toolList = state.tools.map((t) => `- ${t.name}: ${t.description}`).join('\n');
+    const historyText = state.history.length
+      ? state.history.map((h) => `step ${h.index}: ${h.action.tool} -> ${h.observation.ok ? 'ok' : 'FAILED'}: ${h.observation.output.slice(0, 400)}`).join('\n')
+      : '(no actions yet)';
+    const fullPrompt = `You are Forge in AGENT LOOP mode.
+Goal: ${state.goal}
+Available tools:
+${toolList}
+History so far:
+${historyText}
+Choose exactly ONE next action. Return compact JSON only, no markdown:
+{"tool":"<name>","input":{...}}
+Rules:
+- Do not repeat an action you have already taken; instead build on its result.
+- Read a file before editing it, and base decisions on observed output, not assumptions.
+- If the goal is already satisfied, return {"tool":"finish","input":{"summary":"what you did and saw"}}.
+- Use only tools from the list. Never invent a tool. Respond only with valid JSON.`;
+    const messages: ChatMessage[] = [
+      { role: 'system', content: 'You are a careful senior software engineer. Return valid JSON only.' },
+      { role: 'user', content: fullPrompt },
+    ];
+    const result = await this.invokeModel(messages, fullPrompt);
+    if (!result.success || !result.text.trim()) return { tool: 'finish', input: { summary: 'Loop brain could not choose an action; stopping.' } };
+    const cleaned = result.text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed && typeof parsed.tool === 'string') return { tool: parsed.tool, input: parsed.input };
+    } catch { /* fall through */ }
+    return { tool: 'finish', input: { summary: 'Loop brain returned unusable output; stopping safely.' } };
+  }
+
+  /** Shared routing and fallback brain used by coding, audit, and the loop. */
+  private async invokeModel(messages: ChatMessage[], fullPrompt: string): Promise<ModelGenerationResult> {
+
     const primaryErrors: string[] = [];
     const routingNotes: string[] = [];
     let invokedProvider = 'freelm free-tier router';

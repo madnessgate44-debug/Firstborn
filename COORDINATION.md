@@ -788,5 +788,30 @@ Added `docs/CHATGPT-OPERATING-FORGE.md` - a literal, step-by-step manual telling
 controller LLM how to trigger Forge (issue label `forge-task`, or dispatch), how to write a
 bounded task, how to read the report, what the safety model permits, the hard limits, audit
 recipes, troubleshooting, and the `COORDINATION.md` handoff protocol.
+### Entry: `OPENHANDS-AGENT-LOOP-20261013-01`
+- **Timestamp (UTC)**: 2026-10-13T15:10:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: FIX
+- **Trigger**: Ahmed: "why is it not a loop, we need it to be a loop."
+
+#### Diagnosis
+`executeTask` (forge.ts) is a fixed pipeline: VALIDATE -> INSPECT -> PLAN -> APPLY ->
+TEST -> COMMIT -> PR, each stage once. It repairs inside a stage but has no macro loop,
+so it cannot decide what to do next. That was the gap.
+
+#### Fix (M2, additive - forge.ts unchanged)
+- `src/agent/loop.ts` - bounded loop kernel: look -> think -> act -> observe, with a step
+  ceiling and a wall-clock ceiling. A disallowed mutating action is refused (never executed);
+  unknown tools and tool errors are fed back as failed observations; the loop never crashes.
+- `src/agent/tools.ts` - tool adapters over GitHubService/TestRunnerService. Mutating tools
+  are only registered when the permission profile allows branch writes.
+- `src/services/model.ts` - `chooseNextAction()` (the brain) plus a shared `invokeModel()`.
+- `src/agent/loop-runner.ts` - wires brain + tools + `evaluatePermissionPolicy`.
+
+#### Evidence
+- `npm run lint`: EXIT 0. `npm test`: 74 passed / 0 failed (8 new loop tests).
+- Live loop run (keyless, real model): "Read package.json and report the npm test script
+  command" -> COMPLETED in 3 steps, correct answer.
 
 No secrets, tokens, or credentials appear in this entry.
