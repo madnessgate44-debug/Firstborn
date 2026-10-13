@@ -4,6 +4,7 @@
  */
 
 import { ForgeAgent } from './forge.ts';
+import { shouldAutoRetry } from './diagnosis.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -19,7 +20,7 @@ async function runCli() {
   console.log(`Target Repo: ${targetRepo}`);
 
   const agent = new ForgeAgent(token);
-  const report = await agent.executeTask({
+  const task = {
     id: taskId,
     title: taskTitle,
     description: taskDesc,
@@ -28,7 +29,23 @@ async function runCli() {
     createdAt: new Date().toISOString(),
     author: 'github-actions-forge',
     allowPrCreation: Boolean(token),
-  });
+  };
+
+  const maxAttempts = Math.max(1, Math.min(3, Number.parseInt(process.env.FORGE_MAX_ATTEMPTS || '2', 10) || 2));
+  let report = await agent.executeTask(task);
+
+  // Bounded self-recovery: re-run only when Forge's own diagnosis says the
+  // failure is retryable. A blocked/failed outcome with no diagnosis is never
+  // retried. Retries stop early if a previous attempt already created a branch.
+  for (let attempt = 2; attempt <= maxAttempts; attempt += 1) {
+    if (!shouldAutoRetry(report.diagnosis, attempt, maxAttempts)) break;
+    if (report.branchName) {
+      console.log(`Diagnosis is retryable, but a branch already exists (${report.branchName}); stopping to avoid a duplicate change.`);
+      break;
+    }
+    console.log(`Diagnosis ${report.diagnosis!.category} is retryable; re-running mission (attempt ${attempt}/${maxAttempts}).`);
+    report = await agent.executeTask(task);
+  }
 
   console.log('--- FORGE EXECUTION REPORT ---');
   console.log('Status:', report.status);
