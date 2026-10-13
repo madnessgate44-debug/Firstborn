@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import * as path from 'node:path';
 import { GitHubService } from '../services/github.ts';
 import { TestRunnerService, AUTHORIZED_COMMANDS } from '../services/test-runner.ts';
+import { BrowserService } from '../services/browser.ts';
 import { applyExactEdits } from './stages.ts';
 import type { AgentTool, LoopContext, ToolObservation } from './loop.ts';
 
@@ -104,6 +105,8 @@ export function buildForgeTools(options: {
   allowMutation?: boolean;
   /** Absolute path to the mission workspace, when one exists. */
   workspace?: string;
+  /** Include the real-browser tools (open/view/click/type/scroll/extract/close). */
+  allowBrowser?: boolean;
 }): AgentTool[] {
   const github = new GitHubService(options.token);
   const runner = new TestRunnerService();
@@ -300,5 +303,121 @@ export function buildForgeTools(options: {
     });
   }
 
+  if (options.allowBrowser) {
+    tools.push(...buildBrowserTools());
+  }
+
   return tools;
+}
+
+/** Render a browser snapshot as compact text the brain can act on. */
+function renderSnapshot(snap: { url: string; title: string; elements: { i: number; tag: string; type?: string; text: string; href?: string }[]; text: string }): string {
+  const lines = snap.elements.map((e) => `[${e.i}] ${e.tag}${e.type ? `(${e.type})` : ''} ${e.text}${e.href ? ` -> ${e.href}` : ''}`.trimEnd());
+  return `url: ${snap.url}\ntitle: ${snap.title}\nelements:\n${lines.join('\n')}\ntext: ${snap.text}`.slice(0, 6000);
+}
+
+/**
+ * Real-browser tools. A single BrowserService is shared across the toolset so a
+ * page opened by `browser_open` stays open for later `browser_click`/`browser_view`
+ * calls — the brain navigates the way a person would.
+ */
+export function buildBrowserTools(executablePath?: string): AgentTool[] {
+  const browser = new BrowserService(executablePath);
+  return [
+    {
+      name: 'browser_open',
+      description:
+        'Open a real web page in a browser and return its interactive elements and text. Input: {"url":"https://..."}. Use the [i] index of an element with browser_click/browser_type.',
+      run: async (input): Promise<ToolObservation> => {
+        const url = str(input, 'url');
+        if (!url) return { ok: false, output: 'browser_open requires a "url".' };
+        try {
+          return { ok: true, output: renderSnapshot(await browser.open(url)) };
+        } catch (err) {
+          return { ok: false, output: `browser_open failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_view',
+      description: 'Re-read the current page: url, title, interactive elements (with [i] indices) and visible text. Input: {}.',
+      run: async (): Promise<ToolObservation> => {
+        try {
+          return { ok: true, output: renderSnapshot(await browser.view()) };
+        } catch (err) {
+          return { ok: false, output: `browser_view failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_click',
+      description: 'Click the interactive element at an index from the latest view. Input: {"index":3}.',
+      run: async (input): Promise<ToolObservation> => {
+        const index = Number(input.index);
+        if (!Number.isInteger(index) || index < 0) return { ok: false, output: 'browser_click requires an integer "index".' };
+        try {
+          return { ok: true, output: renderSnapshot(await browser.click(index)) };
+        } catch (err) {
+          return { ok: false, output: `browser_click failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_type',
+      description: 'Type text into the element at an index from the latest view. Input: {"index":2,"text":"hello"}.',
+      run: async (input): Promise<ToolObservation> => {
+        const index = Number(input.index);
+        const text = str(input, 'text');
+        if (!Number.isInteger(index) || index < 0) return { ok: false, output: 'browser_type requires an integer "index".' };
+        try {
+          return { ok: true, output: renderSnapshot(await browser.type(index, text)) };
+        } catch (err) {
+          return { ok: false, output: `browser_type failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_press',
+      description: 'Press a keyboard key on the focused element, e.g. {"key":"Enter"}.',
+      run: async (input): Promise<ToolObservation> => {
+        const key = str(input, 'key') || 'Enter';
+        try {
+          return { ok: true, output: renderSnapshot(await browser.press(key)) };
+        } catch (err) {
+          return { ok: false, output: `browser_press failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_scroll',
+      description: 'Scroll the page one screen. Input: {"direction":"down"} or {"direction":"up"}.',
+      run: async (input): Promise<ToolObservation> => {
+        const direction = str(input, 'direction') === 'up' ? 'up' : 'down';
+        try {
+          return { ok: true, output: renderSnapshot(await browser.scroll(direction)) };
+        } catch (err) {
+          return { ok: false, output: `browser_scroll failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_extract',
+      description: 'Return the visible text of the current page, optionally only sentences matching a regex. Input: {"pattern":"price"}.',
+      run: async (input): Promise<ToolObservation> => {
+        try {
+          return { ok: true, output: await browser.extract(str(input, 'pattern') || undefined) };
+        } catch (err) {
+          return { ok: false, output: `browser_extract failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_close',
+      description: 'Close the browser session and free the resources. Input: {}.',
+      run: async (): Promise<ToolObservation> => {
+        await browser.close();
+        return { ok: true, output: 'Browser closed.' };
+      },
+    },
+  ];
 }

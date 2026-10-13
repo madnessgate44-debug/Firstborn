@@ -55,7 +55,16 @@ async function main(): Promise<void> {
     loadPermissionConfig()
   );
 
-  const tools = buildForgeTools({ owner, repo, ref, token, allowMutation: policy.allowBranchWrite, workspace });
+  const allowBrowser = process.env.FORGE_ALLOW_BROWSER !== 'false';
+  const tools = buildForgeTools({
+    owner,
+    repo,
+    ref,
+    token,
+    allowMutation: policy.allowBranchWrite,
+    workspace,
+    allowBrowser,
+  });
   const memory = await loadMemory(workspace, owner, repo, ref, token);
   const model = new ModelService();
 
