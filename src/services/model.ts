@@ -4,7 +4,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { FreeLLM } from 'freelm';
+import { FreeLLM, PROVIDER_ENV, envKeys } from 'freelm';
 
 export interface ModelGenerationResult {
   text: string;
@@ -80,7 +80,7 @@ Follow these rules:
   ],
   "suggestedChecks": ["npm run lint"]
 }
-STRICT OUTPUT LIMIT: reserve output well below the anonymous endpoint's 2048-token ceiling by using max_tokens=1024. Return compact valid JSON only, with no markdown. For existing files, action MUST be "modify" and MUST use "edits"; never return the whole file in "content". For a new file, action MUST be "create" and use "content" instead of "edits". Prefer the smallest patch that satisfies the requirements; if the mission needs more than two files or three edits, return only the first bounded stage and state the remaining work in summary rather than truncating the JSON. Keep each find/replace snippet minimal but exact. Every find string must occur exactly once in the supplied source file. Do not repeat unchanged source. For each requirement, list the exact checks in checkCommands that verify it, or set manualReviewNote when no automated check exists. If a safe patch cannot fit these limits, return valid JSON with an empty changes array and explain the blocker in summary. Use only paths in the supplied target repository inventory or clearly justified new paths.
+STRICT OUTPUT LIMIT: return compact valid JSON only, with no markdown, well within the output budget (max_tokens=2048). For existing files, action MUST be "modify" and MUST use "edits"; never return the whole file in "content" unless explicitly asked for a full rewrite. For a new file, action MUST be "create" and use "content" instead of "edits". Prefer the smallest patch that satisfies the requirements; if the mission needs more than a bounded stage, return only the first stage and state the remaining work in summary rather than truncating the JSON. Keep each find/replace snippet minimal but exact. Every find string must occur exactly once in the supplied source file. Do not repeat unchanged source. For each requirement, list the exact checks in checkCommands that verify it, or set manualReviewNote when no automated check exists. If a safe patch cannot fit these limits, return valid JSON with an empty changes array and explain the blocker in summary. Use only paths in the supplied target repository inventory or clearly justified new paths.
 Context Files:
 ${fileContexts}
 User Task:
@@ -100,9 +100,9 @@ Respond only with valid JSON.`;
       const llm = FreeLLM.fromEnv({
         // Always include the no-signup Kilo/OVHcloud routes as last resorts.
         keyless: true,
-        maxAttempts: 12,
-        timeout: 35,
-        hedge: true,
+        maxAttempts: 6,
+        timeout: 30,
+        hedge: false,
         onEvent: (event) => {
           if (event.kind === 'error') {
             primaryErrors.push(`${event.provider || 'unknown provider'} / ${event.model || 'unknown model'}: ${event.error || `HTTP ${event.status ?? 'unknown'}`}`);
@@ -114,35 +114,82 @@ Respond only with valid JSON.`;
         },
       });
 
-      // Some anonymous endpoints report HTTP success but return an empty/thinking-only
-      // answer. Treat that as a failed model choice and try another discovered alias.
-      for (const alias of ['chat', 'chat:fast', 'chat:small']) {
-        try {
-          const response = await llm.chat(messages, {
-            model: alias,
-            temperature: 0.1,
-            max_tokens: 1024,
-            signal: AbortSignal.timeout(40000),
-          });
-          const content = response.text.trim();
-          invokedProvider = response.provider || invokedProvider;
-          invokedModel = response.model || invokedModel;
-          if (!content) {
-            primaryErrors.push(`${alias} via ${invokedProvider}: response contained no usable text`);
-            continue;
+      // Prefer concrete, long-output-capable NON-reasoning models. Measured on the
+      // free routes: the 120B "reasoning" models spend the whole token budget on
+      // hidden reasoning and return empty content (the "no usable text" failure),
+      // while these answer with clean, bounded output. `model` accepts an ordered
+      // fallback list; freelm picks the first routable one and benches it on 429.
+      const envChain = process.env.FORGE_MODEL_CHAIN?.split(',').map((s) => s.trim()).filter(Boolean);
+      // Provider-diverse chain so ONE exhausted key/model cannot stall a mission.
+      // Quotas are per-model (Groq: 30 rpm / 1000 rpd; Gemini free: ~20 rpd/model,
+      // 1M ctx), so listing several models per provider multiplies usable calls,
+      // and comma-joined keys (GROQ_API_KEY="k1,k2") multiply it again. freelm routes
+      // each id to a provider that knows it and benches only that model on a 429.
+      const hasProviderKeys = PROVIDER_ENV.some((spec) => envKeys(spec).length > 0);
+      const keyedChain = [
+        'qwen/qwen3.8-27b',                // groq, proven fast (~140ms in CI)
+        'openai/gpt-oss-20b',              // groq, 1000 rpd; reasoning, needs the full token budget
+        'openai/gpt-oss-120b',             // groq / nim
+        'gemini-3.5-flash-lite',           // gemini free, 1M ctx, non-reasoning
+        'gemini-3.1-flash-lite',           // gemini free, 1M ctx
+        'gemini-flash-lite-latest',        // gemini alias
+        'Mistral-Small-3.2-24B-Instruct-2506', // keyless ovh, ~1.1s
+        'Meta-Llama-3_3-70B-Instruct',     // keyless ovh, ~2.0s
+        'poolside/laguna-s-2.1:free',      // keyless kilo
+      ];
+      // No keys: the keyed ids 404, so lead with the models that actually answer.
+      const keylessChain = [
+        'Mistral-Small-3.2-24B-Instruct-2506', // ovh, keyless, ~1.1s
+        'Meta-Llama-3_3-70B-Instruct',     // ovh, keyless, ~2.0s
+        'Qwen3.8-27B',                     // ovh, keyless
+        'poolside/laguna-s-2.1:free',      // kilo, keyless
+      ];
+      const preferredModels: string[] = envChain && envChain.length > 0
+        ? envChain
+        : (hasProviderKeys ? keyedChain : keylessChain);
+      const modelChain = preferredModels; // tried one by one so an empty/thinking answer moves on
+      const maxTokens = Number(process.env.FORGE_MAX_TOKENS ?? 2048);
+      const perCallTimeoutMs = Number(process.env.FORGE_MODEL_TIMEOUT_MS ?? 20000);
+      // Hard wall-clock budget for the whole fallback sweep. Without it, a saturated
+      // keyless tier can grind for minutes across every model and pass before failing.
+      const budgetMs = Number(process.env.FORGE_MODEL_BUDGET_MS ?? 45000);
+      const sweepDeadline = Date.now() + budgetMs;
+      try {
+        for (const model of modelChain) {
+          if (Date.now() >= sweepDeadline) {
+            primaryErrors.push(`model sweep budget of ${budgetMs}ms exhausted; not waiting further on the keyless tier`);
+            break;
           }
-          return {
-            text: content,
-            model: invokedModel,
-            provider: invokedProvider,
-            success: true,
-            fallbackUsed: false,
-            keylessRouteErrors: [...primaryErrors],
-          };
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          primaryErrors.push(`${alias}: ${errorMessage}`);
+          try {
+            const response = await llm.chat(messages, {
+              model,
+              temperature: 0.1,
+              max_tokens: maxTokens,
+              signal: AbortSignal.timeout(Math.min(perCallTimeoutMs, Math.max(1000, sweepDeadline - Date.now()))),
+            });
+            const content = (response.text ?? '').trim();
+            if (!content) {
+              // Reasoning-only models return HTTP 200 with empty content; treat that
+              // as unusable and move to the next model instead of aborting.
+              primaryErrors.push(`${model} via ${response.provider || 'unknown'}: response contained no usable text`);
+              continue;
+            }
+            return {
+              text: content,
+              model: response.model || model,
+              provider: response.provider || invokedProvider,
+              success: true,
+              fallbackUsed: false,
+              keylessRouteErrors: [...primaryErrors],
+            };
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            primaryErrors.push(`${model}: ${errorMessage}`);
+          }
         }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        primaryErrors.push(`freelm initialization failed: ${errorMessage}`);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

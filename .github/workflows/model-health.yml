@@ -1,0 +1,42 @@
+name: Model Key Health
+
+# Nightly probe so key exhaustion or a dead route is caught BEFORE it stalls a
+# mission. Fails the run if no model answers, which surfaces as a notification.
+on:
+  schedule:
+    - cron: '0 6 * * *' # 06:00 UTC daily
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/services/model.ts'
+      - 'scripts/model-key-check.mjs'
+      - 'scripts/model-smoke-test.mjs'
+      - '.github/workflows/model-health.yml'
+
+jobs:
+  key-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Check configured model keys (Groq + Gemini)
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: npm run model:check
+
+      - name: Keyless fallback smoke
+        run: npm run model:smoke

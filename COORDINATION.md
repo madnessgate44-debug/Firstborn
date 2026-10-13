@@ -629,3 +629,266 @@ No secrets, tokens, or credentials appear in this entry.
 - No secrets in this file. No merge of any PR with failing CI.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-FORGE-TITAN-20261012-04`
+- **Timestamp (UTC)**: 2026-10-12T15:05:00Z
+- **Author**: OPENHANDS (acting for Ahmed)
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: AUDIT + REPORT
+- **Scope**: Independent audit of `src/agent/forge.ts` against the hardest mission available (TITAN-1: 3 requirements, 3 files, one forbidden file). No broad rewrite; smallest safe changes only.
+
+#### 1. The question answered
+"Where is the problem coming from?" The stress test failed for two distinct reasons, and only one was Forge's fault:
+
+1. **A Forge harness bug (silent file drop).** The target-check repair replaced the ENTIRE plan with whatever the model returned. A repair that returned one file silently deleted the others - including `src/titan/types.ts` (the `CANCELLED` union member). The mission then compiled only by luck. This was the dominant structural fault.
+2. **Model-quality errors on the keyless route.** The other failures were the anonymous model writing TypeScript that does not compile: partial anchors (`total(): number {` -> `total(): number;`), duplicate interface members, wrong property names (`cancelledCount`), private-member access across modules, and even truncated JSON output.
+
+Fixed cause (1) with code; (2) is mitigated by read -> edit -> test -> repeat loops and honest failure, not by pretending success.
+
+#### 2. Changes made this session (all additive/surgical)
+| # | Change | File |
+| :-- | :-- | :-- |
+| C1 | Per-file evolving worktree context: each file is edited against the CURRENT state after earlier edits, not the stale original | `src/agent/forge.ts` |
+| C2 | Deterministic order: `types.ts` (type definitions) implemented before consumers | `src/agent/forge.ts` |
+| C3 | Target-check repair MERGES by path and refuses a repair that omits a required file | `src/agent/forge.ts` |
+| C4 | Repair now receives the current staged sources, not originals | `src/agent/forge.ts` |
+| C5 | `isCodeBalanced()` rejects partial-anchor edits that leave unbalanced braces | `src/agent/forge.ts` |
+| C6 | Full-file rewrite fallback on the last per-file attempt; rewrite escalation on repeated repair failures (diagnosed paths) | `src/agent/forge.ts` |
+| C7 | Bootstrap planning resilient: bounded retries, then a deterministic fallback that derives requirements from the explicitly named files instead of aborting | `src/agent/forge.ts` |
+| C8 | Cross-module guidance in prompts: use a public method, never reach into another module's private member | `src/agent/forge.ts` |
+| C9 | Raised bounded defaults: `maxModelCalls` 12 -> 20, `maxRepairAttempts` 3 -> 4 (env-overridable) | `src/agent/limits.ts` |
+| C10 | Test: `isCodeBalanced` regression (partial anchor rejected, strings/comments ignored) | `tests/titan-fixes.test.ts` |
+
+#### 3. Observed evidence (raw, not claims)
+- Static: `npm run lint` -> EXIT 0. Unit tests: **32 passed / 0 failed**.
+- Live TITAN-1, batch of 3 after the fixes: **RUN 1 SUCCESS** - all three files implemented, final attempt `npm install=0, npm run lint=0, npm test=0, npm run build=0, git diff --check=0`, `REQ-1/2/3 = PASS`.
+- Live TITAN-1, batch of 3: RUN 2 and RUN 3 FAILED honestly at the final lint, all three files present in the plan. No requirement was marked PASS when the final check failed.
+- **FALSE PASS status: eliminated.** Requirement PASS now implies a criterion-matched check passed on the final attempt; a failing final check yields PENDING/FAIL.
+
+#### 4. Honest limitation (for the "reverse-engineered version of you" goal)
+On the current keyless endpoint the model still writes non-compiling TypeScript on some runs. Forge now READ -> EDIT -> TEST -> REPEAT with bounded repair and rewrite, and FAILS HONESTLY when it cannot converge. It cannot manufacture correctness the model never produced. The success rate is endpoint-limited; with a stronger/free API key the same harness has far more headroom.
+
+#### 5. Smallest safe next milestone (M6)
+- **M6 - Repair convergence hardening (bounded).** What: a compile-driven rewrite that preserves all existing declarations (dedupe on duplicate-identifier diagnostics), and a final inline-verify that runs `npm run lint` on the staged tree BEFORE committing. How: incremental, one diagnostic class at a time. Acceptance test: 5 live TITAN-1 runs; >=3 fully green on the final attempt with zero requirement marked PASS while a named check fails.
+- Still **no** privilege escalation. Path/symlink/protected-path validation, `shell:false` exact commands, and the secret-free git env remain untouched.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Addendum to `OPENHANDS-FORGE-TITAN-20261012-04` — Batch-10 live evidence
+- **Timestamp (UTC)**: 2026-10-12T15:35:00Z
+- **Author**: OPENHANDS
+- **Type**: TEST
+
+Five consecutive live TITAN-1 runs on the same commit, keyless route:
+
+| Run | Final attempt (all five checks) | Outcome |
+| :-- | :-- | :-- |
+| 1 | lint=1 | FAIL (honest: model wrote non-compiling TS) |
+| 2 | no checks | FAIL — **infrastructure**: keyless daily cap reached ("All keyless primary routes failed ... Daily limit reached") |
+| 3 | install=0, lint=0, test=0, build=0, diff=0 | **SUCCESS** — REQ-1/2/3 = PASS |
+| 4 | no checks | FAIL (route returned no usable plan) |
+| 5 | lint=1, git diff --check=2 | FAIL (honest: non-compiling TS + trailing-whitespace) |
+
+Interpretation:
+- The harness is now correct on the cases it controls: all three files are always planned (A2/A3), unbalanced edits are rejected (A4), and no run produced a FALSE PASS (A1/A8).
+- Residual failures are **model-quality** or **keyless-infrastructure** limits, reported honestly. `git diff --check=2` shows Forge now also surfaces whitespace defects rather than hiding them.
+- Combined with batch 9 (run 1 success), observed success is ~2/8 on the free keyless tier. With a stronger/free API key the same harness has substantially more headroom; that is the recommended next input, not a code rewrite.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-MODEL-LAYER-20261012-05`
+- **Timestamp (UTC)**: 2026-10-12T16:10:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: AUDIT + FIX
+- **Scope**: The "reliable long-context model" request. Root cause of the non-compiling TypeScript, and the smallest safe fix in `src/services/model.ts`.
+
+#### 1. What "the model" actually is
+There is no single model. `src/services/model.ts` calls `freelm` (`FreeLLM.fromEnv`) which routes to whatever provider is available. With no API key, that is the **keyless tier**:
+- **Kilo Gateway** (anonymous): `poolside/laguna-s-2.1:free` (256K ctx), plus a set of `:free` OpenRouter models.
+- **OVHcloud** (anonymous): `Meta-Llama-3_3-70B-Instruct`, `gpt-oss-120b`, `gpt-oss-20b`, `Qwen3.8-27B`, `Mistral-Small-3.2-24B-Instruct-2506`, `Qwen3.5-9B`.
+
+Measured limits: Kilo ~3 req/min shared across all models; OVH ~2 req/min **per model** and each model is benched independently on its own 429.
+
+#### 2. The precise root cause (measured, not assumed)
+Probed the live routes directly (`node --input-type=module`, credentials removed):
+
+| Model | Behaviour on a "return JSON + prose" request |
+| :-- | :-- |
+| `nvidia/nemotron-3-super-120b-a12b:free` | HTTP 200 but **empty content**: `completion_tokens=1500`, `reasoning_tokens=1500`. The whole budget went to hidden reasoning. **This is the "response contained no usable text" failure.** |
+| `poolside/laguna-s-2.1:free` | Clean 843-char JSON output, `reasoning_tokens=0`, `finish_reason=stop`. |
+| `gpt-oss-120b` / OVH | Frequent `Transient`/`timeout` under load. |
+
+So the "killer" model was chosen by a **generic alias (`chat`)**, which can resolve to a **reasoning model** that emits no answer. The fix is not a bigger model; it is choosing models that actually answer, and abandoning a model that returns empty.
+
+#### 3. Change made (`src/services/model.ts`) — additive, bounded
+| # | Change |
+| :-- | :-- |
+| M1 | Explicit ordered preference of **non-reasoning, long-context, keyless** models: `poolside/laguna-s-2.1:free`, `Qwen3.8-27B`, `Meta-Llama-3_3-70B-Instruct`, `Mistral-Small-3.2-24B-Instruct-2506`, then generic aliases. |
+| M2 | Try **each model in turn**; an empty (thinking-only) response moves to the next model instead of aborting to the fallback. |
+| M3 | One bounded **second pass** over the chain after a 2s pause (absorbs a transient/bench). |
+| M4 | Raised output budget from `max_tokens=1024` to `2048` (env `FORGE_MAX_TOKENS`). |
+| M5 | Per-call timeout 45s -> 30s (env `FORGE_MODEL_TIMEOUT_MS`); `FORGE_MODEL_CHAIN` overrides the whole list. |
+
+#### 4. Honest limitation (unchanged)
+On a saturated keyless tier even a correct chain can be exhausted (runs observed: `all providers/keys exhausted`, `timeout: no answer within the call's deadline`). Those are **infrastructure** limits. The durable fix for "always reliable" is one free API key (Groq/Gemini/OpenRouter), which `model.ts` already understands and which the harness cannot substitute for. This is a **configuration** input, not a rewrite.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Addendum to `OPENHANDS-MODEL-LAYER-20261012-05` — measured effect
+- **Timestamp (UTC)**: 2026-10-12T16:35:00Z
+- **Author**: OPENHANDS
+- **Type**: TEST
+
+Same commit, same keyless tier, four consecutive live TITAN-1 runs **after** the model-chain change:
+
+| Run | Final attempt | Outcome |
+| :-- | :-- | :-- |
+| 1 | lint=1 | FAIL — honest, model-quality (full repair loop ran; no infra error) |
+| 2 | all checks 0 | **SUCCESS** |
+| 3 | lint=1 | FAIL — honest, model-quality |
+| 4 | all checks 0 | **SUCCESS** |
+
+Comparison of infrastructure reliability on the keyless tier:
+
+| Batch | Green | Endpoint deaths (no answer) |
+| :-- | :-- | :-- |
+| Before fix | 1/5 | 1 |
+| Before fix | 1/4 | 3 |
+| **After fix** | **2/4** | **0** |
+
+Interpretation:
+- Choosing non-reasoning, long-context models and abandoning empty answers **removed the endpoint deaths** in this batch and roughly doubled observed success.
+- Residual failures are now purely model-quality (non-compiling TypeScript), caught honestly by the final check, never reported as PASS.
+- Ceiling remains the free keyless tier. The recommended input for "always reliable" is one free API key; `model.ts` already consumes Groq/Gemini/OpenRouter keys when present, and `FORGE_MODEL_CHAIN` allows pinning a specific reliable model.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-TIMING-20261012-06`
+- **Timestamp (UTC)**: 2026-10-12T17:00:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: AUDIT + FIX (latency)
+- **Question answered**: "Why is it taking that long?"
+
+#### 1. Where the wall-clock time goes (measured)
+- The five target checks are fast: `npm install` 0.65s, `npm run lint` ~1.0s, `npm test` 1.9s, `npm run build` 1.0s, `git diff --check` 0.02s -> ~4.5s per attempt.
+- **All the time is in model calls.** One trivial reply took 1.1s-27s depending on the model; a full plan/patch call is longer. A mission makes 3-9 model calls, and the repair loop multiplies that (up to 5 attempts).
+
+#### 2. Root cause of the long waits
+1. **Saturation.** The keyless tier rate-limits: OVH ~2 req/min **per model**, Kilo ~3 req/min **shared**. Under load, calls queue and hit `timeout: no answer within the call's deadline`.
+2. **Slow models in the chain.** `Qwen3.8-27B` measured **27s** for a trivial reply; it sat second in the chain, so every mission waited on it.
+3. **Retry fan-out.** freelm `maxAttempts: 12` + `hedge: true` multiplied attempts across providers, and my second-pass retry doubled the sweep.
+4. **Test method.** I ran 3-5 missions **sequentially**, so a single "batch" was 10-25 minutes of wall-clock, which read as "forever".
+
+#### 3. Fix (`src/services/model.ts`, additive)
+| # | Change | Effect |
+| :-- | :-- | :-- |
+| L1 | Reordered the chain by **measured latency**: `Mistral-Small-3.2-24B` (~1.1s), `Meta-Llama-3_3-70B` (~2.0s), `gpt-oss-20b` (~6.9s), then slower ones | Fast model answers first |
+| L2 | `maxAttempts` 12 -> 6, `hedge` true -> false | Stops fan-out multiplication |
+| L3 | Per-call timeout 45s -> 20s (env `FORGE_MODEL_TIMEOUT_MS`) | Bounds a single stuck call |
+| L4 | **Hard sweep budget** `FORGE_MODEL_BUDGET_MS` (default 45s) for the whole fallback sweep | A saturated tier fails in ~1.5 min instead of 6 |
+| L5 | Removed the time-doubling second pass | No repeated 45s sweep |
+
+#### 4. Measured effect
+| Version | One full mission |
+| :-- | :-- |
+| Before | **5m42s** then failed |
+| Budget 75s + second pass | 2m37s |
+| **Final (budget 45s, no second pass)** | **1m32s** |
+
+`npm run lint` EXIT 0; unit tests 32 passed / 0 failed.
+
+#### 5. Honest interpretation
+The slowness was not one slow step; it was **many retries against a rate-limited free tier**. The budget now bounds it, but a bounded fast failure is still a failure: on a saturated keyless tier Forge will spend ~1.5 min and then honestly report `keyless model routes unavailable`. The only way to make it *fast and reliable* is a real key (Groq free tier answers in well under a second). The harness now degrades quickly and truthfully instead of grinding.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-KEY-ROUTING-20261012-07`
+- **Timestamp (UTC)**: 2026-10-12T17:30:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: FIX (keyed routing + quota spreading)
+- **Input addressed**: "the API key will be exhausted right away — we already have Gemini and I can provide a Groq key."
+
+#### 1. The quota facts (from the installed freelm source, not guessed)
+| Provider | Free limit | Scope |
+| :-- | :-- | :-- |
+| Groq | **30 rpm / 1000 rpd** | **per model** |
+| Gemini (AI Studio) | ~**20 rpd per model**, 1M ctx, 15 rpm | **per model** |
+| OVH (keyless) | ~2 rpm | per model |
+| Kilo (keyless) | ~3 rpm | shared |
+
+Two consequences that answer the "exhausted right away" worry:
+1. Quotas are **per model**, not per key. One Groq key gives 1000 calls/day **on each** of `gpt-oss-20b`, `qwen3.8-27b`, `gpt-oss-120b` — so listing several models multiplies the budget.
+2. freelm accepts **multiple keys in one variable**, comma-joined (`GROQ_API_KEY="key1,key2"`), and rotates/benches them independently. `n` keys = `n`x the budget.
+
+#### 2. Change (`src/services/model.ts`)
+| # | Change |
+| :-- | :-- |
+| K1 | Chain is now **provider-diverse**: Groq models, then Gemini models, then keyless OVH/Kilo as backstop. |
+| K2 | **Auto-detect keys**: if any provider key is present, lead with the keyed chain; otherwise lead with the keyless chain (so the keyed ids do not 404 on the keyless tier). |
+| K3 | Imports `PROVIDER_ENV` / `envKeys` to detect configured keys without ever reading a key value. |
+| K4 | `FORGE_MODEL_CHAIN` still overrides everything. |
+
+#### 3. New tooling: `scripts/model-key-check.mjs`
+Prints which providers are configured (counts only, **never key values**) and makes one minimal call per model in the chain, so an exhausted key/model is visible per model:
+```
+node scripts/model-key-check.mjs
+```
+Exit 0 if at least one model answered. `FIRSTBORN_KEYLESS_ONLY=true` forces keyless (useful for CI).
+
+#### 4. Verified
+- Key detection: `GROQ_API_KEY="dummy1,dummy2"` + `GEMINI_API_KEY="dummyg"` -> detected `groq 2 key(s)`, `google 1 key(s)`, `hasProviderKeys=true`.
+- Routing: with a dummy Groq key, `openai/gpt-oss-20b` routed to **groq** (401 AuthError, expected for a dummy) instead of OVH — proving a real key will be used — then fell back to keyless automatically.
+- `npm run lint` EXIT 0; unit tests **32 passed / 0 failed**.
+
+#### 5. What is needed from Ahmed
+Set these as secrets (values never logged):
+- `GROQ_API_KEY` — the Groq key. For more headroom: `GROQ_API_KEY="key1,key2"`.
+- `GEMINI_API_KEY` — the existing Gemini key (aliases `GOOGLE_API_KEY` / `GOOGLE_AI_STUDIO_KEY` also work).
+Then run `node scripts/model-key-check.mjs` to confirm each answers.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-KEY-TOOLING-20261012-08`
+- **Timestamp (UTC)**: 2026-10-12T18:00:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: TOOLING
+- **Input addressed**: Gemini key confirmed AI Studio (starts with `AIza`) -> freelm `GEMINI_API_KEY` path is correct; plus the requested `model:check` script and nightly health cron.
+
+#### 1. Delivered
+| Artifact | Purpose |
+| :-- | :-- |
+| `npm run model:check` (`scripts/model-key-check.mjs`) | Prints configured provider counts (never key values) and probes each model production would use, keyed or keyless. Exit 0 iff >=1 model answers. `FIRSTBORN_KEYLESS_ONLY=true` forces keyless. |
+| `.github/workflows/model-health.yml` | Nightly (06:00 UTC) + manual key-health run using `GROQ_API_KEY` / `GEMINI_API_KEY` secrets, then the keyless smoke. Fails loudly if keys/models are exhausted. |
+| `src/services/model.ts` | Provider-diverse, key-aware chain (Groq -> Gemini -> keyless OVH/Kilo). |
+| `scripts/model-key-check.mjs` perms | Fixed `0600` -> `0644` so CI can read it. |
+
+#### 2. Verified
+- `npm run lint` EXIT **0**.
+- `npm test` **33 passed / 0 failed**.
+- `npm run model:check` (keyless) probed the correct chain: `Mistral-Small` PASS, `Meta-Llama-3_3-70B` PASS, `Qwen3.8-27B` EMPTY (thinking-only) -> 2/3, EXIT 0.
+- Watch out: `Qwen3.8-27B` on OVH intermittently returns **empty** even on a trivial prompt; it is last in the keyless chain for that reason. The keyed `qwen/qwen3.8-27b` (Groq) is distinct and is not affected by this observation.
+
+#### 3. Handoff: exact steps for Ahmed
+1. Add repository secrets: `GROQ_API_KEY` (your key; use `"k1,k2"` for rotation) and `GEMINI_API_KEY` (the `AIza...` key).
+2. Run `npm run model:check` — every configured model should print `PASS`.
+3. Forge will then prefer Groq (1000 rpd/model, fast) and fall back to Gemini (1M ctx), then keyless.
+
+No secrets, tokens, or credentials appear in this entry. Key values are never printed by any script.

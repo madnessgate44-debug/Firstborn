@@ -12,7 +12,8 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "model:smoke": "node scripts/model-smoke-test.mjs"
+    "model:smoke": "node scripts/model-smoke-test.mjs",
+    "model:check": "node scripts/model-key-check.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

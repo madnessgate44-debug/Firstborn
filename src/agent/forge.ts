@@ -46,7 +46,88 @@ function parseModelJson(text: string): any {
     if (trimmedEnd.endsWith('```')) normalized = trimmedEnd.slice(0, -3);
     normalized = normalized.trim();
   }
+  if (!isStructurallyBalanced(normalized)) {
+    throw new Error('Model output is structurally truncated: unbalanced JSON braces or brackets (output limit reached).');
+  }
   return JSON.parse(normalized);
+}
+
+/**
+ * Detect truncation deterministically: scan the text ignoring string contents and
+ * require every brace/bracket to close. A model that hits its output ceiling leaves
+ * the JSON open, which JSON.parse reports only as an obscure "Unterminated string".
+ */
+export function isStructurallyBalanced(text: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  const pairs: Record<string, string> = { '}': '{', ']': '[' };
+  for (const char of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; continue; }
+    if (char === '{' || char === '[') stack.push(char);
+    else if (char === '}' || char === ']') {
+      if (stack.pop() !== pairs[char]) return false;
+    }
+  }
+  return stack.length === 0 && !inString;
+}
+
+// A complete, compilable source file is always bracket-balanced. If applying an
+// edit yields unbalanced braces/parens/brackets, the edit almost certainly used a
+// partial or malformed anchor (for example replacing "foo() {" with "foo() ;"),
+// which produces a syntax error the model must fix rather than us committing.
+export function isCodeBalanced(text: string): boolean {
+  let depth = 0;
+  let i = 0;
+  let quote: string | null = null;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (quote) {
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      const nl = text.indexOf('\n', i);
+      i = nl === -1 ? text.length : nl;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; i += 1; continue; }
+    if (ch === '{' || ch === '(' || ch === '[') depth += 1;
+    else if (ch === '}' || ch === ')' || ch === ']') {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+    i += 1;
+  }
+  return depth === 0;
+}
+
+// A task description that names a file only in order to FORBID changing it
+// ("do not modify X", "leave X untouched") must not be treated as an explicit
+// edit request. Treating it as one made Forge hard-block on unrelated size limits.
+export function isForbiddenReference(taskText: string, candidate: string): boolean {
+  const idx = taskText.indexOf(candidate);
+  if (idx < 0) return false;
+  const window = taskText.slice(Math.max(0, idx - 60), idx + candidate.length + 40).toLowerCase();
+  const prefix = /(do not modify|don't modify|do not change|do not touch|must not (modify|change|touch)|without (modifying|changing|touching))\s*$/.test(
+    taskText.slice(Math.max(0, idx - 60), idx).toLowerCase()
+  );
+  const wrapped = /(leave|keep|hold)[\s\S]{0,60}?(untouched|unchanged|intact|as-is|as is)/.test(window);
+  return prefix || wrapped;
 }
 
 // --- R6 resilience primitives -------------------------------------------------
@@ -169,7 +250,32 @@ export function validateModelPlanShape(raw: unknown): ModelPlanShapeCheck {
     });
   }
 
-  return { ok: true, requirements, changes };
+  // Models sometimes emit several entries for the same file (for example one edit
+  // per requirement). Merge same-path, same-action entries deterministically so a
+  // legitimate multi-edit plan is not rejected as ambiguous, while a genuine
+  // action conflict still fails closed.
+  const mergedByPath = new Map<string, FileChangePlan>();
+  for (const change of changes) {
+    const existing = mergedByPath.get(change.path);
+    if (!existing) {
+      mergedByPath.set(change.path, change);
+      continue;
+    }
+    if (existing.action !== change.action) {
+      return { ...empty, ok: false, error: `Change "${change.path}" has conflicting actions "${existing.action}" and "${change.action}".` };
+    }
+    if (typeof existing.content === 'string' && typeof change.content === 'string' && existing.content !== change.content) {
+      return { ...empty, ok: false, error: `Change "${change.path}" supplies two different full contents.` };
+    }
+    const mergedEdits = [...(existing.edits ?? []), ...(change.edits ?? [])];
+    mergedByPath.set(change.path, {
+      ...existing,
+      content: existing.content ?? change.content,
+      edits: mergedEdits.length > 0 ? mergedEdits : undefined,
+    });
+  }
+
+  return { ok: true, requirements, changes: [...mergedByPath.values()] };
 }
 
 // Requested branch wins only when it is explicit and not the default; invalid
@@ -301,41 +407,80 @@ export class ForgeAgent {
         continue;
       }
       const result = applyExactEdits(source, change.edits);
-      if (!result.ok) problems.push(`${change.path}: ${result.error}`);
+      if (!result.ok) {
+        problems.push(`${change.path}: ${result.error}`);
+        continue;
+      }
+      if (!isCodeBalanced(result.content)) {
+        problems.push(`${change.path}: applying the edits leaves unbalanced braces/parentheses (likely a partial or broken anchor).`);
+      }
     }
     return problems;
   }
 
 
-  private async applyChangesToWorktree(worktree: string, changes: FileChangePlan[]): Promise<void> {
+  /**
+   * Deterministically reconstruct the final content of every file the patch
+   * touches, by applying its exact edits to the source snapshot that was supplied
+   * to the model. This is the single source of truth for both the tested worktree
+   * and the committed files, so the two can never diverge.
+   */
+  private async stageFinalContents(
+    changes: FileChangePlan[],
+    contextFiles: { path: string; content: string }[]
+  ): Promise<{ ok: boolean; files: FileChangePlan[]; error?: string }> {
+    const sourceByPath = new Map(contextFiles.map((file) => [file.path, file.content]));
+    const files: FileChangePlan[] = [];
+    const seen = new Set<string>();
     for (const change of changes) {
+      if (seen.has(change.path)) {
+        return { ok: false, files, error: `Duplicate change for path "${change.path}"; refusing ambiguous commit.` };
+      }
+      seen.add(change.path);
+      const hasContent = typeof change.content === 'string' && change.content.length > 0;
+      const hasEdits = Array.isArray(change.edits) && change.edits.length > 0;
+      if (hasContent && !hasEdits) {
+        if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(change.path) && !isCodeBalanced(change.content as string)) {
+          return { ok: false, files, error: `Full content for "${change.path}" is not syntactically balanced; refusing a broken file.` };
+        }
+        files.push({ ...change, edits: undefined });
+        continue;
+      }
+      if (hasEdits) {
+        const source = sourceByPath.get(change.path);
+        if (typeof source !== 'string') {
+          return { ok: false, files, error: `No supplied source content to apply exact edits for "${change.path}".` };
+        }
+        const applied = applyExactEdits(source, change.edits as { find: string; replace: string }[]);
+        if (!applied.ok) {
+          return { ok: false, files, error: `Exact edit rejected in "${change.path}": ${applied.error}` };
+        }
+        if (!isCodeBalanced(applied.content)) {
+          return { ok: false, files, error: `Exact edit for "${change.path}" leaves unbalanced braces/parentheses; refusing a syntactically broken file.` };
+        }
+        files.push({ ...change, content: applied.content, edits: undefined });
+        continue;
+      }
+      return { ok: false, files, error: `Change for "${change.path}" has neither content nor edits.` };
+    }
+    return { ok: true, files };
+  }
+
+  /**
+   * Write already-staged final file contents into the isolated worktree. Path,
+   * symlink, and escape checks are identical to applyChangesToWorktree so the
+   * committed tree is byte-for-byte the tested tree.
+   */
+  private async applyFinalContentsToWorktree(worktree: string, files: FileChangePlan[]): Promise<void> {
+    for (const change of files) {
       const portablePath = change.path.replace(/\\/g, '/');
       const normalizedPath = path.posix.normalize(portablePath).replace(/^(\.\/)+/, '');
       const absolutePath = path.resolve(worktree, normalizedPath);
       if (!absolutePath.startsWith(worktree + path.sep)) {
         throw new Error(`Patch path escaped the isolated worktree: ${change.path}`);
       }
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       const worktreeRealPath = await fs.realpath(worktree);
-      const relativeParent = path.relative(worktree, path.dirname(absolutePath));
-      let checkedParent = worktreeRealPath;
-      for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
-        checkedParent = path.join(checkedParent, segment);
-        let parentStat;
-        try { parentStat = await fs.lstat(checkedParent); } catch (err: any) {
-          if (err?.code !== 'ENOENT') throw err;
-        }
-        if (parentStat?.isSymbolicLink()) {
-          throw new Error(`BLOCKED: patch target parent contains a symlink: ${change.path}`);
-        }
-        if (!parentStat) {
-          await fs.mkdir(checkedParent);
-          parentStat = await fs.lstat(checkedParent);
-        }
-        const resolvedParent = await fs.realpath(checkedParent);
-        if (resolvedParent !== worktreeRealPath && !resolvedParent.startsWith(worktreeRealPath + path.sep)) {
-          throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
-        }
-      }
       const parentRealPath = await fs.realpath(path.dirname(absolutePath));
       if (parentRealPath !== worktreeRealPath && !parentRealPath.startsWith(worktreeRealPath + path.sep)) {
         throw new Error(`BLOCKED: patch target parent resolves outside the worktree: ${change.path}`);
@@ -351,19 +496,9 @@ export class ForgeAgent {
           throw new Error(`BLOCKED: patch target resolves outside the worktree: ${change.path}`);
         }
       }
-      const exists = Boolean(targetStat);
-      if (change.action === 'create' && exists) throw new Error(`Patch marked existing file as create: ${change.path}`);
-      if (change.action === 'modify' && !exists) throw new Error(`Patch marked missing file as modify: ${change.path}`);
-      if (change.action === 'modify' && Array.isArray(change.edits) && change.edits.length > 0) {
-        const current = await fs.readFile(absolutePath, 'utf-8');
-        const applied = applyExactEdits(current, change.edits);
-        if (!applied.ok) throw new Error(`Exact edit rejected in ${change.path}: ${applied.error}`);
-        await fs.writeFile(absolutePath, applied.content, 'utf-8');
-        // The GitHub commit API receives the verified full file from the tested worktree.
-        change.content = applied.content;
-      } else {
-        await fs.writeFile(absolutePath, change.content as string, 'utf-8');
-      }
+      if (change.action === 'create' && targetStat) throw new Error(`Patch marked existing file as create: ${change.path}`);
+      if (change.action === 'modify' && !targetStat) throw new Error(`Patch marked missing file as modify: ${change.path}`);
+      await fs.writeFile(absolutePath, change.content as string, 'utf-8');
     }
   }
 
@@ -471,7 +606,8 @@ export class ForgeAgent {
       const explicitPaths = Array.from(
         taskText.matchAll(/((?:src|scripts|\.github|docs)\/[\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|yml|yaml))/g),
         (match) => match[1]
-      ).filter((candidate, index, all) => all.indexOf(candidate) === index && repoFilePaths.includes(candidate));
+      ).filter((candidate, index, all) => all.indexOf(candidate) === index && repoFilePaths.includes(candidate))
+        .filter((candidate) => !isForbiddenReference(taskText, candidate));
       const eligibleSourcePaths = repoFilePaths
         .filter((p) => /\.(ts|tsx|js|jsx|mjs|cjs|json|md)$/.test(p))
         .filter((p) => !p.startsWith('node_modules/') && !p.startsWith('dist/') && !p.startsWith('.git/'))
@@ -539,48 +675,8 @@ export class ForgeAgent {
         ...targetSourceFiles,
       ];
 
-      report.modelInvoked.callsCount += 1;
-      let modelResult = await this.model.generatePlanAndPatch(
-        `Task: ${task.title}\nDetails: ${task.description}`,
-        contextFiles
-      );
-      // R6: retry transient anonymous-route failures with bounded backoff; a
-      // fatal failure is never retried. The single bounded retry keeps total
-      // model calls within the configured ceiling.
-      if (!modelResult.success && classifyFailure(modelResult.error) === 'RETRYABLE') {
-        log('warn', `Model route reported a retryable failure; one bounded retry. Detail: ${modelResult.error}`);
-        const retry = await withBoundedRetry(
-          () => this.model.generatePlanAndPatch(`Task: ${task.title}\nDetails: ${task.description}`, contextFiles),
-          { attempts: loadForgeLimits().modelAttempts, baseDelayMs: 500 }
-        );
-        report.modelInvoked.callsCount += retry.attempts;
-        if (retry.ok) modelResult = retry.value;
-      }
-
-      report.modelInvoked.provider = modelResult.provider;
-      report.modelInvoked.model = modelResult.model;
-      report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
-      report.modelInvoked.keylessRouteErrors = [
-          ...(report.modelInvoked.keylessRouteErrors ?? []),
-          ...(modelResult.keylessRouteErrors ?? []),
-        ];
-      if (!modelResult.success) {
-        report.status = 'FAILED';
-        report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
-        log('error', report.errorMessage);
-        return report;
-      }
-
-      const applyPlanToReport = (parsedPlan: any) => {
-        // R6: validate shape deterministically so a malformed field cannot
-        // silently corrupt the report.
-        const shape = validateModelPlanShape(parsedPlan);
-        if (!shape.ok) throw new Error(`Model plan shape rejected: ${shape.error}`);
-        report.requirements = shape.requirements.map((req) => ({ ...req, status: 'PENDING' as const }));
-        report.plannedChanges = shape.changes;
-      };
-
       const maxModelCalls = loadForgeLimits().maxModelCalls;
+      const maxRepairs = loadForgeLimits().maxRepairAttempts;
       const guardModelCall = (label: string): boolean => {
         if (report.modelInvoked.callsCount >= maxModelCalls) {
           report.status = 'BLOCKED';
@@ -590,82 +686,202 @@ export class ForgeAgent {
         }
         return true;
       };
-
-      let parsedPlan: any;
-      try {
-        parsedPlan = parseModelJson(modelResult.text);
-      } catch (err: any) {
-        if (!guardModelCall('JSON repair attempt')) return report;
-        log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
-        report.modelInvoked.callsCount += 1;
-        modelResult = await this.model.generatePlanAndPatch(
-          `${task.title}\nDetails: ${task.description}\n\nOUTPUT REPAIR REQUIRED. The previous response was invalid or truncated JSON (${String(err.message).slice(0, 240)}). Return a much smaller valid JSON plan. Existing files MUST use compact exact-anchor edits only, never full file content. Use at most 2 files and 3 edits total. Copy every find string verbatim from the supplied source. Output JSON only; if you cannot safely fit the patch, return an empty changes array and state the blocker in summary.`,
-          contextFiles
-        );
-        report.modelInvoked.provider = modelResult.provider;
-        report.modelInvoked.model = modelResult.model;
-        report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
+      const recordModel = (result: { provider: string; model: string; fallbackUsed?: boolean; keylessRouteErrors?: string[] }) => {
+        report.modelInvoked.provider = result.provider;
+        report.modelInvoked.model = result.model;
+        report.modelInvoked.fallbackUsed = result.fallbackUsed ?? false;
         report.modelInvoked.keylessRouteErrors = [
           ...(report.modelInvoked.keylessRouteErrors ?? []),
-          ...(modelResult.keylessRouteErrors ?? []),
+          ...(result.keylessRouteErrors ?? []),
         ];
-        if (!modelResult.success) {
-          report.status = 'FAILED';
-          report.errorMessage = `Model JSON repair failed: ${modelResult.error}`;
-          log('error', report.errorMessage);
-          return report;
-        }
-        try {
-          parsedPlan = parseModelJson(modelResult.text);
-        } catch (repairErr: any) {
-          report.status = 'FAILED';
-          report.errorMessage = `Model output remained invalid JSON after one repair attempt: ${repairErr.message}`;
-          log('error', report.errorMessage);
-          return report;
-        }
-      }
-      applyPlanToReport(parsedPlan);
-
-      // Retry malformed exact anchors at most twice. Never relax matching or apply a guessed edit.
-      let anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
-      let anchorRepairAttempts = 0;
-      while (anchorProblems.length > 0 && anchorRepairAttempts < 2) {
-        anchorRepairAttempts += 1;
-        log('warn', `Model patch contains invalid exact anchors; requesting bounded repair ${anchorRepairAttempts}/2: ${anchorProblems.slice(0, 5).join(' | ')}`);
-        report.modelInvoked.callsCount += 1;
-        modelResult = await this.model.generatePlanAndPatch(
-          `${task.title}\nDetails: ${task.description}\n\nPATCH REPAIR REQUIRED (attempt ${anchorRepairAttempts}/2). The previous patch was rejected before application because these patch preflight checks failed: ${JSON.stringify(anchorProblems.slice(0, 5))}. Re-read the supplied source files and regenerate the complete compact JSON plan. Every edit.find must be copied verbatim from the matching supplied file and must occur exactly once. Keep at most 3 files and 4 edits total. Do not guess anchors, do not weaken validation, and do not change unrelated files.`,
-          contextFiles
+      };
+      const focusContext = (requiredPath: string) =>
+        contextFiles.filter((file) =>
+          file.path === requiredPath || file.path === 'AGENTS.md' || file.path === 'package.json' || file.path === 'FILE_TREE_INVENTORY.txt'
         );
-        report.modelInvoked.provider = modelResult.provider;
-        report.modelInvoked.model = modelResult.model;
-        report.modelInvoked.fallbackUsed = modelResult.fallbackUsed ?? false;
-        report.modelInvoked.keylessRouteErrors = [
-          ...(report.modelInvoked.keylessRouteErrors ?? []),
-          ...(modelResult.keylessRouteErrors ?? []),
-        ];
-        if (!modelResult.success) {
-          report.status = 'FAILED';
-          report.errorMessage = `Model patch repair failed: ${modelResult.error}`;
-          log('error', report.errorMessage);
-          return report;
+      // The context handed to the model must reflect edits already made this mission,
+      // exactly like a developer reading the file after their last change. Without
+      // this, a later file is written against a stale snapshot of its dependencies.
+      const stagedByPath = new Map<string, string>();
+      const stageOne = async (change: FileChangePlan): Promise<void> => {
+        const result = await this.stageFinalContents([change], contextFiles);
+        if (result.ok && result.files[0] && typeof result.files[0].content === 'string') {
+          stagedByPath.set(change.path, result.files[0].content);
         }
-        try {
-          parsedPlan = parseModelJson(modelResult.text);
-        } catch (err: any) {
-          report.status = 'FAILED';
-          report.errorMessage = `Failed to parse repaired model JSON: ${err.message}`;
-          log('error', report.errorMessage);
-          return report;
-        }
-        applyPlanToReport(parsedPlan);
-        anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+      };
+      const evolvingContext = (requiredPath: string) =>
+        focusContext(requiredPath).map((file) =>
+          stagedByPath.has(file.path) ? { ...file, content: stagedByPath.get(file.path) as string } : file
+        );
+
+      // 4. PLANNING — PER-FILE BOUNDED EXECUTION
+      // Forge works the way a careful engineer does: capture the requirements once,
+      // then implement one required file per model call so no single output must fit
+      // the whole mission inside the anonymous endpoint's small output ceiling.
+      report.modelInvoked.callsCount += 1;
+      let modelResult = await this.model.generatePlanAndPatch(
+        `Task: ${task.title}\nDetails: ${task.description}`,
+        contextFiles
+      );
+      if (!modelResult.success && classifyFailure(modelResult.error) === 'RETRYABLE') {
+        log('warn', `Model route reported a retryable failure; one bounded retry. Detail: ${modelResult.error}`);
+        const retry = await withBoundedRetry(
+          () => this.model.generatePlanAndPatch(`Task: ${task.title}\nDetails: ${task.description}`, contextFiles),
+          { attempts: loadForgeLimits().modelAttempts, baseDelayMs: 500 }
+        );
+        report.modelInvoked.callsCount += retry.attempts;
+        if (retry.ok) modelResult = retry.value;
       }
-      if (anchorProblems.length > 0) {
+      recordModel(modelResult);
+      if (!modelResult.success) {
         report.status = 'FAILED';
-        report.errorMessage = `Patch contains invalid exact anchors after two repair attempts: ${anchorProblems.slice(0, 5).join(' | ')}`;
+        report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
         log('error', report.errorMessage);
         return report;
+      }
+
+      // The bootstrap plan may come back truncated or malformed on a small-output
+      // endpoint. Retry a bounded number of times, then fall back to implementing
+      // the explicitly named files directly so planning cannot abort the mission
+      // before the per-file engine ever runs.
+      const planAttempts = loadForgeLimits().modelAttempts + 2;
+      let bootShape: ReturnType<typeof validateModelPlanShape> | undefined;
+      for (let planAttempt = 0; planAttempt < planAttempts; planAttempt += 1) {
+        if (planAttempt > 0) {
+          if (!guardModelCall(`planning retry ${planAttempt + 1}/${planAttempts}`)) return report;
+          report.modelInvoked.callsCount += 1;
+          modelResult = await this.model.generatePlanAndPatch(
+            `Task: ${task.title}\nDetails: ${task.description}\n\nReturn a compact JSON plan with a "requirements" array (each with id, description, acceptanceCriteria using an existing repo check such as "npm run lint" or "npm test") and a "changes" array (may be empty; the implementation will be produced per file afterwards). Keep the JSON small and complete.`,
+            contextFiles
+          );
+          recordModel(modelResult);
+          if (!modelResult.success) continue;
+        }
+        try {
+          bootShape = validateModelPlanShape(parseModelJson(modelResult.text));
+        } catch (err: any) {
+          log('warn', `Bootstrap plan attempt ${planAttempt + 1} was not valid JSON (${err.message}); retrying if budget remains.`);
+          bootShape = undefined;
+        }
+        if (bootShape?.ok && bootShape.requirements.length > 0) break;
+        bootShape = undefined;
+      }
+      const fallbackPaths = explicitPaths.filter((p) => !p.endsWith('.md') && !p.endsWith('.json'));
+      if (!bootShape || !bootShape.ok) {
+        if (fallbackPaths.length === 0) {
+          report.status = 'FAILED';
+          report.errorMessage = 'Bootstrap planning produced no valid requirements and no explicit files to fall back to.';
+          log('error', report.errorMessage);
+          return report;
+        }
+        log('warn', 'Bootstrap planning exhausted its bounded retries; falling back to per-file implementation of the explicitly named files.');
+        report.requirements = fallbackPaths.map((p, index) => ({
+          id: `REQ-${index + 1}`,
+          description: `Implement the requested change in ${p}.`,
+          acceptanceCriteria: 'npm run lint',
+          status: 'PENDING' as const,
+        }));
+      } else {
+        report.requirements = bootShape.requirements.map((req) => ({ ...req, status: 'PENDING' as const }));
+        report.plannedChanges = bootShape.changes;
+      }
+      if (!bootShape || !bootShape.ok) report.plannedChanges = [];
+
+      // Drop any change whose exact anchors do not validate against the supplied
+      // source so the file can be re-implemented cleanly in the per-file loop.
+      const bootAnchorProblems = new Set(
+        this.findEditAnchorProblems(report.plannedChanges, contextFiles).map((problem) => problem.split(':')[0])
+      );
+      if (bootAnchorProblems.size > 0) {
+        log('warn', `Dropping ${bootAnchorProblems.size} change(s) with invalid anchors for per-file re-implementation.`);
+        report.plannedChanges = report.plannedChanges.filter((change) => !bootAnchorProblems.has(change.path));
+      }
+      for (const change of report.plannedChanges) {
+        await stageOne(change);
+      }
+
+      // 4b. PER-FILE COMPLETION — one bounded, retried model call per required file.
+      const filesToImplement = [...explicitPaths.filter((p) => !p.endsWith('.md') && !p.endsWith('.json'))]
+        .sort((a, b) => (a.endsWith('/types.ts') || a.endsWith('types.ts') ? -1 : 0) - (b.endsWith('/types.ts') || b.endsWith('types.ts') ? -1 : 0));
+      for (const requiredPath of filesToImplement) {
+        if (report.plannedChanges.some((change) => change.path === requiredPath)) continue;
+        if (!guardModelCall(`implementation of ${requiredPath}`)) return report;
+        let added = false;
+        let lastProblem = 'model produced no change for this file';
+        for (let fileAttempt = 0; fileAttempt < maxRepairs && !added; fileAttempt += 1) {
+          // On the last attempt, allow a complete rewrite of this one file. Anchored
+          // edits are safer, but a rewrite lets Forge recover from repeated partial or
+          // malformed anchors instead of giving up, exactly like a developer would.
+          const rewriteMode = fileAttempt === maxRepairs - 1;
+          const editInstruction = rewriteMode
+            ? `Return a compact JSON plan with action "modify" for ${requiredPath} and a complete "content" string containing the ENTIRE corrected file (every line, all existing members preserved). Do not return edits. Do not modify any other file. The file must compile as valid TypeScript.`
+            : `Return a compact JSON plan containing ONLY the change(s) for ${requiredPath}. The action MUST be "modify" and MUST use exact-anchor "edits" copied verbatim from the supplied source; never return whole-file content for an existing file. Every find string must occur exactly once. Do not modify any other file. Keep the edit minimal and syntactically complete.`;
+          const crossModuleHint = ` If you need data owned by another class, add or use a PUBLIC method on that class (and change that file in its own step); never read a private member from another module.`;
+          report.modelInvoked.callsCount += 1;
+          const attemptNote = fileAttempt === 0
+            ? ''
+            : `\n\nPREVIOUS ATTEMPT FAILED: ${lastProblem}. Fix that specific problem and return valid JSON.`;
+          const fileResult = await this.model.generatePlanAndPatch(
+            `${task.title}\nDetails: ${task.description}\n\nIMPLEMENT FILE ${requiredPath} (attempt ${fileAttempt + 1}/${maxRepairs}). ${editInstruction}${crossModuleHint} The supplied source already includes every change made earlier in this mission, so implement this file against the current version shown.${attemptNote}`,
+            evolvingContext(requiredPath)
+          );
+          recordModel(fileResult);
+          if (!fileResult.success) {
+            lastProblem = `model call failed: ${fileResult.error}`;
+            continue;
+          }
+          let filePlan: any;
+          try {
+            filePlan = parseModelJson(fileResult.text);
+          } catch (err: any) {
+            lastProblem = `invalid JSON: ${err.message}`;
+            continue;
+          }
+          const fileShape = validateModelPlanShape(filePlan);
+          if (!fileShape.ok) {
+            lastProblem = `plan shape rejected: ${fileShape.error}`;
+            continue;
+          }
+          let candidate = fileShape.changes.find((change) => change.path === requiredPath);
+          if (!candidate) {
+            lastProblem = `no change for ${requiredPath}`;
+            continue;
+          }
+          if (rewriteMode && !(typeof candidate.content === 'string' && candidate.content.length > 0)) {
+            lastProblem = 'rewrite attempt did not include full file content';
+            continue;
+          }
+          if (rewriteMode) {
+            candidate = { ...candidate, action: 'modify', edits: undefined };
+            const rewriteStage = await this.stageFinalContents([{ ...candidate, path: requiredPath }], contextFiles);
+            if (!rewriteStage.ok || !rewriteStage.files[0]) {
+              lastProblem = `rewrite rejected: ${rewriteStage.error ?? 'unknown'}`;
+              continue;
+            }
+            candidate = rewriteStage.files[0];
+          }
+          const candidateAnchors = rewriteMode ? [] : this.findEditAnchorProblems([candidate], contextFiles);
+          if (candidateAnchors.length > 0) {
+            lastProblem = `invalid anchors: ${candidateAnchors.slice(0, 3).join(' | ')}`;
+            continue;
+          }
+          const merged = [...report.plannedChanges, candidate];
+          const mergedValidation = this.validatePatch(merged);
+          if (!mergedValidation.valid) {
+            lastProblem = `patch rejected: ${mergedValidation.error}`;
+            continue;
+          }
+          report.plannedChanges = merged;
+          stagedByPath.set(requiredPath, candidate.content as string);
+          added = true;
+        }
+        if (!added) {
+          report.status = 'FAILED';
+          report.errorMessage = `Could not implement required file ${requiredPath} after ${maxRepairs} attempt(s): ${lastProblem}`;
+          log('error', report.errorMessage);
+          return report;
+        }
+        log('info', `Implemented required file ${requiredPath}.`);
       }
 
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
@@ -679,6 +895,35 @@ export class ForgeAgent {
         return report;
       }
       log('info', `Patch validated successfully: ${report.plannedChanges.length} files pass security checks.`);
+
+      // 5b. IMPLEMENTATION COVERAGE (prevents a false PASS)
+      // A patch that only edits a strict subset of the files the task explicitly
+      // requires is bounded/incomplete. Evidence must never authorize it, so we
+      // fail closed and name the untouched files instead of reporting success.
+      const requiredEditPaths = explicitPaths.filter((p) => !p.endsWith('.md') && !p.endsWith('.json'));
+      const changedPaths = new Set(report.plannedChanges.map((c) => c.path));
+      const untouchedRequired = requiredEditPaths.filter((p) => !changedPaths.has(p));
+      if (untouchedRequired.length > 0) {
+        report.status = 'FAILED';
+        report.errorMessage = `Incomplete implementation: the task explicitly requires changes to ${untouchedRequired.join(', ')} but the patch does not modify them.`;
+        log('error', report.errorMessage);
+        return report;
+      }
+      log('info', `Implementation coverage confirmed for ${requiredEditPaths.length} explicitly required file(s).`);
+
+      // 5c. FINAL-CONTENTS STAGING
+      // Reconstruct every touched file's final content by applying the exact edits
+      // to the source snapshot that was supplied to the model. This is the single
+      // source of truth for both testing and committing, so the tree that is tested
+      // is exactly the tree that is committed.
+      let staged = await this.stageFinalContents(report.plannedChanges, contextFiles);
+      if (!staged.ok) {
+        report.status = 'FAILED';
+        report.errorMessage = `Staging rejected: ${staged.error}`;
+        log('error', report.errorMessage);
+        return report;
+      }
+      log('info', `Staged final contents for ${staged.files.length} file(s).`);
 
       // 6. Apply the validated patch in an isolated checkout, then test that exact tree.
       report.status = 'TESTING';
@@ -708,7 +953,7 @@ export class ForgeAgent {
           return report;
         }
 
-        await this.applyChangesToWorktree(worktree, report.plannedChanges);
+        await this.applyFinalContentsToWorktree(worktree, staged.files);
 
         const packagePath = path.join(worktree, 'package.json');
         let scripts: Record<string, string> = {};
@@ -738,7 +983,9 @@ export class ForgeAgent {
 
         let latestAttemptResults: TaskExecutionReport['testResults'] = [];
         let allChecksPassed = false;
-        for (let attempt = 0; attempt < 3 && !allChecksPassed; attempt += 1) {
+        const maxTestRepairs = loadForgeLimits().maxRepairAttempts;
+        const maxTestAttempts = maxTestRepairs + 1;
+        for (let attempt = 0; attempt < maxTestAttempts && !allChecksPassed; attempt += 1) {
           const attemptResults: TaskExecutionReport['testResults'] = [];
           if (hasNpmScripts) {
             let install = await this.testRunner.runCheck('npm install', worktree);
@@ -775,13 +1022,24 @@ export class ForgeAgent {
           allChecksPassed = attemptResults.length > 0 && attemptResults.every((result) => result.status === 'PASSED');
           if (allChecksPassed) break;
 
-          if (attempt < 2) {
+          if (attempt < maxTestRepairs) {
+            if (!guardModelCall(`target-check repair ${attempt + 1}/${maxTestRepairs}`)) return report;
             const failedResults = attemptResults.filter((result) => result.status !== 'PASSED');
             const failureDetails = failedResults.map((result) =>
               `COMMAND: ${result.command}\nSTATUS: ${result.status}\nEXIT: ${result.exitCode}\nSTDOUT HEAD:\n${result.stdout.slice(0, 700)}\nSTDOUT TAIL:\n${result.stdout.slice(-1100)}\nSTDERR HEAD:\n${result.stderr.slice(0, 500)}\nSTDERR TAIL:\n${result.stderr.slice(-1100)}`
             ).join('\n\n--- FAILED CHECK ---\n\n');
-            log('warn', `Target checks failed; requesting bounded repair ${attempt + 1}/2 with ${failedResults.length} failing check(s).`);
+            log('warn', `Target checks failed; requesting bounded repair ${attempt + 1}/${maxTestRepairs} with ${failedResults.length} failing check(s).`);
             report.modelInvoked.callsCount += 1;
+            // Identify which staged files the diagnostics point at. After the first
+            // repair, ask for a full rewrite of those files: repeated anchored edits
+            // that each fix one member while breaking another never converge, and a
+            // rewrite is how a developer finally gets a coherent file.
+            const failingPaths = [...new Set(
+              failedResults.flatMap((result) =>
+                [...`${result.stdout}\n${result.stderr}`.matchAll(/([\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs))\(\d+,\d+\)/g)].map((m) => m[1])
+              )
+            )].filter((p) => report.plannedChanges.some((change) => change.path === p));
+            const requireRewrite = attempt >= 1 && failingPaths.length > 0;
             const previousPatchSummary = report.plannedChanges
               .map((change) => JSON.stringify({
                 path: change.path,
@@ -795,8 +1053,10 @@ export class ForgeAgent {
               }, null, 2))
               .join('\n');
             const repairResult = await this.model.generatePlanAndPatch(
-              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (attempt ${attempt + 1}/2). The previous patch was applied but failed target checks. The exact previous edits and compiler/test diagnostics are included below. Do not repeat the same edit if it caused the failure; change the anchor or placement to address the diagnostics. For top-level declarations, use a file-scope anchor; for interface members, use a unique field anchor inside the intended interface. Fix the actual cause (including missing imports or type/syntax errors), and return a complete replacement JSON plan for the same task. Preserve the original task scope. Do not weaken, skip, or silence checks. Existing files must use exact-anchor edits copied verbatim from the original supplied source. Do not modify package manifests, workflows, scripts, secrets, or security controls.\n\nPREVIOUS PATCH SUMMARY:\n${previousPatchSummary}\n\nFAILED CHECK DIAGNOSTICS:\n${failureDetails}`,
-              contextFiles
+              `TASK TO COMPLETE: ${task.title}\nDETAILS: ${task.description}\n\nTARGET-CHECK REPAIR REQUIRED (attempt ${attempt + 1}/${maxTestRepairs}). The previous patch was applied but failed target checks. The exact previous edits and compiler/test diagnostics are included below. Fix the actual cause (including missing imports or type/syntax errors) and return a complete replacement JSON plan for the same task against the CURRENT files shown. Preserve the original task scope. Do not weaken, skip, or silence checks. Do not access private members of another module; if a count or helper is needed, expose a public method on the owning class and add it in that file too. ${requireRewrite ? `For these files the errors point at: ${failingPaths.join(', ')}. Return action "modify" with a complete "content" string containing the ENTIRE corrected file for each (every existing member preserved) and no edits.` : `For each existing file you may EITHER supply exact-anchor edits OR a complete "content" string with the entire corrected file.`} Do not modify package manifests, workflows, scripts, secrets, or security controls. Return changes for every file in the previous patch summary unless a file is already correct.\n\nPREVIOUS PATCH SUMMARY:\n${previousPatchSummary}\n\nFAILED CHECK DIAGNOSTICS:\n${failureDetails}`,
+              contextFiles.map((file) =>
+                stagedByPath.has(file.path) ? { ...file, content: stagedByPath.get(file.path) as string } : file
+              )
             );
             report.modelInvoked.provider = repairResult.provider;
             report.modelInvoked.model = repairResult.model;
@@ -811,53 +1071,70 @@ export class ForgeAgent {
               log('error', report.errorMessage);
               return report;
             }
-            let repairedPlan: any;
+            // A single repair attempt may still be malformed (bad JSON, bad anchors,
+            // or a rejected patch). Treat that as a recoverable attempt failure and
+            // let the next bounded attempt try again instead of aborting the mission.
             try {
-              repairedPlan = parseModelJson(repairResult.text);
-            } catch (error: any) {
-              report.status = 'FAILED';
-              report.errorMessage = `Target-check repair returned invalid JSON: ${error.message}`;
-              log('error', report.errorMessage);
-              return report;
+              const repairedPlan = parseModelJson(repairResult.text);
+              const repairedShape = validateModelPlanShape(repairedPlan);
+              if (!repairedShape.ok || repairedShape.changes.length === 0) {
+                log('warn', `Target-check repair produced no usable changes on attempt ${attempt + 1}: ${repairedShape.error ?? 'empty changes'}; trying next bounded attempt.`);
+                continue;
+              }
+              // Merge repairs into the existing plan by path. A repair that returns
+              // fewer files must never silently drop work already implemented and
+              // validated earlier in the mission.
+              const mergedRepair = new Map(report.plannedChanges.map((change) => [change.path, change]));
+              for (const change of repairedShape.changes) mergedRepair.set(change.path, change);
+              const candidateChanges = [...mergedRepair.values()];
+              if (requireRewrite) {
+                const nonRewritable = failingPaths.filter((p) => {
+                  const change = mergedRepair.get(p);
+                  return !(change && typeof change.content === 'string' && change.content.length > 0);
+                });
+                if (nonRewritable.length > 0) {
+                  log('warn', `Target-check repair on attempt ${attempt + 1} did not return a full rewrite for ${nonRewritable.join(', ')}; trying next bounded attempt.`);
+                  continue;
+                }
+              }
+              const repairCoverageGaps = explicitPaths
+                .filter((p) => !p.endsWith('.md') && !p.endsWith('.json'))
+                .filter((p) => !candidateChanges.some((change) => change.path === p));
+              if (repairCoverageGaps.length > 0) {
+                log('warn', `Target-check repair on attempt ${attempt + 1} would omit required ${repairCoverageGaps.join(', ')}; trying next bounded attempt.`);
+                continue;
+              }
+              const repairAnchorProblems = this.findEditAnchorProblems(candidateChanges, contextFiles);
+              if (repairAnchorProblems.length > 0) {
+                log('warn', `Target-check repair had invalid anchors on attempt ${attempt + 1}: ${repairAnchorProblems.slice(0, 5).join(' | ')}; trying next bounded attempt.`);
+                continue;
+              }
+              const repairValidation = this.validatePatch(candidateChanges);
+              if (!repairValidation.valid) {
+                log('warn', `Target-check repair was rejected on attempt ${attempt + 1}: ${repairValidation.error}; trying next bounded attempt.`);
+                continue;
+              }
+              const repairedStaged = await this.stageFinalContents(candidateChanges, contextFiles);
+              if (!repairedStaged.ok) {
+                log('warn', `Target-check repair staging rejected on attempt ${attempt + 1}: ${repairedStaged.error}; trying next bounded attempt.`);
+                continue;
+              }
+              report.plannedChanges = candidateChanges;
+              await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: worktree, timeout: 15000 });
+              await execFileAsync('git', ['clean', '-fd'], { cwd: worktree, timeout: 15000 });
+              staged = repairedStaged;
+              await this.applyFinalContentsToWorktree(worktree, staged.files);
+              log('info', 'Applied repaired patch to a clean base worktree; rerunning target checks after this repair attempt.');
+            } catch (repairError: any) {
+              log('warn', `Target-check repair was unusable on attempt ${attempt + 1} (${repairError.message}); trying next bounded attempt.`);
+              continue;
             }
-            if (!Array.isArray(repairedPlan.changes) || repairedPlan.changes.length === 0) {
-              report.status = 'FAILED';
-              report.errorMessage = 'Target-check repair returned no replacement changes.';
-              log('error', report.errorMessage);
-              return report;
-            }
-            report.plannedChanges = repairedPlan.changes.map((change: any) => ({
-              path: change.path,
-              action: change.action,
-              rationale: change.rationale,
-              content: change.content,
-              edits: change.edits,
-            }));
-            const repairAnchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
-            if (repairAnchorProblems.length > 0) {
-              report.status = 'FAILED';
-              report.errorMessage = `Target-check repair failed patch preflight: ${repairAnchorProblems.slice(0, 5).join(' | ')}`;
-              log('error', report.errorMessage);
-              return report;
-            }
-            const repairValidation = this.validatePatch(report.plannedChanges);
-            if (!repairValidation.valid) {
-              report.status = 'FAILED';
-              report.errorMessage = `Target-check repair was rejected: ${repairValidation.error}`;
-              log('error', report.errorMessage);
-              return report;
-            }
-
-            await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: worktree, timeout: 15000 });
-            await execFileAsync('git', ['clean', '-fd'], { cwd: worktree, timeout: 15000 });
-            await this.applyChangesToWorktree(worktree, report.plannedChanges);
-            log('info', 'Applied repaired patch to a clean base worktree; rerunning target checks after this repair attempt.');
           }
         }
 
         if (!allChecksPassed) {
           report.status = 'FAILED';
-          report.errorMessage = 'Target checks still failed after two bounded patch-repair attempts.';
+          report.errorMessage = `Target checks still failed after ${maxTestRepairs} bounded patch-repair attempt(s).`;
           log('error', report.errorMessage);
           return report;
         }
@@ -879,10 +1156,9 @@ export class ForgeAgent {
       const branchName = `forge/task-${task.id.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-${runDiscriminator}`;
       report.branchName = branchName;
 
-      // Extract validated files with content
-      const filesToCommit = report.plannedChanges
-        .filter((c) => c.content && typeof c.content === 'string')
-        .map((c) => ({ path: c.path, content: c.content as string }));
+      // Commit exactly the staged final contents that were applied to and tested in
+      // the isolated worktree, so the PR cannot diverge from the verified tree.
+      const filesToCommit = staged.files.map((c) => ({ path: c.path, content: c.content as string }));
 
       // Fix AUD-20261012-02 Empty PR prevention: fail closed if no file contents are committed
       if (filesToCommit.length === 0) {
