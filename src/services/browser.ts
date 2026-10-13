@@ -185,6 +185,12 @@ export class BrowserService {
     return path;
   }
 
+  /** Capture a PNG of the viewport as bytes (for MCP image content). */
+  async capture(): Promise<Buffer> {
+    const page = await this.ensurePage();
+    return page.screenshot({ fullPage: false });
+  }
+
   async close(): Promise<void> {
     await this.context?.close().catch(() => {});
     await this.browser?.close().catch(() => {});

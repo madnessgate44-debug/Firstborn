@@ -311,7 +311,7 @@ export function buildForgeTools(options: {
 }
 
 /** Render a browser snapshot as compact text the brain can act on. */
-function renderSnapshot(snap: { url: string; title: string; elements: { i: number; tag: string; type?: string; text: string; href?: string }[]; text: string }): string {
+export function renderSnapshot(snap: { url: string; title: string; elements: { i: number; tag: string; type?: string; text: string; href?: string }[]; text: string }): string {
   const lines = snap.elements.map((e) => `[${e.i}] ${e.tag}${e.type ? `(${e.type})` : ''} ${e.text}${e.href ? ` -> ${e.href}` : ''}`.trimEnd());
   return `url: ${snap.url}\ntitle: ${snap.title}\nelements:\n${lines.join('\n')}\ntext: ${snap.text}`.slice(0, 6000);
 }
