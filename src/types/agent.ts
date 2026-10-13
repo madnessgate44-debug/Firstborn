@@ -91,6 +91,8 @@ export interface TaskExecutionReport {
   testResults: TestExecutionResult[];
   /** M3: ordered stage transitions for exhaustion/repeatability analysis. */
   trace?: TraceEntry[];
+  /** M4: structured root-cause diagnosis, populated when a mission does not reach PR_OPENED. */
+  diagnosis?: import('../agent/diagnosis.ts').Diagnosis;
   logs: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }[];
   errorMessage?: string;
   blockerReason?: string;
