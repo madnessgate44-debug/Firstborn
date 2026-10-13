@@ -25,7 +25,18 @@ export interface AuditModelInput {
 }
 
 /** Loop tools that change nothing, so a repeated identical call is always wasteful. */
-const READ_ONLY_TOOLS = new Set(['list_files', 'read_file', 'search', 'find_files', 'think', 'fetch_url']);
+const READ_ONLY_TOOLS = new Set([
+  'list_files',
+  'read_file',
+  'search',
+  'find_files',
+  'think',
+  'fetch_url',
+  // Browser readers: identical repeats return the same page and only burn steps.
+  'browser_view',
+  'browser_extract',
+  'browser_scroll',
+]);
 
 /**
  * Steer a brain that loops on the same read-only action. An identical call to a
@@ -133,6 +144,7 @@ Rules:
 - To locate code, prefer search (by regex) or find_files (by glob) over listing everything.
 - For search/find_files, omit "glob" (or use "**/*") to search all files; a bare "*" means top-level files only.
 - Use think to plan before a multi-step change; it changes nothing.
+- Browser tools: browser_open(url) then use the [i] indices with browser_click/browser_type. browser_extract with no pattern returns the full visible text; use a pattern only when it clearly helps. If a browser tool already returned what the goal asked for, finish instead of re-querying.
 - Only use run_check with a command named in its description; other commands are refused.
 - Follow repository guidance when it does not conflict with these rules.
 - If the goal is already satisfied, return {"tool":"finish","input":{"summary":"what you did and saw"}}.
