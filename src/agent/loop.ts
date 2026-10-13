@@ -50,6 +50,8 @@ export type AgentBrain = (state: {
   goal: string;
   history: LoopStep[];
   tools: { name: string; description: string }[];
+  /** Repository guidance (e.g. AGENTS.md), loaded once per run. */
+  memory?: string;
 }) => Promise<AgentAction>;
 
 export interface LoopLimits {
@@ -87,6 +89,8 @@ export interface RunLoopOptions {
   limits?: LoopLimits;
   authorize?: Authorization;
   workspace?: string;
+  /** Repository guidance (e.g. AGENTS.md) passed to the brain each step. */
+  memory?: string;
   /** Injected clock for deterministic tests. */
   now?: () => number;
   onStep?: (step: LoopStep) => void;
@@ -102,7 +106,7 @@ export interface RunLoopOptions {
  * - an unknown tool is reported back so the brain can correct itself.
  */
 export async function runAgentLoop(options: RunLoopOptions): Promise<LoopResult> {
-  const { goal, tools, brain, authorize, workspace = 'loop' } = options;
+  const { goal, tools, brain, authorize, workspace = 'loop', memory } = options;
   const limits = options.limits ?? loadLoopLimits();
   const now = options.now ?? Date.now;
   const startedAt = now();
@@ -117,7 +121,7 @@ export async function runAgentLoop(options: RunLoopOptions): Promise<LoopResult>
 
     let action: AgentAction;
     try {
-      action = await brain({ goal, history: steps, tools: catalog });
+      action = await brain({ goal, history: steps, tools: catalog, memory });
     } catch (err) {
       return { status: 'FAILED', steps, reason: `Brain failed: ${err instanceof Error ? err.message : String(err)}` };
     }
