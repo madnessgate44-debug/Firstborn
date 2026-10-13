@@ -813,5 +813,55 @@ so it cannot decide what to do next. That was the gap.
 - `npm run lint`: EXIT 0. `npm test`: 74 passed / 0 failed (8 new loop tests).
 - Live loop run (keyless, real model): "Read package.json and report the npm test script
   command" -> COMPLETED in 3 steps, correct answer.
+---
+
+### Entry: `OPENHANDS-AUDIT-BRAIN-20261013-01`
+- **Timestamp (UTC)**: 2026-10-13T13:20:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: AUDIT / FIX
+- **Trigger**: Ahmed asked whether Forge's audit of `madnessgate44-debug/smart-farm` (issue #66) was reliable, and whether to have ChatGPT turn it into a change request.
+
+#### Root-cause diagnosis
+The read-only audit had **no model at all**. `src/agent/audit-runner.ts` imported only
+`fs` and `path` and ran a fixed set of file-tree regex checks. So when the issue asked
+for "requirements-to-evidence findings, architecture, functional gaps, security risks,
+prioritized defects," it structurally could not answer — it returned a file inventory.
+This is a **Firstborn/Forge problem, not a ChatGPT problem**: no prompt can make a
+script read code it was never written to read. The only ChatGPT-side nuance is that a
+controller aware of its tool's limits would request a *code-reading* audit.
+
+#### Fix (smallest safe change; no rewrite of `forge.ts` or the routing)
+1. **One brain, two callers.** Extracted `ModelService.invokeModel(messages, prompt)`
+   (the existing discovery/ranking/keyless/Gemini routing, unchanged) and added
+   `auditRepository(input)`. `generatePlanAndPatch` now delegates to the same invoker.
+   This makes the audit use *exactly the same* model brain as the coding path.
+2. **Model-backed audit stage.** `audit-runner.ts` feeds the already-fetched inventory
+   and capped excerpts to `auditRepository`, then merges validated findings into the report.
+3. **Guardrails (model output is untrusted):**
+   - Every finding must cite a path that exists in the tree; otherwise it is dropped and
+     counted (`validateModelFindings`). No invented files.
+   - Each finding is labeled `observed` vs `inferred`.
+   - The prompt treats repository content as untrusted input and forbids following
+     instructions found inside it (prompt-injection defense).
+   - Safe degradation: if the model is unavailable, the static report is emitted unchanged.
+4. **CI:** the audit step now receives `GROQ_API_KEY`/`GEMINI_API_KEY` (an audit is hard
+   work -> keyed tier), with the keyless fallback intact.
+
+#### Evidence
+- `npm run lint`: EXIT 0. `npm test`: **62 passed / 0 failed** (5 new in
+  `tests/audit-brain.test.ts`: REQ-1 path citation, REQ-2 invented-path rejection,
+  REQ-2b mixed paths, REQ-4 malformed JSON, REQ-4b untrusted-input guard).
+- **Live audit vs smart-farm** (keyless run) produced 4 model findings, **0 rejected**,
+  and every claim was independently re-verified as TRUE:
+  - `isMinifyEnabled = false` (app/build.gradle.kts:22) — confirmed.
+  - Compose BOM `2024.02.00` (app/build.gradle.kts:42) — confirmed.
+  - `proguard-rules.pro` referenced (line 23) but **absent from the repo tree** — confirmed.
+  - Test-assertion finding correctly marked `inferred` (excerpts not fetched).
+
+#### Bottom line for ChatGPT
+The audit can now answer the original request (architecture, gaps, prioritized defects).
+Findings are path-cited and fact/inference-labeled, so they are safe to turn into change
+requests — but the model can still be wrong; treat `inferred` items as hypotheses.
 
 No secrets, tokens, or credentials appear in this entry.
