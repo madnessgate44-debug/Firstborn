@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { GitHubService } from '../services/github.ts';
 import { TestRunnerService, AUTHORIZED_COMMANDS } from '../services/test-runner.ts';
 import { BrowserService } from '../services/browser.ts';
+import { renderQueryResult } from '../services/query.ts';
 import { applyExactEdits } from './stages.ts';
 import type { AgentTool, LoopContext, ToolObservation } from './loop.ts';
 
@@ -408,6 +409,18 @@ export function buildBrowserTools(executablePath?: string): AgentTool[] {
           return { ok: true, output: await browser.extract(str(input, 'pattern') || undefined) };
         } catch (err) {
           return { ok: false, output: `browser_extract failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
+      name: 'browser_query',
+      description:
+        'Answer a plain-English question about the current page with structured data (no regex). Input: {"question":"what is the price"}. Handles title, headings, links, emails, phones, prices, table rows, counts, labelled values.',
+      run: async (input): Promise<ToolObservation> => {
+        try {
+          return { ok: true, output: renderQueryResult(await browser.query(str(input, 'question'))) };
+        } catch (err) {
+          return { ok: false, output: `browser_query failed: ${err instanceof Error ? err.message : String(err)}` };
         }
       },
     },

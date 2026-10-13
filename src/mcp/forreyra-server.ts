@@ -14,6 +14,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { BrowserService } from '../services/browser.ts';
 import { renderSnapshot } from '../agent/tools.ts';
+import { renderQueryResult } from '../services/query.ts';
 
 const browser = new BrowserService();
 
@@ -137,6 +138,23 @@ server.registerTool(
   async ({ pattern }): Promise<Result> => {
     try {
       return ok(await browser.extract(pattern || undefined));
+    } catch (err) {
+      return fail(err);
+    }
+  }
+);
+
+server.registerTool(
+  'browser_query',
+  {
+    title: 'Query the page in plain English',
+    description:
+      'Answer a plain-English question about the current page with structured data, without a regex. Handles titles, headings, links, emails, phone numbers, prices, table rows, counts, and labelled values. Examples: "what is the title", "list the links about docs", "how many rows are in the table", "what is the price".',
+    inputSchema: { question: z.string().describe('The plain-English question, e.g. "what is the price"') },
+  },
+  async ({ question }): Promise<Result> => {
+    try {
+      return ok(renderQueryResult(await browser.query(question)));
     } catch (err) {
       return fail(err);
     }
