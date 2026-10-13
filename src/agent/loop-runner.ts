@@ -8,6 +8,8 @@
  * (allowPrCreation) AND the permission profile permits branch writes, so the loop
  * can never widen its own authority.
  */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import * as path from 'node:path';
 import { ModelService } from '../services/model.ts';
 import { loadPermissionConfig, evaluatePermissionPolicy } from './policy.ts';
 import { buildForgeTools } from './tools.ts';
@@ -62,6 +64,13 @@ async function main(): Promise<void> {
   console.log('Status:', result.status);
   console.log('Steps:', result.steps.length);
   console.log('Reason:', result.reason);
+
+  const evidenceDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
+  mkdirSync(evidenceDir, { recursive: true });
+  writeFileSync(
+    path.join(evidenceDir, 'forge-loop.json'),
+    JSON.stringify({ generatedAt: new Date().toISOString(), goal, status: result.status, steps: result.steps, reason: result.reason }, null, 2) + '\n'
+  );
 
   if (result.status !== 'COMPLETED') process.exitCode = 1;
 }
