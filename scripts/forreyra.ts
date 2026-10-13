@@ -16,6 +16,7 @@
  *   view                   re-print the element list
  */
 import { BrowserService, type BrowserSnapshot } from '../src/services/browser.ts';
+import { renderQueryResult } from '../src/services/query.ts';
 
 const USAGE = `Forreyra — a real browser on the command line.
 
@@ -28,6 +29,7 @@ Actions (run in order):
   press:<key>          press a key, e.g. press:Enter
   scroll:up|down       scroll one screen
   extract[:<regex>]    print page text (optionally matching sentences)
+  query:<question>     answer a plain-English question, e.g. query:what is the price
   view                 re-print the elements
 
 Examples:
@@ -71,6 +73,10 @@ async function main(): Promise<void> {
       } else if (verb === 'extract') {
         console.log('\n--- extract ---');
         console.log(await browser.extract(rest || undefined));
+        continue;
+      } else if (verb === 'query') {
+        console.log('\n--- query ---');
+        console.log(renderQueryResult(await browser.query(rest || '')));
         continue;
       } else if (verb === 'view') {
         snap = await browser.view();

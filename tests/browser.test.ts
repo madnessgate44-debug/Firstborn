@@ -20,13 +20,21 @@ const PAGE = `<!doctype html>
 
 const PAGE2 = `<!doctype html><html><head><title>Second</title></head><body><h1>Second page reached</h1></body></html>`;
 
+const SHOP = `<!doctype html><html><head><title>Shop</title></head><body>
+  <h1>Plans</h1>
+  <p>Starter costs $9.99 and Pro costs $19.99. Email sales@example.com.</p>
+  <table><tr><th>Plan</th><th>Price</th></tr><tr><td>Starter</td><td>$9.99</td></tr><tr><td>Pro</td><td>$19.99</td></tr></table>
+</body></html>`;
+
 let server: Server;
 let base = '';
 
 function start(): Promise<void> {
   server = createServer((req, res) => {
     res.setHeader('content-type', 'text/html');
-    res.end(req.url === '/second' ? PAGE2 : PAGE);
+    if (req.url === '/second') return res.end(PAGE2);
+    if (req.url === '/shop') return res.end(SHOP);
+    res.end(PAGE);
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
@@ -99,3 +107,25 @@ test('browser tools reject bad input without throwing', async () => {
   assert.equal((await t.get('browser_open')!.run({}, ctx)).ok, false);
   assert.equal((await t.get('browser_click')!.run({ index: -1 }, ctx)).ok, false);
 });
+
+test('browser_query answers a plain-English question against the real page', async () => {
+  const t = byName();
+  await t.get('browser_open')!.run({ url: `${base}/shop` }, ctx);
+
+  const prices = await t.get('browser_query')!.run({ question: 'what is the price' }, ctx);
+  assert.equal(prices.ok, true);
+  assert.match(prices.output, /kind: prices/);
+  assert.match(prices.output, /\$19\.99/);
+
+  const email = await t.get('browser_query')!.run({ question: 'what is the email address' }, ctx);
+  assert.match(email.output, /sales@example\.com/);
+
+  const rows = await t.get('browser_query')!.run({ question: 'how many rows are in the table' }, ctx);
+  assert.match(rows.output, /matches: 1\n- 3/);
+
+  const title = await t.get('browser_query')!.run({ question: 'what is the title' }, ctx);
+  assert.match(title.output, /- Shop/);
+
+  await t.get('browser_close')!.run({}, ctx);
+});
+

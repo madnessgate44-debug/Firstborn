@@ -17,6 +17,7 @@
  */
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { existsSync } from 'node:fs';
+import { planQuery, runQuery, type PageData, type QueryResult } from './query.ts';
 
 const INTERACTIVE = 'a[href], button, input, select, textarea, [role="button"], [onclick], [contenteditable="true"]';
 const MAX_ELEMENTS = 120;
@@ -177,6 +178,44 @@ export class BrowserService {
     } catch (err) {
       return `Invalid pattern: ${err instanceof Error ? err.message : String(err)}`;
     }
+  }
+
+  /** Gather structured page data (headings, links, tables, labelled fields). */
+  async gather(): Promise<PageData> {
+    const page = await this.ensurePage();
+    const title = await page.title().catch(() => '');
+    const text = ((await page.textContent('body').catch(() => '')) ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT);
+    const headings = await page
+      .$$eval('h1, h2, h3, h4, h5, h6', (els) => els.map((el) => (el.textContent ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean))
+      .catch(() => []);
+    const links = await page
+      .$$eval('a[href]', (els) =>
+        els.map((el) => ({ text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(), href: (el as HTMLAnchorElement).href })).filter((l) => l.text || l.href)
+      )
+      .catch(() => []);
+    const tables = await page
+      .$$eval('table', (tables) =>
+        tables.map((t) => Array.from(t.querySelectorAll('tr')).map((r) => Array.from(r.querySelectorAll('th, td')).map((c) => (c.textContent ?? '').replace(/\s+/g, ' ').trim())))
+      )
+      .catch(() => []);
+    const fields = await page
+      .$$eval('dt, label', (els) =>
+        els
+          .map((el) => {
+            const label = (el.textContent ?? '').replace(/\s+/g, ' ').replace(/[:*]\s*$/, '').trim();
+            const next = el.nextElementSibling;
+            const value = next ? (next.textContent ?? '').replace(/\s+/g, ' ').trim() : '';
+            return { label, value };
+          })
+          .filter((f) => f.label && f.value)
+      )
+      .catch(() => []);
+    return { url: page.url(), title, text, headings, links, tables, fields };
+  }
+
+  /** Answer a plain-English question about the current page with structured data. */
+  async query(question: string): Promise<QueryResult> {
+    return runQuery(await this.gather(), planQuery(question));
   }
 
   async screenshot(path: string): Promise<string> {

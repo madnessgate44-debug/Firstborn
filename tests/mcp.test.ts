@@ -85,11 +85,20 @@ test('MCP tools/list advertises the browser tools', async () => {
     'browser_extract',
     'browser_open',
     'browser_press',
+    'browser_query',
     'browser_screenshot',
     'browser_scroll',
     'browser_type',
     'browser_view',
   ]);
+});
+
+test('MCP tools/call browser_query answers in plain English', async () => {
+  await rpc('tools/call', { name: 'browser_open', arguments: { url: base } });
+  const res = await rpc('tools/call', { name: 'browser_query', arguments: { question: 'what is the title' } });
+  assert.notEqual(res.result.isError, true);
+  assert.match(res.result.content[0].text, /kind: title/);
+  assert.match(res.result.content[0].text, /MCP Browser Page/);
 });
 
 test('MCP tools/call browser_open drives a real page', async () => {
