@@ -865,6 +865,44 @@ No secrets, tokens, or credentials appear in this entry.
 
 ---
 
+### Entry: `OPENHANDS-MODEL-KEY-VERIFIED-20261012-09`
+- **Timestamp (UTC)**: 2026-10-12T18:30:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: VERIFICATION (live CI)
+- **What was checked**: the real keys, in the environment where they exist (GitHub Actions), via the `Model Key Health` workflow on branch `forge/task-model-layer`.
+
+#### Result (run 38396284324, conclusion: success)
+```
+Configured providers (keys are never printed):
+  groq         1 key(s) via GROQ_API_KEY / FREELM_GROQ_KEYS
+Total configured keys: 1
+PASS  qwen/qwen3.8-27b                           1963ms  via groq
+PASS  openai/gpt-oss-20b                          148ms  via groq
+PASS  openai/gpt-oss-120b                         166ms  via groq
+FAIL  gemini-3.5-flash-lite                       137ms  ModelNotFound (no Gemini key)
+FAIL  gemini-3.1-flash-lite                       136ms  ModelNotFound (no Gemini key)
+PASS  Mistral-Small-3.2-24B-Instruct-2506         650ms  via ovh (keyless)
+4/6 models answered.
+```
+
+#### Findings
+1. **Groq is live and fast** — all three Groq models answered; `gpt-oss-20b`/`120b` at ~150ms. This is the real reliability win: sub-second, keyed, 1000 rpd/model.
+2. **No Gemini key is present.** Only 1 configured key total (Groq). The `GEMINI_API_KEY` secret is missing or named differently. Gemini models 404 (routed to groq, which does not host those ids).
+3. **First probe was unfair, now fixed.** The earlier run used `max_tokens=32`; the gpt-oss *reasoning* models spent all 32 tokens reasoning and returned empty — a test artifact, not a model fault. Probe now uses `max_tokens=1024`; production uses 2048.
+
+#### Actions resulting
+- `scripts/model-key-check.mjs`: probe budget 32 -> 1024 tokens (fair test).
+- `src/services/model.ts`: keyed chain now leads with `qwen/qwen3.8-27b` (proven ~140-2000ms on Groq), then the gpt-oss models.
+- Both committed to `forge/task-model-layer`.
+
+#### Needed from Ahmed
+- Add `GEMINI_API_KEY` as a repository secret (the `AIza...` value) if Gemini is still wanted as the 1M-context fallback. Without it, the chain already works: Groq -> keyless OVH/Kilo.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
 ### Entry: `OPENHANDS-KEY-TOOLING-20261012-08`
 - **Timestamp (UTC)**: 2026-10-12T18:00:00Z
 - **Author**: OPENHANDS
