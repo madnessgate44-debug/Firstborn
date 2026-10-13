@@ -760,15 +760,23 @@ export class ForgeAgent {
         const checksToRun: string[] = [];
         const hasNpmScripts = Object.keys(scripts).length > 0;
         if (hasNpmScripts) {
-          for (const command of ['npm run lint', 'npm test', 'npm run build']) {
-            const scriptName = command === 'npm test' ? 'test' : command.slice('npm run '.length);
+          // Mirror the documented CI surface (verify.yml): lint, build, test, and the
+          // keyless model smoke. Running model:smoke here means a Forge PR is fully
+          // self-checked even when its PR-triggered CI run is held for approval.
+          const candidateChecks: Array<[string, string]> = [
+            ['npm run lint', 'lint'],
+            ['npm test', 'test'],
+            ['npm run build', 'build'],
+            ['npm run model:smoke', 'model:smoke'],
+          ];
+          for (const [command, scriptName] of candidateChecks) {
             if (scripts[scriptName]) checksToRun.push(command);
           }
         }
         const substantiveChecks = checksToRun.filter((cmd) => cmd !== 'git diff --check');
         if (substantiveChecks.length === 0) {
           report.status = 'BLOCKED';
-          report.blockerReason = 'No recognized target-project test, lint, or build script exists; whitespace validation alone is not sufficient to authorize a coding PR.';
+          report.blockerReason = 'No recognized target-project test, lint, build, or model-smoke script exists; whitespace validation alone is not sufficient to authorize a coding PR.';
           log('warn', report.blockerReason);
           return report;
         }
