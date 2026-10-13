@@ -207,3 +207,20 @@ export function diagnoseMission(input: DiagnosisInput): Diagnosis {
     retryable: false,
   };
 }
+
+/**
+ * Decide whether a mission should be automatically re-run. Bounded and
+ * conservative: only a classified, retryable diagnosis earns a retry, and never
+ * more than `maxRetries` of them. Returns false for an absent diagnosis so a
+ * mission without one is never re-run blindly.
+ */
+export function shouldAutoRetry(
+  diagnosis: Diagnosis | undefined,
+  attempt: number,
+  maxRetries: number,
+): boolean {
+  if (!diagnosis) return false;
+  if (maxRetries <= 0) return false;
+  if (!diagnosis.retryable) return false;
+  return attempt < maxRetries;
+}

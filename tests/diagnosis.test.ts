@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diagnoseMission } from '../src/agent/diagnosis.ts';
+import { diagnoseMission, shouldAutoRetry } from '../src/agent/diagnosis.ts';
 
 test('diagnosis: model route failure is classified and retryable', () => {
   const d = diagnoseMission({
@@ -82,6 +82,27 @@ test('diagnosis: unclassified stop is manual review, never a false retry', () =>
   assert.equal(d.category, 'UNKNOWN');
   assert.equal(d.retryable, false);
   assert.deepEqual(d.recovery, ['MANUAL_REVIEW']);
+});
+
+test('autoRetry: no diagnosis is never retried', () => {
+  assert.equal(shouldAutoRetry(undefined, 1, 2), false);
+});
+
+test('autoRetry: a retryable diagnosis earns one bounded retry', () => {
+  const d = diagnoseMission({ status: 'FAILED', errorMessage: 'Model Generation Failed: keyless route returned no content' });
+  assert.equal(shouldAutoRetry(d, 1, 2), true);
+  assert.equal(shouldAutoRetry(d, 2, 2), false);
+});
+
+test('autoRetry: a non-retryable diagnosis is never retried', () => {
+  const d = diagnoseMission({ status: 'FAILED', errorMessage: 'Validation Failed: Invalid target repository format "x". Expected "owner/repo".' });
+  assert.equal(d.retryable, false);
+  assert.equal(shouldAutoRetry(d, 1, 2), false);
+});
+
+test('autoRetry: zero retries configured disables the loop', () => {
+  const d = diagnoseMission({ status: 'FAILED', errorMessage: 'Target dependency installation failed twice (last exit 1).' });
+  assert.equal(shouldAutoRetry(d, 1, 0), false);
 });
 
 test('diagnosis: failed stages are derived from the trace', () => {
