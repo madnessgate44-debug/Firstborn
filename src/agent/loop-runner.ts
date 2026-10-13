@@ -27,6 +27,9 @@ async function main(): Promise<void> {
   const consented = ['1', 'true', 'yes', 'on'].includes((process.env.FORGE_ALLOW_PR_CREATION ?? '').trim().toLowerCase());
 
   const branch = (process.env.FORGE_LOOP_BRANCH ?? 'forge/task-loop').trim();
+  // Operate on the real checkout when present (CI checks the repo out here), so
+  // search/read/edit act on actual files and run_check can see installed deps.
+  const workspace = (process.env.FORGE_LOOP_WORKSPACE ?? process.cwd()).trim();
   const policy = evaluatePermissionPolicy(
     {
       requestedPrCreation: consented,
@@ -37,7 +40,7 @@ async function main(): Promise<void> {
     loadPermissionConfig()
   );
 
-  const tools = buildForgeTools({ owner, repo, ref, token, allowMutation: policy.allowBranchWrite });
+  const tools = buildForgeTools({ owner, repo, ref, token, allowMutation: policy.allowBranchWrite, workspace });
   const model = new ModelService();
 
   const authorize: Authorization = (action) => {
