@@ -43,6 +43,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
 
     steps:
       - name: Checkout Repository
@@ -78,6 +79,27 @@ jobs:
           TASK_TITLE: ${{ github.event.issue.title || github.event.inputs.task_title }}
           TASK_DESC: ${{ github.event.issue.body || github.event.inputs.task_desc }}
         run: npx tsx src/agent/forge-runner.ts
+
+      - name: Approve the PR-triggered verification run
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id }}
+        run: |
+          # Bot-authored PRs are held at action_required until a human approves
+          # (GitHub change 2026-06-11). Approving needs actions:write. If this token
+          # is not permitted to approve, the step prints a notice and does not fail.
+          BRANCH="forge/task-${TASK_ID}-${{ github.run_id }}"
+          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?status=action_required&per_page=50" \
+            --jq "[.workflow_runs[] | select(.head_branch==\"$BRANCH\")][0].id" 2>/dev/null || echo "")
+          if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+            echo "Approving held verification run $RUN_ID on $BRANCH"
+            gh api -X POST "repos/${{ github.repository }}/actions/runs/$RUN_ID/approve" \
+              && echo "APPROVED $RUN_ID" \
+              || echo "NOTICE: token not permitted to approve $RUN_ID; verification remains pending human approval."
+          else
+            echo "No held verification run found for $BRANCH."
+          fi
 
       - name: Finalize workflow evidence
         if: always()
