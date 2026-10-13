@@ -968,6 +968,38 @@ No secrets, tokens, or credentials appear in this entry.
 
 ---
 
+### Entry: `OPENHANDS-SECRET-NOT-DETECTED-20261012-12`
+- **Timestamp (UTC)**: 2026-10-12T19:40:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: VERIFICATION + BUG
+- **Context**: Ahmed added another repo secret and asked for a check.
+
+#### Result (run 38400373757, success)
+```
+Configured providers (keys are never printed):
+  google       1 key(s)
+  groq         1 key(s)
+Total configured keys: 2
+PASS  qwen/qwen3.8-27b / gpt-oss-20b / gpt-oss-120b   via groq
+PASS  gemini-3.5-flash-lite / gemini-3.1-flash-lite   via google
+PASS  Mistral-Small-3.2-24B                           via ovh (keyless)
+6/6 models answered.
+```
+
+#### Findings
+1. **6/6 models answer** — the earlier Gemini `Transient(50x)` cleared on its own.
+2. **The new secret is NOT detected.** Still exactly 2 keys (google, groq), even after the workflow was changed to forward every provider variable freelm knows.
+3. **Workflow fix (committed):** `model-health.yml` previously forwarded only `GROQ_API_KEY`/`GEMINI_API_KEY`; it now forwards all 10 providers and both the primary and `FREELM_*_KEYS` variable names. So a correctly named key for any supported provider is now detected automatically.
+4. **Therefore the new secret's name is not a recognised key variable**, or it was added somewhere that does not reach the job (an Environment secret, or a Variable rather than a Secret).
+
+#### Not yet knowable
+The secret's **name** cannot be read via the API (`403 Resource not accessible by integration`, by design) and is never printed. Asked Ahmed to confirm the exact secret name. Valid names are listed in `PROVIDER_ENV` (openrouter, google, nim, groq, cerebras, mistral, zai, cohere, cloudflare, kilo) plus the `FREELM_*_KEYS` variants. **A Grok/xAI key is not supported** — freelm has no xAI provider.
+
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
 ### Entry: `OPENHANDS-TIERED-ROUTING-20261012-11`
 - **Timestamp (UTC)**: 2026-10-12T19:10:00Z
 - **Author**: OPENHANDS
