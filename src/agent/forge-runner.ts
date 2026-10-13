@@ -42,6 +42,10 @@ async function runCli() {
   if (report.prUrl) console.log('PR Opened:', report.prUrl);
   if (report.errorMessage) console.log('Error:', report.errorMessage);
   if (report.blockerReason) console.log('Blocker:', report.blockerReason);
+  if (report.diagnosis) {
+    console.log('Diagnosis:', `${report.diagnosis.category} (${report.diagnosis.severity})`, '-', report.diagnosis.summary);
+    console.log('Recovery:', report.diagnosis.recovery.join(', '), `| retryable=${report.diagnosis.retryable}`);
+  }
 
   // Early BLOCKED/FAILED returns inside executeTask may not pass through its normal finalizer.
   // Stamp the end time here so every persisted report has a complete execution window.

@@ -10,6 +10,7 @@ import { TestRunnerService } from '../services/test-runner.ts';
 import { loadForgeLimits } from './limits.ts';
 import { evaluatePermissionPolicy, loadPermissionConfig } from './policy.ts';
 import { traceEntry } from './mission-trace.ts';
+import { diagnoseMission } from './diagnosis.ts';
 import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -406,6 +407,24 @@ export class ForgeAgent {
       report.trace!.push(traceEntry(stage, status, 1, detail));
     };
 
+    // M4: stamp the end time and, for any non-success outcome, a structured
+    // root-cause diagnosis. Derived data only; it never alters mission control.
+    const finalize = (): TaskExecutionReport => {
+      report.endTime ||= new Date().toISOString();
+      if (report.status !== 'PR_OPENED' && !report.diagnosis) {
+        report.diagnosis = diagnoseMission({
+          status: report.status,
+          errorMessage: report.errorMessage,
+          blockerReason: report.blockerReason,
+          trace: report.trace,
+          testResults: report.testResults,
+          keylessRouteErrors: report.modelInvoked.keylessRouteErrors,
+        });
+        log('warn', `Diagnosis: ${report.diagnosis.category} — ${report.diagnosis.summary}`);
+      }
+      return report;
+    };
+
     try {
       // 1. VALIDATING
       report.status = 'VALIDATING';
@@ -415,7 +434,7 @@ export class ForgeAgent {
         report.status = 'FAILED';
         report.errorMessage = 'Validation Failed: Task title and description cannot be empty.';
         log('error', report.errorMessage);
-        return report;
+        return finalize();
       }
 
       const [owner, repo] = task.targetRepo.split('/');
@@ -423,7 +442,7 @@ export class ForgeAgent {
         report.status = 'FAILED';
         report.errorMessage = `Validation Failed: Invalid target repository format "${task.targetRepo}". Expected "owner/repo".`;
         log('error', report.errorMessage);
-        return report;
+        return finalize();
       }
 
       // 2. INSPECTING
@@ -435,7 +454,7 @@ export class ForgeAgent {
         report.status = 'BLOCKED';
         report.blockerReason = `Repository inspection failed: ${repoInfo.errorMessage || 'Repository does not exist'}`;
         log('warn', report.blockerReason);
-        return report;
+        return finalize();
       }
 
       report.baseCommitSha = repoInfo.latestCommitSha;
@@ -450,7 +469,7 @@ export class ForgeAgent {
           report.status = 'BLOCKED';
           report.blockerReason = `Requested target branch "${targetBranch}" could not be resolved in ${owner}/${repo}.`;
           log('warn', report.blockerReason);
-          return report;
+          return finalize();
         }
         report.baseCommitSha = branchSha;
         log('info', `Using explicitly requested target branch "${targetBranch}" at SHA ${branchSha}.`);
@@ -517,7 +536,7 @@ export class ForgeAgent {
             report.status = 'BLOCKED';
             report.blockerReason = `Explicitly requested ${reason}; refusing to guess or patch an incomplete context.`;
             log('warn', report.blockerReason);
-            return report;
+            return finalize();
           }
           log('warn', `Skipping inferred ${reason} and continuing source selection.`);
           continue;
@@ -529,7 +548,7 @@ export class ForgeAgent {
             report.status = 'BLOCKED';
             report.blockerReason = `Explicit source context is too large: ${reason}.`;
             log('warn', report.blockerReason);
-            return report;
+            return finalize();
           }
           log('warn', `Skipping inferred source file because ${reason}.`);
           continue;
@@ -542,7 +561,7 @@ export class ForgeAgent {
           ? 'None of the explicitly requested source files could be safely loaded.'
           : 'No eligible source files under the 16000-character context limit could be loaded.';
         log('warn', report.blockerReason);
-        return report;
+        return finalize();
       }
 
       // 4. PLANNING (MODEL INVOCATION)
@@ -585,7 +604,7 @@ export class ForgeAgent {
         report.status = 'FAILED';
         report.errorMessage = `Model Generation Failed: ${modelResult.error}`;
         log('error', report.errorMessage);
-        return report;
+        return finalize();
       }
 
       const applyPlanToReport = (parsedPlan: any) => {
@@ -613,7 +632,7 @@ export class ForgeAgent {
       try {
         parsedPlan = parseModelJson(modelResult.text);
       } catch (err: any) {
-        if (!guardModelCall('JSON repair attempt')) return report;
+        if (!guardModelCall('JSON repair attempt')) return finalize();
         log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
         report.modelInvoked.callsCount += 1;
         modelResult = await this.model.generatePlanAndPatch(
@@ -631,7 +650,7 @@ export class ForgeAgent {
           report.status = 'FAILED';
           report.errorMessage = `Model JSON repair failed: ${modelResult.error}`;
           log('error', report.errorMessage);
-          return report;
+          return finalize();
         }
         try {
           parsedPlan = parseModelJson(modelResult.text);
@@ -639,7 +658,7 @@ export class ForgeAgent {
           report.status = 'FAILED';
           report.errorMessage = `Model output remained invalid JSON after one repair attempt: ${repairErr.message}`;
           log('error', report.errorMessage);
-          return report;
+          return finalize();
         }
       }
       applyPlanToReport(parsedPlan);
@@ -666,7 +685,7 @@ export class ForgeAgent {
           report.status = 'FAILED';
           report.errorMessage = `Model patch repair failed: ${modelResult.error}`;
           log('error', report.errorMessage);
-          return report;
+          return finalize();
         }
         try {
           parsedPlan = parseModelJson(modelResult.text);
@@ -674,7 +693,7 @@ export class ForgeAgent {
           report.status = 'FAILED';
           report.errorMessage = `Failed to parse repaired model JSON: ${err.message}`;
           log('error', report.errorMessage);
-          return report;
+          return finalize();
         }
         applyPlanToReport(parsedPlan);
         anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
@@ -683,7 +702,7 @@ export class ForgeAgent {
         report.status = 'FAILED';
         report.errorMessage = `Patch contains invalid exact anchors after two repair attempts: ${anchorProblems.slice(0, 5).join(' | ')}`;
         log('error', report.errorMessage);
-        return report;
+        return finalize();
       }
 
       log('info', `Requirements matrix established with ${report.requirements.length} criteria.`);
@@ -694,7 +713,7 @@ export class ForgeAgent {
         report.status = 'FAILED';
         report.errorMessage = `Patch Validation Rejected: ${patchValidation.error}`;
         log('error', report.errorMessage);
-        return report;
+        return finalize();
       }
       log('info', `Patch validated successfully: ${report.plannedChanges.length} files pass security checks.`);
       trace('VALIDATE', 'PASSED', `${report.plannedChanges.length} file changes`);
@@ -742,7 +761,7 @@ export class ForgeAgent {
           report.blockerReason = `Target branch moved during inspection (${movedDetail}). Retry against the new base.`;
           trace('INSPECT', 'BLOCKED', report.blockerReason);
           log('warn', report.blockerReason);
-          return report;
+          return finalize();
         }
 
         await this.applyChangesToWorktree(worktree, report.plannedChanges);
@@ -778,7 +797,7 @@ export class ForgeAgent {
           report.status = 'BLOCKED';
           report.blockerReason = 'No recognized target-project test, lint, build, or model-smoke script exists; whitespace validation alone is not sufficient to authorize a coding PR.';
           log('warn', report.blockerReason);
-          return report;
+          return finalize();
         }
         checksToRun.push('git diff --check');
 
@@ -802,7 +821,7 @@ export class ForgeAgent {
               report.status = 'FAILED';
               report.errorMessage = `Target dependency installation failed twice (last exit ${install.exitCode}).`;
               log('error', report.errorMessage);
-              return report;
+              return finalize();
             }
           }
 
@@ -858,7 +877,7 @@ export class ForgeAgent {
               report.status = 'FAILED';
               report.errorMessage = `Target-check repair model call failed: ${repairResult.error}`;
               log('error', report.errorMessage);
-              return report;
+              return finalize();
             }
             let repairedPlan: any;
             try {
@@ -867,13 +886,13 @@ export class ForgeAgent {
               report.status = 'FAILED';
               report.errorMessage = `Target-check repair returned invalid JSON: ${error.message}`;
               log('error', report.errorMessage);
-              return report;
+              return finalize();
             }
             if (!Array.isArray(repairedPlan.changes) || repairedPlan.changes.length === 0) {
               report.status = 'FAILED';
               report.errorMessage = 'Target-check repair returned no replacement changes.';
               log('error', report.errorMessage);
-              return report;
+              return finalize();
             }
             report.plannedChanges = repairedPlan.changes.map((change: any) => ({
               path: change.path,
@@ -887,14 +906,14 @@ export class ForgeAgent {
               report.status = 'FAILED';
               report.errorMessage = `Target-check repair failed patch preflight: ${repairAnchorProblems.slice(0, 5).join(' | ')}`;
               log('error', report.errorMessage);
-              return report;
+              return finalize();
             }
             const repairValidation = this.validatePatch(report.plannedChanges);
             if (!repairValidation.valid) {
               report.status = 'FAILED';
               report.errorMessage = `Target-check repair was rejected: ${repairValidation.error}`;
               log('error', report.errorMessage);
-              return report;
+              return finalize();
             }
 
             await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: worktree, timeout: 15000 });
@@ -909,7 +928,7 @@ export class ForgeAgent {
           report.errorMessage = 'Target checks still failed after two bounded patch-repair attempts.';
           trace('TEST', 'FAILED', 'target checks failed after bounded repairs');
           log('error', report.errorMessage);
-          return report;
+          return finalize();
         }
 
         // Bind each requirement to the concrete evidence available for it rather than
@@ -953,7 +972,7 @@ export class ForgeAgent {
         report.status = 'FAILED';
         report.errorMessage = 'Safety Block: Zero files with valid content to commit. Cannot open empty Pull Request.';
         log('error', report.errorMessage);
-        return report;
+        return finalize();
       }
 
       if (!task.allowPrCreation) {
@@ -997,7 +1016,7 @@ export class ForgeAgent {
               report.status = 'BLOCKED';
               report.blockerReason = `Permission policy withheld Pull Request: ${permission.reason}`;
               log('warn', report.blockerReason);
-              return report;
+              return finalize();
             }
             const prRes = await this.github.openPullRequest({
               owner,
@@ -1037,13 +1056,13 @@ export class ForgeAgent {
       }
 
       report.endTime = new Date().toISOString();
-      return report;
+      return finalize();
     } catch (err: any) {
       report.status = 'FAILED';
       report.errorMessage = `Unhandled agent exception: ${err.message}`;
       report.endTime = new Date().toISOString();
       log('error', report.errorMessage);
-      return report;
+      return finalize();
     }
   }
 }
