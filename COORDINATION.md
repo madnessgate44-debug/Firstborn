@@ -930,3 +930,38 @@ No secrets, tokens, or credentials appear in this entry.
 3. Forge will then prefer Groq (1000 rpd/model, fast) and fall back to Gemini (1M ctx), then keyless.
 
 No secrets, tokens, or credentials appear in this entry. Key values are never printed by any script.
+
+---
+
+### Entry: `OPENHANDS-KEYS-LIVE-20261012-10`
+- **Timestamp (UTC)**: 2026-10-12T18:50:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: VERIFICATION (live CI)
+- **What was checked**: both keys after Ahmed added them as repository secrets; `Model Key Health` re-run (run 38396284324).
+
+#### Result (conclusion: success)
+```
+Configured providers (keys are never printed):
+  google       1 key(s) via GEMINI_API_KEY / GOOGLE_API_KEY / GOOGLE_AI_STUDIO_KEY / FREELM_GOOGLE_KEYS
+  groq         1 key(s) via GROQ_API_KEY / FREELM_GROQ_KEYS
+Total configured keys: 2
+PASS  qwen/qwen3.8-27b                           2275ms  via groq
+PASS  openai/gpt-oss-20b                          146ms  via groq
+PASS  openai/gpt-oss-120b                         299ms  via groq
+FAIL  gemini-3.5-flash-lite                       188ms  google Transient(50x) — high demand, transient
+PASS  gemini-3.1-flash-lite                      8489ms  via google
+PASS  Mistral-Small-3.2-24B-Instruct-2506         969ms  via ovh (keyless)
+5/6 models answered.
+```
+
+#### Findings
+1. **Both keys are live.** Groq ~150-300ms; Gemini `gemini-3.1-flash-lite` answers via google.
+2. **The `AQ.` Gemini key WORKS** through freelm's OpenAI-compatible path (`/v1beta/openai` + `Authorization: Bearer`), even though the raw `x-goog-api-key` REST path reports the known `AQ.` 401 bug. This integration takes the Bearer route, so the `AQ.` issue does not block us.
+3. **`gemini-3.5-flash-lite` returned Transient(50x)** (model high-demand), not a key failure — other Gemini models on the same key work. Expected, and the chain moves on.
+4. **Secret naming**: an earlier secret named `g` was invisible to the workflow (the name is the lookup key); recreated as `GEMINI_API_KEY` and now detected.
+
+#### Chain now in effect
+Groq (`qwen3.8-27b`, `gpt-oss-20b`, `gpt-oss-120b`) -> Gemini (`gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-flash-lite-latest`) -> keyless OVH/Kilo. Two independent keyed providers plus two keyless backstops.
+
+No secrets, tokens, or credentials appear in this entry.
