@@ -194,8 +194,12 @@ jobs:
           PY
 
       - name: Run read-only repository audit
+        # An audit is hard work: give the model the keyed providers (Groq/Gemini)
+        # plus the keyless fallback so it reasons over the code reliably.
         env:
           FORGE_TARGET_REPO: ${{ steps.target.outputs.repo }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: npx tsx src/agent/audit-runner.ts
 
       - name: Upload read-only audit evidence

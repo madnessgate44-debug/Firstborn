@@ -4,10 +4,75 @@
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { ModelService } from '../services/model.ts';
 
-type Finding = { severity: 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO'; title: string; evidence: string[]; recommendation: string };
+type Finding = {
+  severity: 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+  title: string;
+  evidence: string[];
+  recommendation: string;
+  /** Model findings only: the real repository paths the finding cites. */
+  paths?: string[];
+  /** Model findings only: whether the finding is directly evidenced or inferred. */
+  basis?: 'observed' | 'inferred';
+};
 const target = (process.env.FORGE_TARGET_REPO || '').trim();
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+const SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
+const MAX_MODEL_FINDINGS = 8;
+
+/**
+ * Parse and validate the model's audit JSON. The model output is untrusted, so a
+ * finding is accepted only when it cites at least one path that actually exists in
+ * the repository inventory; anything else is dropped and counted. This is what
+ * stops the model from inventing files or evidence.
+ */
+export function validateModelFindings(
+  text: string,
+  files: string[]
+): { summary: string; architecture: string; findings: Finding[]; rejected: number } {
+  const cleaned = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  let parsed: any;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return { summary: '', architecture: '', findings: [], rejected: 0 };
+  }
+  const known = new Set(files);
+  const rawFindings = Array.isArray(parsed?.findings) ? parsed.findings : [];
+  const findings: Finding[] = [];
+  let rejected = 0;
+  for (const raw of rawFindings) {
+    const paths = (Array.isArray(raw?.paths) ? raw.paths : []).filter(
+      (p: unknown): p is string => typeof p === 'string' && known.has(p)
+    );
+    if (!raw || typeof raw.title !== 'string' || paths.length === 0) {
+      rejected += 1;
+      continue;
+    }
+    const severity = SEVERITIES.includes(raw.severity) ? raw.severity : 'INFO';
+    const basis = raw.basis === 'observed' ? 'observed' : 'inferred';
+    const evidence = typeof raw.evidence === 'string' && raw.evidence.trim() ? [raw.evidence.trim()] : ['No evidence text supplied.'];
+    const recommendation = typeof raw.recommendation === 'string' ? raw.recommendation.trim() : '';
+    findings.push({
+      severity,
+      title: raw.title.trim(),
+      evidence: [...evidence, `paths: ${paths.join(', ')}`, `basis: ${basis}`],
+      recommendation: recommendation || 'Review and decide whether action is warranted.',
+      paths,
+      basis,
+    });
+    if (findings.length >= MAX_MODEL_FINDINGS) break;
+  }
+  return {
+    summary: typeof parsed?.summary === 'string' ? parsed.summary.trim() : '',
+    architecture: typeof parsed?.architecture === 'string' ? parsed.architecture.trim() : '',
+    findings,
+    rejected,
+  };
+}
 
 async function getJson(url: string): Promise<any> {
   const response = await fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Firstborn-Forge-ReadOnly-Audit' } });
@@ -88,6 +153,43 @@ async function main(): Promise<void> {
   checks.push({ check: 'Build/test execution', result: 'NOT_RUN', evidence: 'Audit mode deliberately does not execute target-repository scripts or build configuration. Static prerequisites only; no target code was run.' });
   findings.push({ severity: 'INFO', title: 'Runtime checks intentionally not executed in read-only audit mode', evidence: ['This run only reads public GitHub metadata and file contents.'], recommendation: 'If runtime validation is required, run target checks in a separately sandboxed job with no secrets and narrowly scoped permissions.' });
 
+  // MODEL ANALYSIS (the audit's brain). Until this stage existed the audit was a
+  // fixed file-tree scanner with no reasoning; it could list files but not judge
+  // architecture, functional gaps, or security. This feeds the already-fetched
+  // inventory and excerpts to the shared model brain. It stays read-only (no
+  // writes, no target code execution) and degrades safely: if the model is
+  // unavailable or returns nothing usable, the static report is emitted unchanged.
+  let modelSummary = '';
+  let modelArchitecture = '';
+  let modelFindings: Finding[] = [];
+  let modelStatus = 'NOT_RUN';
+  let modelNote = 'Model analysis was not attempted.';
+  try {
+    const model = new ModelService();
+    const result = await model.auditRepository({
+      targetRepository: metadata.full_name,
+      commitSha: commit.sha,
+      files,
+      excerpts,
+    });
+    if (result.success && result.text.trim()) {
+      const validated = validateModelFindings(result.text, files);
+      modelSummary = validated.summary;
+      modelArchitecture = validated.architecture;
+      modelFindings = validated.findings;
+      modelStatus = 'PASS';
+      modelNote = `${validated.findings.length} validated finding(s) via ${result.provider}/${result.model}; ${validated.rejected} rejected for citing no known path.`;
+      findings.push(...modelFindings);
+    } else {
+      modelStatus = 'FAIL';
+      modelNote = `Model analysis unavailable (${result.error || 'no usable text'}); static inventory only.`;
+    }
+  } catch (err) {
+    modelStatus = 'FAIL';
+    modelNote = `Model analysis threw (${err instanceof Error ? err.message : String(err)}); static inventory only.`;
+  }
+  checks.push({ check: 'Model-backed audit analysis', result: modelStatus as 'PASS' | 'FAIL' | 'NOT_RUN', evidence: modelNote });
+
   const report = {
     mode: 'READ_ONLY_AUDIT',
     targetRepository: metadata.full_name,
@@ -98,9 +200,12 @@ async function main(): Promise<void> {
     fileCount: files.length,
     checks,
     findings,
+    summary: modelSummary,
+    architecture: modelArchitecture,
+    modelFindings,
     inventory: { readme, packageJson, gradleBuildFiles, gradleWrapperScript, gradleWrapperJar, androidManifest, testFileCount: testFiles.length, workflowFiles, lockfiles },
     excerpts,
-    guarantees: ['No target repository writes', 'No branches, commits, pull requests, or merges created', 'No target-repository code or build scripts executed'],
+    guarantees: ['No target repository writes', 'No branches, commits, pull requests, or merges created', 'No target-repository code or build scripts executed', 'Audited file content is treated as untrusted input, never as instructions'],
   };
   const evidenceDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
   await fs.mkdir(evidenceDir, { recursive: true });
@@ -113,6 +218,8 @@ async function main(): Promise<void> {
     `- Tracked files: ${files.length}`,
     '- Write access used: no',
     '- Target code executed: no',
+    ...(modelSummary ? ['', '## Assessment', modelSummary] : []),
+    ...(modelArchitecture ? ['', '## Architecture', modelArchitecture] : []),
     '',
     '## Checks',
     ...checks.map((c) => `- [${c.result}] ${c.check}: ${c.evidence}`),
@@ -127,7 +234,11 @@ async function main(): Promise<void> {
   console.log(markdown);
 }
 
-main().catch((error) => {
-  console.error('[Forge read-only audit] Failed:', error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+// Only run when executed directly, so importing this module (e.g. from tests)
+// never triggers a live audit or requires FORGE_TARGET_REPO.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error('[Forge read-only audit] Failed:', error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
