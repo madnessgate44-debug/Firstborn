@@ -777,5 +777,16 @@ may merge into `main`.
 - `npm run lint`: EXIT 0. `npm test`: 66 passed / 0 failed (9 new Sentinel tests).
 - Live: source `main` -> BLOCK (exit 1); source `forge/task-sentinel` -> MERGE decision,
   auto-merge off by default.
+### Entry: `OPENHANDS-CONTROLLER-MANUAL-20261013-01`
+- **Timestamp (UTC)**: 2026-10-13T14:20:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT
+- **Type**: REPORT
+- **Subject**: Operating manual for directing Forge.
+
+Added `docs/CHATGPT-OPERATING-FORGE.md` - a literal, step-by-step manual telling the
+controller LLM how to trigger Forge (issue label `forge-task`, or dispatch), how to write a
+bounded task, how to read the report, what the safety model permits, the hard limits, audit
+recipes, troubleshooting, and the `COORDINATION.md` handoff protocol.
 
 No secrets, tokens, or credentials appear in this entry.
