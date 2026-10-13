@@ -24,6 +24,26 @@ export interface AuditModelInput {
   excerpts: Record<string, string>;
 }
 
+/** Loop tools that change nothing, so a repeated identical call is always wasteful. */
+const READ_ONLY_TOOLS = new Set(['list_files', 'read_file', 'search', 'find_files', 'think', 'fetch_url']);
+
+/**
+ * Steer a brain that loops on the same read-only action. An identical call to a
+ * read-only tool cannot yield new information, so it is replaced with a `think`
+ * nudge to change course; mutating actions are never altered. Pure, so it can be
+ * unit-tested without a model.
+ */
+export function guardRepeatedReadOnly(
+  action: { tool: string; input?: Record<string, unknown> },
+  history: { action: { tool: string; input?: Record<string, unknown> } }[]
+): { tool: string; input?: Record<string, unknown> } {
+  if (!READ_ONLY_TOOLS.has(action.tool)) return action;
+  const key = JSON.stringify({ tool: action.tool, input: action.input });
+  const repeated = history.some((h) => JSON.stringify({ tool: h.action.tool, input: h.action.input }) === key);
+  if (!repeated) return action;
+  return { tool: 'think', input: { thought: `Already ran ${key}; that result will not change. Choose a different tool or finish.` } };
+}
+
 /**
  * Build the audit prompt. Exported and pure so the untrusted-input guard and the
  * inventory/excerpt injection can be asserted without calling a model.
@@ -189,7 +209,9 @@ Rules:
     const cleaned = result.text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     try {
       const parsed = JSON.parse(cleaned);
-      if (parsed && typeof parsed.tool === 'string') return { tool: parsed.tool, input: parsed.input };
+      if (parsed && typeof parsed.tool === 'string') {
+        return guardRepeatedReadOnly({ tool: parsed.tool, input: parsed.input }, state.history);
+      }
     } catch { /* fall through */ }
     return { tool: 'finish', input: { summary: 'Loop brain returned unusable output; stopping safely.' } };
   }
