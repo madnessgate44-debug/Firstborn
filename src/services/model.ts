@@ -169,14 +169,21 @@ Respond only with valid JSON.`;
             model: alias,
             temperature: 0.1,
             max_tokens: 1024,
+            // Some top-tier keyless routes are reasoning models (e.g. the kilo
+            // nemotron route) that spend the whole 1024-token budget on hidden
+            // reasoning_content and return empty text with finish_reason=length.
+            // Disabling reasoning keeps the compact JSON answer within budget.
+            reasoning_effort: 'none',
             signal: AbortSignal.timeout(40000),
           });
           const content = response.text.trim();
           invokedProvider = response.provider || invokedProvider;
           invokedModel = response.model || invokedModel;
           if (!content) {
-            primaryErrors.push(`${alias} via ${invokedProvider}: response contained no usable text`);
-            capabilityEscalation.push(`${alias} returned no usable text`);
+            const finishReason = response.choices?.[0]?.finish_reason ?? 'unknown';
+            const detail = finishReason === 'length' ? 'output token budget was exhausted' : 'response contained no usable text';
+            primaryErrors.push(`${alias} via ${invokedProvider}/${invokedModel}: ${detail} (finish_reason=${finishReason})`);
+            capabilityEscalation.push(`${alias}: ${detail}`);
             continue;
           }
           // Prefer the finest model that actually answered: if we had to settle
