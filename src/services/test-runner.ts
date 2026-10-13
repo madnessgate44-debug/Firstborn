@@ -12,7 +12,7 @@ export interface SafeCommandSpec {
   args: string[];
 }
 
-const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
+export const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
   'npm install': { executable: 'npm', args: ['install', '--ignore-scripts'] },
   'npm run lint': { executable: 'npm', args: ['run', 'lint'] },
   'npm run test': { executable: 'npm', args: ['run', 'test'] },

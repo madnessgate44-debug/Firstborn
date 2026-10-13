@@ -174,6 +174,10 @@ Choose exactly ONE next action. Return compact JSON only, no markdown:
 Rules:
 - Do not repeat an action you have already taken; instead build on its result.
 - Read a file before editing it, and base decisions on observed output, not assumptions.
+- To locate code, prefer search (by regex) or find_files (by glob) over listing everything.
+- For search/find_files, omit "glob" (or use "**/*") to search all files; a bare "*" means top-level files only.
+- Use think to plan before a multi-step change; it changes nothing.
+- Only use run_check with a command named in its description; other commands are refused.
 - If the goal is already satisfied, return {"tool":"finish","input":{"summary":"what you did and saw"}}.
 - Use only tools from the list. Never invent a tool. Respond only with valid JSON.`;
     const messages: ChatMessage[] = [
