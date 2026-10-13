@@ -902,3 +902,28 @@ Actions -> "Forge Agent Loop" -> Run workflow. Inputs: `goal`, `max_steps`, `all
   repo-admin step the automation token cannot perform.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-TOOLS-EXPANDED-20261013-01`
+- **Timestamp (UTC)**: 2026-10-13T15:40:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: REPORT
+- **Subject**: Forge loop toolset expanded from 4 tools to 9.
+
+#### What changed
+- New tools: `search` (regex grep, file:line), `find_files` (glob), `think`, `fetch_url`, `write_file`.
+- `read_file`/`edit_file`/`run_check` now operate on the mission workspace when one exists and fall
+  back to GitHub; edits are written to disk so they can be verified.
+- Path guards reject absolute and `..` traversal; file sizes and match counts are capped.
+- Mutating tools (`edit_file`, `write_file`, `run_check`) remain hidden unless the permission profile
+  permits branch writes.
+- Runner: `FORGE_LOOP_WORKSPACE` (defaults to the checkout); `run_check` runs there.
+
+#### Evidence
+- `npm run lint`: EXIT 0. `npm test`: 93 passed / 0 failed (added tests/tools.test.ts, 14 cases).
+- Live run 1: goal to search for `AUTHORIZED_COMMANDS` -> COMPLETED in 2 steps, correct file:line hits.
+- Live run 2: goal to edit `src/math.ts` (41 -> 42) -> COMPLETED in 4 steps; file on disk reads 42.
+
+No secrets, tokens, or credentials appear in this entry.
