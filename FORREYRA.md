@@ -100,6 +100,49 @@ await browser.close();
 
 ---
 
+## 4. As an MCP server
+
+Forreyra runs as a **Model Context Protocol** server over stdio, so any MCP client
+(Claude Desktop, Cursor, VS Code, the OpenHands agent) can drive the browser with
+the same look-then-act model.
+
+```bash
+npm run forreyra:mcp
+```
+
+It exposes nine tools: `browser_open`, `browser_view`, `browser_click`,
+`browser_type`, `browser_press`, `browser_scroll`, `browser_extract`,
+`browser_screenshot` (returns a PNG image), `browser_close`.
+
+### Client configuration
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "forreyra": {
+      "command": "npx",
+      "args": ["tsx", "src/mcp/forreyra-server.ts"],
+      "cwd": "/absolute/path/to/Firstborn"
+    }
+  }
+}
+```
+
+Cursor / VS Code use the same `command` + `args` + `cwd` shape.
+
+### Verify the connection
+
+```bash
+node scripts/mcp-client-smoke.mjs
+```
+
+This uses the official MCP client SDK to connect, list the tools, open
+`https://example.com`, and close.
+
+---
+
 ## Setup
 
 - Chromium is auto-detected at `/usr/bin/chromium`, `/usr/bin/chromium-browser`,
