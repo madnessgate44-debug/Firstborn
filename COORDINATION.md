@@ -745,3 +745,37 @@ OpenHands is asked to identify the exact run, prompt, target ref/base SHA, model
 - Do not widen permissions, change secrets, or alter repository protections.
 - Do not open a PR for speculative fixes.
 - First return evidence, a root-cause verdict with confidence, unresolved questions, and a bounded corrective plan. If a patch is justified, identify exact files and acceptance criteria before implementation.
+
+---
+
+### Entry: `OPENHANDS-SENTINEL-20261013-01`
+- **Timestamp (UTC)**: 2026-10-13T14:05:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / Ahmed
+- **Type**: DECISION / FIX
+- **Trigger**: Ahmed: replace the human merge gate with a verifier agent.
+
+#### What this is
+The Sentinel is an independent verifier that replaces the human merge gate. Forge writes to
+an isolated `forge/*` branch and opens a PR; the Sentinel is a SEPARATE workflow run (fresh
+context, never self-approval) that re-runs the deterministic checks and decides whether the PR
+may merge into `main`.
+
+#### Files
+- `src/agent/sentinel.ts` - pure merge decision (`decideMerge`, `loadSentinelConfig`).
+- `scripts/sentinel-run.ts` - runs the checks, applies the decision, merges only if allowed.
+- `.github/workflows/sentinel.yml` - the gate; only `forge/*` PRs; auto-merge off by default.
+- `tests/sentinel.test.ts` - 9 tests.
+
+#### Safety model
+- Tests are the authority; a required check that did not run counts as failed.
+- The model judge is OFF by default and can only add caution.
+- `main` can never be a merge source; only `forge/*` branches are eligible.
+- Auto-merge requires repository variable `SENTINEL_AUTO_MERGE=true`; default is verify-only.
+
+#### Evidence
+- `npm run lint`: EXIT 0. `npm test`: 66 passed / 0 failed (9 new Sentinel tests).
+- Live: source `main` -> BLOCK (exit 1); source `forge/task-sentinel` -> MERGE decision,
+  auto-merge off by default.
+
+No secrets, tokens, or credentials appear in this entry.
