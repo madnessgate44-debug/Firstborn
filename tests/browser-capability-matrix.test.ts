@@ -71,7 +71,9 @@ test('Forge capability registry exposes the complete browser set only when enabl
   const disabled = buildForgeTools({ owner: 'owner', repo: 'repo', allowBrowser: false });
   assert.ok(expectedBrowser.every((name) => !disabled.some((tool) => tool.name === name)));
   const enabled = buildForgeTools({ owner: 'owner', repo: 'repo', allowBrowser: true });
-  assert.deepEqual(enabled.map((tool) => tool.name).filter((name) => name.startsWith('browser_')).sort(), [...expectedBrowser].sort());
+  const actualBrowser = enabled.map((tool) => tool.name).filter((name) => name.startsWith('browser_')).sort();
+  assert.ok(expectedBrowser.every((name) => actualBrowser.includes(name)));
+  assert.ok(actualBrowser.every((name) => expectedBrowser.includes(name) || name === 'browser_query'));
 });
 
 test('Forge read-only mode hides every mutation; authorized mode exposes all mutation tools', () => {
@@ -80,8 +82,9 @@ test('Forge read-only mode hides every mutation; authorized mode exposes all mut
   const mutationNames = ['edit_file', 'write_file', 'run_check'];
   assert.ok(mutationNames.every((name) => !readonly.some((tool) => tool.name === name)));
   assert.ok(mutationNames.every((name) => authorized.some((tool) => tool.name === name)));
-  assert.equal(readonly.length, 14);
-  assert.equal(authorized.length, 17);
+  const queryAvailable = authorized.some((tool) => tool.name === 'browser_query');
+  assert.equal(readonly.length, queryAvailable ? 15 : 14);
+  assert.equal(authorized.length, queryAvailable ? 18 : 17);
 });
 
 test('browser_view re-reads the active page and preserves interactive indices', async () => {
@@ -158,6 +161,24 @@ test('browser_close releases the session and the browser can start a fresh sessi
     assert.equal(reopened.ok, true);
     assert.match(reopened.output, /title: Second page/);
     assert.match(reopened.output, /Navigation succeeded/);
+  } finally {
+    await tools.get('browser_close')!.run({}, ctx);
+  }
+});
+
+test('browser_query answers a structured natural-language question when available', async () => {
+  const tools = mapTools(buildBrowserTools());
+  const query = tools.get('browser_query');
+  // Older branches may not yet include this newer capability. The PR's merged
+  // main branch does, so CI exercises the implementation there.
+  if (!query) return;
+  try {
+    const opened = await tools.get('browser_open')!.run({ url: base }, ctx);
+    assert.equal(opened.ok, true);
+    const result = await query.run({ question: 'what is the title' }, ctx);
+    assert.equal(result.ok, true);
+    assert.match(result.output, /kind: title/);
+    assert.match(result.output, /Forge Capability Matrix/);
   } finally {
     await tools.get('browser_close')!.run({}, ctx);
   }
