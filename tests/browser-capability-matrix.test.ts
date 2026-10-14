@@ -80,8 +80,8 @@ test('Forge read-only mode hides every mutation; authorized mode exposes all mut
   const mutationNames = ['edit_file', 'write_file', 'run_check'];
   assert.ok(mutationNames.every((name) => !readonly.some((tool) => tool.name === name)));
   assert.ok(mutationNames.every((name) => authorized.some((tool) => tool.name === name)));
-  assert.equal(readonly.length, 15);
-  assert.equal(authorized.length, 18);
+  assert.equal(readonly.length, 14);
+  assert.equal(authorized.length, 17);
 });
 
 test('browser_view re-reads the active page and preserves interactive indices', async () => {
