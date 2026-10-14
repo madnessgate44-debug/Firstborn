@@ -15,7 +15,7 @@
  * File tools prefer the mission workspace when one exists (so edits can be made and
  * then verified), and fall back to reading the repository through GitHub.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { GitHubService } from '../services/github.ts';
 import { TestRunnerService, AUTHORIZED_COMMANDS } from '../services/test-runner.ts';
@@ -51,6 +51,52 @@ function safeRelative(rel: string): string | null {
   const normalized = path.normalize(rel);
   if (normalized.startsWith('..') || normalized.includes(`..${path.sep}`)) return null;
   return normalized;
+}
+
+/**
+ * Resolve `rel` under `ws` and confirm the result stays inside the workspace.
+ * Lexical checks alone cannot catch a symlink inside the workspace that points
+ * outside it, so the parent directory is resolved through the real filesystem.
+ * Returns the absolute path, or null when the target escapes or cannot be
+ * resolved safely.
+ */
+function resolveInWorkspace(ws: string, rel: string): string | null {
+  const safe = safeRelative(rel);
+  if (!safe) return null;
+  let root: string;
+  try {
+    root = realpathSync(ws);
+  } catch {
+    return null;
+  }
+  const abs = path.join(root, safe);
+
+  const inside = (real: string) => real === root || real.startsWith(root + path.sep);
+
+  // The deepest existing ancestor is the only part that can contain a symlink;
+  // realpath resolves every symlinked component along the way. Any components
+  // below it do not exist yet, so they can only be plain names.
+  let probe = path.dirname(abs);
+  while (!existsSync(probe)) {
+    const next = path.dirname(probe);
+    if (next === probe) break;
+    probe = next;
+  }
+  try {
+    if (!inside(realpathSync(probe))) return null;
+  } catch {
+    return null;
+  }
+
+  // If the target itself already exists, it may be a symlink pointing outside.
+  if (existsSync(abs)) {
+    try {
+      if (!inside(realpathSync(abs))) return null;
+    } catch {
+      return null;
+    }
+  }
+  return abs;
 }
 
 function walkFiles(root: string): string[] {
@@ -116,9 +162,8 @@ export function buildForgeTools(options: {
 
   const readRepoFile = async (rel: string): Promise<string | null> => {
     if (ws) {
-      const safe = safeRelative(rel);
-      if (!safe) return null;
-      const abs = path.join(ws, safe);
+      const abs = resolveInWorkspace(ws, rel);
+      if (!abs) return null;
       try {
         if (existsSync(abs) && statSync(abs).isFile()) return readFileSync(abs, 'utf8');
       } catch {
@@ -252,14 +297,16 @@ export function buildForgeTools(options: {
         if (!rel || edits.length === 0) {
           return { ok: false, output: 'edit_file requires "path" and a non-empty "edits" array of {find, replace}.' };
         }
+        // Reject an escaping path up front so a symlink escape reads as a refusal,
+        // not as a confusing "missing file".
+        const target = ws ? resolveInWorkspace(ws, rel) : null;
+        if (ws && !target) return { ok: false, output: `Refusing to write outside the workspace: ${rel}` };
         const content = await readRepoFile(rel);
         if (content === null) return { ok: false, output: `Cannot edit missing file: ${rel}` };
         const result = applyExactEdits(content, edits);
         if (!result.ok) return { ok: false, output: `Edit rejected: ${result.error}` };
         if (ws) {
-          const safe = safeRelative(rel);
-          if (!safe) return { ok: false, output: `Refusing to write outside the workspace: ${rel}` };
-          const abs = path.join(ws, safe);
+          const abs = target as string;
           mkdirSync(path.dirname(abs), { recursive: true });
           writeFileSync(abs, result.content);
           return { ok: true, output: `Applied ${edits.length} edit(s) to ${rel} in ${ctx.workspace}.` };
@@ -277,9 +324,8 @@ export function buildForgeTools(options: {
         const content = typeof input.content === 'string' ? input.content : '';
         if (!rel) return { ok: false, output: 'write_file requires a "path".' };
         if (!ws) return { ok: false, output: 'No workspace available; cannot write files.' };
-        const safe = safeRelative(rel);
-        if (!safe) return { ok: false, output: `Refusing to write outside the workspace: ${rel}` };
-        const abs = path.join(ws, safe);
+        const abs = resolveInWorkspace(ws, rel);
+        if (!abs) return { ok: false, output: `Refusing to write outside the workspace: ${rel}` };
         mkdirSync(path.dirname(abs), { recursive: true });
         writeFileSync(abs, content);
         return { ok: true, output: `Wrote ${content.length} byte(s) to ${rel} in ${ctx.workspace}.` };
