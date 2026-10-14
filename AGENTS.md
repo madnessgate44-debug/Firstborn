@@ -39,4 +39,4 @@ does not import from or write to the Firstborn repository, and it has its own
 ## Verify
 
 - `npm run lint` — `tsc --noEmit`; expect exit 0.
-- `npm test` — 18 tests on the real filesystem; expect 0 failures.
+- `npm test` — 27 tests on the real filesystem; expect 0 failures.

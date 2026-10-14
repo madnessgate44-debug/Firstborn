@@ -9,6 +9,10 @@
     "test": "tsx --test tests/*.test.ts",
     "company": "tsx scripts/company.ts"
   },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "freelm": "^0.5.2"
+  },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",

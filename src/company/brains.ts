@@ -1,0 +1,70 @@
+/**
+ * Model-backed brains. A brain turns the loop state into one action, using the
+ * same model access as Forge (see model.ts). Each role gets a mandate-specific
+ * prompt, so the PM reasons about requirements, QA about evidence, and so on.
+ *
+ * A brain always falls back to `finish` on unusable output, so a flaky model
+ * ends the role safely instead of spinning.
+ */
+import type { AgentAction, AgentBrain, AgentBrainState } from '../kernel/loop.ts';
+import type { ModelService, ChatMessage } from './model.ts';
+
+/** Read-only tools whose identical repeat cannot yield new information. */
+const READ_ONLY_TOOLS = new Set(['read_file', 'think', 'list_files', 'search', 'find_files']);
+
+export function guardRepeatedReadOnly(action: AgentAction, history: { action: AgentAction }[]): AgentAction {
+  if (!READ_ONLY_TOOLS.has(action.tool)) return action;
+  const key = JSON.stringify({ tool: action.tool, input: action.input });
+  const repeated = history.some((h) => JSON.stringify({ tool: h.action.tool, input: h.action.input }) === key);
+  if (!repeated) return action;
+  return { tool: 'think', input: { thought: `Already ran ${key}; that result will not change. Choose a different tool or finish.` } };
+}
+
+export interface BrainSpec {
+  role: string;
+  mandate: string;
+  /** What artifact kind this role must emit, and what fields it should carry. */
+  artifactHint: string;
+}
+
+export function buildRolePrompt(spec: BrainSpec, state: AgentBrainState): string {
+  const toolList = state.tools.map((t) => `- ${t.name}: ${t.description}`).join('\n');
+  const history = state.history.length
+    ? state.history.map((h) => `step ${h.index}: ${h.action.tool} -> ${h.observation.ok ? 'ok' : 'FAILED'}: ${h.observation.output.slice(0, 400)}`).join('\n')
+    : '(no actions yet)';
+  const upstream = state.memory?.trim() ? `What earlier roles produced (JSON, oldest first):\n${state.memory.trim().slice(0, 6000)}\n` : '';
+  return `You are the ${spec.role} in a software company. Your mandate: ${spec.mandate}
+Overall goal: ${state.goal}
+${upstream}Available tools:
+${toolList}
+Your actions so far:
+${history}
+Choose exactly ONE next action. Return compact JSON only, no markdown:
+{"tool":"<name>","input":{...}}
+Rules:
+- Base decisions only on observed output. Do not repeat an action you already took.
+- Read a file before editing it.
+- When your mandate is satisfied, return {"tool":"finish","input":{"summary":"...","data":{...}}}.
+- ${spec.artifactHint}
+- Use only tools from the list. Never invent a tool. Respond only with valid JSON.`;
+}
+
+/** A deterministic fallback brain: emits one finish carrying the given data. */
+export function scriptedBrain(summary: string, data: Record<string, unknown>): AgentBrain {
+  return async () => ({ tool: 'finish', input: { summary, data } });
+}
+
+export function modelBrain(model: ModelService, spec: BrainSpec): AgentBrain {
+  return async (state: AgentBrainState): Promise<AgentAction> => {
+    const prompt = buildRolePrompt(spec, state);
+    const messages: ChatMessage[] = [
+      { role: 'system', content: 'You are a careful senior software engineer. Return valid JSON only.' },
+      { role: 'user', content: prompt },
+    ];
+    const { value } = await model.completeJson<{ tool?: string; input?: Record<string, unknown> }>(messages, prompt);
+    if (value && typeof value.tool === 'string') {
+      return guardRepeatedReadOnly({ tool: value.tool, input: value.input }, state.history);
+    }
+    return { tool: 'finish', input: { summary: `${spec.role} could not choose an action; stopping safely.`, data: {} } };
+  };
+}

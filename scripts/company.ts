@@ -11,6 +11,8 @@ import { runCompany } from '../src/company/company.ts';
 import { DEFAULT_ROSTER } from '../src/company/roles.ts';
 import type { Role } from '../src/company/roles.ts';
 import type { AgentAction, AgentBrain } from '../src/kernel/loop.ts';
+import { ModelService } from '../src/company/model.ts';
+import { modelBrain } from '../src/company/brains.ts';
 
 /** Role-appropriate demo artifacts, so the demo shows a real winning competition. */
 function demoData(id: string, attempt: number): Record<string, unknown> {
@@ -56,15 +58,44 @@ function scriptedRoster(attempt: number): Role[] {
   }));
 }
 
+/**
+ * Model-backed roster: the same employees, but each role reasons with the model
+ * access shared with Forge (keyless-first freelm router, optional GEMINI_API_KEY).
+ */
+function modelRoster(model: ModelService, attempt: number): Role[] {
+  return DEFAULT_ROSTER.map((r) => ({
+    id: r.id,
+    title: r.title,
+    mandate: r.mandate,
+    authority: r.authority,
+    consumes: r.consumes,
+    produces: r.produces,
+    tools: [{ name: 'think', description: 'Record a reasoning step. Input: {"thought":"..."}.', run: async () => ({ ok: true, output: 'ok' }) }],
+    brain: modelBrain(model, {
+      role: `${r.title} (attempt ${attempt})`,
+      mandate: r.mandate,
+      artifactHint: `Emit your "${r.produces}" artifact in data.`,
+    }),
+  }));
+}
+
 async function main(): Promise<void> {
-  const goal = process.argv.slice(2).join(' ').trim() || 'Demonstrate the company on a sample goal.';
+  const args = process.argv.slice(2);
+  const useModel = args.includes('--model');
+  const goal = args.filter((a) => a !== '--model').join(' ').trim() || 'Demonstrate the company on a sample goal.';
   const bus = new ArtifactBus();
+  const model = useModel ? new ModelService() : null;
+  if (model) {
+    const info = model.getProviderInfo();
+    console.log(`[model] ${info.primaryProvider}; Gemini fallback configured: ${info.fallbackConfigured}`);
+  }
+  const attemptsPerItem = Math.max(1, Number.parseInt(process.env.FORGE_COMPANY_ATTEMPTS ?? '', 10) || 2);
   const result = await runCompany({
     goal,
     bus,
     plan: (g) => [{ id: 'w1', title: g }],
-    rosterFor: (_item, attempt) => scriptedRoster(attempt),
-    attemptsPerItem: 2,
+    rosterFor: (_item, attempt) => (model ? modelRoster(model, attempt) : scriptedRoster(attempt)),
+    attemptsPerItem,
   });
 
   console.log('--- FORGE COMPANY REPORT ---');

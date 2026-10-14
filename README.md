@@ -39,16 +39,33 @@ hardening from the Firstborn adversarial review (PR #83):
 ```bash
 npm install
 npm run lint          # tsc --noEmit
-npm test              # 18 tests, no model, no network
-npm run company -- "add a health check endpoint"
+npm test              # 27 tests, no network
+npm run company -- "add a health check endpoint"          # deterministic scripted employees
+npm run company -- --model "add a health check endpoint"  # real model-backed employees
 ```
 
 With no model configured, the company runs with deterministic scripted employees,
-so the org mechanics are exercisable and auditable offline. A model-backed roster
-plugs in at the same `rosterFor` boundary.
+so the org mechanics are exercisable and auditable offline.
+
+### Keys — the same ones as Forge
+
+The company uses the **same credentials as Forge** (`src/company/model.ts` mirrors
+Forge's `src/services/model.ts`). Nothing new to configure:
+
+- keyless-first **freelm** router (Kilo / OVHcloud) — works with no key at all;
+- provider keys read from the same environment variables: `GROQ_API_KEY`,
+  `OPENROUTER_API_KEY`, `KILO_API_KEY`, `CEREBRAS_API_KEY`, `MISTRAL_API_KEY`, ...;
+- optional `GEMINI_API_KEY` fallback (`gemini-2.5-flash`);
+- `FIRSTBORN_KEYLESS_ONLY=true` strips all provider keys and disables the
+  fallback, exactly as in Forge.
+
+`--model` builds a model-backed roster: every role reasons with the model, and the
+same evidence-only judge still decides the winner. `FORGE_COMPANY_ATTEMPTS` sets
+how many attempts compete per work item.
 
 ## Status
 
 The kernel and the org logic (teams, competition, judging, integration, budget,
-containment) are implemented and tested. Model-backed brains are the next slice;
-they attach at the role boundary without touching the org logic.
+containment) are implemented and tested, and the model path is wired to Forge's
+keys and verified live against the keyless router. Deeper model-driven *code
+editing* (wiring the workspace tools into the model roster) is the next slice.
