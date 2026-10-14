@@ -32,6 +32,8 @@ export interface CompanyOptions {
   rubric?: Rubric[];
   /** Files under change at the start of the run. */
   changes?: Record<string, string>;
+  /** A real directory mutating roles write into, so changes reflect disk. */
+  workspaceDir?: string;
   /** Final gate: given the winners' merged changes, may the company ship? */
   integrate?: (state: { goal: string; winners: string[]; changes: Record<string, string>; bus: ArtifactBus }) => { ok: boolean; reason: string };
 }
@@ -77,6 +79,7 @@ export async function runCompany(options: CompanyOptions): Promise<CompanyRun> {
         bus,
         limits: options.limits,
         changes: integratedChanges,
+        workspaceDir: options.workspaceDir,
       });
       runs.push({ attempt: attemptId, run });
     }

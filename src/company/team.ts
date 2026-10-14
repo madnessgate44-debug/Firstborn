@@ -7,6 +7,8 @@
  * typed, never implicit.
  */
 import { runAgentLoop, FINISH_TOOL, type AgentAction, type LoopLimits } from '../kernel/loop.ts';
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
 import type { ArtifactBus } from './bus.ts';
 import type { Role, RoleInput, RoleResult } from './roles.ts';
 
@@ -35,6 +37,8 @@ export interface TeamOptions {
   changes?: Record<string, string>;
   /** Stop the whole team if a role fails (default: true for producers of change). */
   stopOnFailure?: boolean;
+  /** A directory a mutating role writes real files into, so the change map reflects disk. */
+  workspaceDir?: string;
 }
 
 /** Derive a role result from the loop's terminal action. */
@@ -67,6 +71,12 @@ export async function runTeam(options: TeamOptions): Promise<TeamRun> {
       changes: { ...changes },
     };
 
+    // Give the brain the upstream artifacts and the files already under change.
+    const memory = JSON.stringify({
+      upstream: input.artifacts.map((a) => ({ kind: a.kind, author: a.author, summary: a.summary, data: a.data })),
+      changes: input.changes,
+    });
+
     const loop = await runAgentLoop({
       goal: `${role.title}: ${role.mandate} [${workItem}]`,
       tools: role.tools,
@@ -74,13 +84,20 @@ export async function runTeam(options: TeamOptions): Promise<TeamRun> {
       authorize: role.authorize,
       limits: role.limits ?? options.limits,
       workspace: scope,
-      memory: JSON.stringify(input.artifacts.map((a) => ({ kind: a.kind, author: a.author, summary: a.summary }))),
+      memory,
       verifyCompletion: role.verifyCompletion,
     });
 
     const result = interpret(role, loop.steps.map((s) => s.action), loop.status, loop.reason);
-    bus.post({ kind: role.produces, author: role.id, scope, summary: result.summary, data: result.data });
-    results.push({ role: role.id, result });
+
+    // QA evidence is derived from the commands the role actually ran, never from a
+    // self-reported claim: a check counts only if the loop observed it pass.
+    if (role.produces === 'evidence') {
+      const observed = loop.steps
+        .filter((s) => s.action.tool === 'run_check')
+        .map((s) => ({ name: String(s.action.input?.command ?? 'check'), status: s.observation.ok ? 'PASSED' : 'FAILED' }));
+      if (observed.length) result.data = { ...result.data, checks: observed };
+    }
 
     // A mutating role records the files it changed. `files` must be a path->content
     // map; a plain list of touched names (e.g. from a design) is not a change.
@@ -88,6 +105,23 @@ export async function runTeam(options: TeamOptions): Promise<TeamRun> {
     if (wrote && typeof wrote === 'object' && !Array.isArray(wrote)) {
       Object.assign(changes, wrote as Record<string, string>);
     }
+    // Capture files the role actually wrote to disk, so the change map reflects
+    // real writes even when the brain did not enumerate them in its finish data.
+    if (options.workspaceDir) {
+      for (const step of loop.steps) {
+        if (step.action.tool !== 'write_file' || !step.observation.ok) continue;
+        const rel = step.action.input?.path;
+        if (typeof rel !== 'string') continue;
+        try {
+          changes[rel] = readFileSync(path.join(options.workspaceDir, rel), 'utf8');
+        } catch {
+          /* file vanished; skip */
+        }
+      }
+    }
+
+    bus.post({ kind: role.produces, author: role.id, scope, summary: result.summary, data: { ...result.data, changes: { ...changes } } });
+    results.push({ role: role.id, result });
 
     if (!result.ok && stopOnFailure) {
       return { workItem, status: 'BLOCKED', reason: `${role.id} failed: ${result.reason ?? result.summary}`, results, changes };

@@ -39,13 +39,28 @@ hardening from the Firstborn adversarial review (PR #83):
 ```bash
 npm install
 npm run lint          # tsc --noEmit
-npm test              # 27 tests, no network
-npm run company -- "add a health check endpoint"          # deterministic scripted employees
-npm run company -- --model "add a health check endpoint"  # real model-backed employees
+npm test              # 36 tests, no network
+npm run company -- "add a health check endpoint"                 # deterministic scripted employees
+npm run company -- --model "add a health check endpoint"         # model-backed employees
+npm run company -- --model --target "add getHealth() to index.js"  # real workspace: read/write/run checks
+npm run company -- --model --workspace /path/to/repo "goal"      # against a real directory
 ```
 
 With no model configured, the company runs with deterministic scripted employees,
 so the org mechanics are exercisable and auditable offline.
+
+### Real work, not just artifacts
+
+In `--target` / `--workspace` mode every employee is handed the real workspace
+tools (`read_file`, `write_file`, `run_check`). Only `branch-write` roles may
+write, writes are confined to allowed roots, and `run_check` runs only an
+authorized command, with no shell metacharacters and a hard timeout. QA's evidence
+is derived from the checks it actually ran, so an attempt can only win by making a
+real change and passing the real checks.
+
+Verified live: `--model --target "Add a getHealth() function to index.js that
+returns { status: 'ok' }"` completed with a perfect score (16/16) and really
+rewrote `index.js`.
 
 ### Keys — the same ones as Forge
 
@@ -59,13 +74,11 @@ Forge's `src/services/model.ts`). Nothing new to configure:
 - `FIRSTBORN_KEYLESS_ONLY=true` strips all provider keys and disables the
   fallback, exactly as in Forge.
 
-`--model` builds a model-backed roster: every role reasons with the model, and the
-same evidence-only judge still decides the winner. `FORGE_COMPANY_ATTEMPTS` sets
-how many attempts compete per work item.
+`FORGE_COMPANY_ATTEMPTS` sets how many attempts compete per work item.
 
 ## Status
 
 The kernel and the org logic (teams, competition, judging, integration, budget,
-containment) are implemented and tested, and the model path is wired to Forge's
-keys and verified live against the keyless router. Deeper model-driven *code
-editing* (wiring the workspace tools into the model roster) is the next slice.
+containment) are implemented and tested, the model path is wired to Forge's keys,
+and the company now does real work: model-backed roles read, write, and run checks
+in a real workspace, with QA evidence taken from the checks that actually passed.

@@ -9,11 +9,11 @@
 import type { AgentAction, AgentBrain, AgentBrainState } from '../kernel/loop.ts';
 import type { ModelService, ChatMessage } from './model.ts';
 
-/** Read-only tools whose identical repeat cannot yield new information. */
-const READ_ONLY_TOOLS = new Set(['read_file', 'think', 'list_files', 'search', 'find_files']);
+/** Tools whose identical repeat cannot yield new information. */
+const IDEMPOTENT_TOOLS = new Set(['read_file', 'think', 'list_files', 'search', 'find_files', 'run_check']);
 
 export function guardRepeatedReadOnly(action: AgentAction, history: { action: AgentAction }[]): AgentAction {
-  if (!READ_ONLY_TOOLS.has(action.tool)) return action;
+  if (!IDEMPOTENT_TOOLS.has(action.tool)) return action;
   const key = JSON.stringify({ tool: action.tool, input: action.input });
   const repeated = history.some((h) => JSON.stringify({ tool: h.action.tool, input: h.action.input }) === key);
   if (!repeated) return action;
@@ -25,6 +25,8 @@ export interface BrainSpec {
   mandate: string;
   /** What artifact kind this role must emit, and what fields it should carry. */
   artifactHint: string;
+  /** An explicit tool sequence the role should follow. Rendered prominently. */
+  sequence?: string[];
 }
 
 export function buildRolePrompt(spec: BrainSpec, state: AgentBrainState): string {
@@ -33,19 +35,22 @@ export function buildRolePrompt(spec: BrainSpec, state: AgentBrainState): string
     ? state.history.map((h) => `step ${h.index}: ${h.action.tool} -> ${h.observation.ok ? 'ok' : 'FAILED'}: ${h.observation.output.slice(0, 400)}`).join('\n')
     : '(no actions yet)';
   const upstream = state.memory?.trim() ? `What earlier roles produced (JSON, oldest first):\n${state.memory.trim().slice(0, 6000)}\n` : '';
+  const sequence = spec.sequence?.length
+    ? `Required sequence for your role (follow it in order, one action per reply):\n${spec.sequence.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n`
+    : '';
   return `You are the ${spec.role} in a software company. Your mandate: ${spec.mandate}
 Overall goal: ${state.goal}
 ${upstream}Available tools:
 ${toolList}
-Your actions so far:
+${sequence}Your actions so far:
 ${history}
 Choose exactly ONE next action. Return compact JSON only, no markdown:
 {"tool":"<name>","input":{...}}
 Rules:
-- Base decisions only on observed output. Do not repeat an action you already took.
+- Do NOT repeat an action you already took; its result will not change.
 - Read a file before editing it.
-- When your mandate is satisfied, return {"tool":"finish","input":{"summary":"...","data":{...}}}.
 - ${spec.artifactHint}
+- When your sequence is complete (or if you cannot proceed), finish: {"tool":"finish","input":{"summary":"...","data":{...}}}.
 - Use only tools from the list. Never invent a tool. Respond only with valid JSON.`;
 }
 
