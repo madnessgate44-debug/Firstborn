@@ -183,3 +183,25 @@ test('browser_query answers a structured natural-language question when availabl
     await tools.get('browser_close')!.run({}, ctx);
   }
 });
+
+test('fetch_url retrieves a local HTTP response and reports its status', async () => {
+  const tools = mapTools(buildForgeTools({ owner: 'owner', repo: 'repo' }));
+  const fetchTool = tools.get('fetch_url');
+  assert.ok(fetchTool, 'fetch_url must be registered in the base Forge toolset');
+  const result = await fetchTool.run({ url: base }, ctx);
+  assert.equal(result.ok, true);
+  assert.match(result.output, /HTTP 200/);
+  assert.match(result.output, /Capability test landing page/);
+});
+
+test('run_check executes an allowlisted verification command and rejects arbitrary commands', async () => {
+  const tools = mapTools(buildForgeTools({ owner: 'owner', repo: 'repo', allowMutation: true }));
+  const check = tools.get('run_check');
+  assert.ok(check, 'run_check must be registered when mutations are enabled');
+  const result = await check.run({ command: 'git diff --check' }, { ...ctx, workspace: process.cwd() });
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /exit=0 status=PASSED/);
+  const rejected = await check.run({ command: 'git status && rm -rf /' }, { ...ctx, workspace: process.cwd() });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.output, /exit=126/);
+});
