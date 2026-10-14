@@ -49,7 +49,8 @@ test('repository task: Forge completes a bounded inspect-edit-test-verify missio
     });
 
     assert.equal(result.status, 'COMPLETED', result.reason);
-    assert.deepEqual(observations.map((step) => step.tool), actions.map((action) => action.tool));
+    assert.deepEqual(result.steps.map((step) => step.action.tool), actions.map((action) => action.tool));
+    assert.deepEqual(observations.map((step) => step.tool), actions.slice(0, -1).map((action) => action.tool));
     assert.ok(observations.every((step) => step.ok), JSON.stringify(observations.filter((step) => !step.ok)));
     assert.match(observations[0].output, /src\/message\.js/);
     assert.match(observations[2].output, /old-message/);
