@@ -20,7 +20,10 @@ let buffer = '';
 function rpc(method: string, params: unknown = {}): Promise<any> {
   const id = nextId++;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${method}`)), 30_000);
+    // Chromium's first launch on a contended CI runner can exceed the old 30s
+    // budget (a following call took 12s). The timeout must not be the thing
+    // that fails a correct run, so give cold start generous headroom.
+    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${method}`)), 90_000);
     pending.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
   });
