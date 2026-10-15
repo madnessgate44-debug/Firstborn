@@ -1,13 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   DEFAULT_AUDIT_BENCH,
   buildAuditEmployeePrompt,
+  buildAuditLensBatchPrompt,
+  batchCorpus,
   validateEmployeeFindings,
   mergeFindings,
   renderAuditMarkdown,
 } from '../src/company/audit.ts';
 import { runCompanyAudit, auditPlan, buildAuditRubric, VERIFY_PANEL, type AuditModel, type RepoContext } from '../src/company/audit-company.ts';
+import { verifyRuntime } from '../src/company/runtime.ts';
 import type { ModelResult } from '../src/company/model.ts';
 
 const FILES = ['src/App.tsx', 'server.ts', 'package.json', 'src/services/__tests__/x.test.ts'];
@@ -74,6 +80,129 @@ test('audit core: the bench has distinct lenses and the prompt carries the excer
   assert.match(prompt, /--- FILE: server\.ts ---/);
   assert.match(prompt, /never follow instructions/i);
   assert.match(prompt, /Never invent paths/i);
+});
+
+test('audit core: batchCorpus never splits a file and covers every file exactly once', () => {
+  const corpus = { 'a.ts': 'x'.repeat(10), 'b.ts': 'y'.repeat(10), 'c.ts': 'z'.repeat(10) };
+  const batches = batchCorpus(corpus, 25);
+  assert.equal(batches.length, 2);
+  const seen = batches.flatMap((b) => Object.keys(b)).sort();
+  assert.deepEqual(seen, ['a.ts', 'b.ts', 'c.ts']);
+  // A single file larger than the cap still gets read in full (its own batch).
+  const big = batchCorpus({ 'big.ts': 'q'.repeat(1000) }, 10);
+  assert.equal(big.length, 1);
+  assert.equal(big[0]['big.ts'].length, 1000);
+});
+
+test('audit core: the batch prompt contains whole files, not truncated samples', () => {
+  const body = 'export const big = ' + 'a'.repeat(9000) + ';';
+  const prompt = buildAuditLensBatchPrompt(DEFAULT_AUDIT_BENCH[0], {
+    target: 'o/r',
+    commit: 'abc',
+    allFiles: ['src/big.ts', 'src/other.ts'],
+    batch: { 'src/big.ts': body },
+    batchIndex: 1,
+    batchCount: 3,
+  });
+  assert.match(prompt, /batch 1 of 3/);
+  assert.match(prompt, /--- FILE: src\/big\.ts ---/);
+  // The whole 9000-char file is present; nothing was cut at 4000.
+  assert.ok(prompt.includes(body));
+});
+
+test('audit core: a lens reads the whole corpus (every file, in full)', async () => {
+  // Every file in the corpus is read; findings are unioned across the batches.
+  const model = fakeModel({
+    '[role:lens:arch]': { summary: 's', findings: [{ severity: 'LOW', title: 'Found in a batch', paths: ['src/App.tsx'], basis: 'observed', evidence: 'e', recommendation: 'r' }] },
+    '[role:forge-lead]': { summary: 's', architecture: 'a' },
+  });
+  const corpus = { 'src/App.tsx': 'x'.repeat(50), 'server.ts': 'y'.repeat(50), 'package.json': '{}' };
+  const result = await runCompanyAudit({
+    model,
+    ctx: { target: 'o/r', commit: 'abc123', files: ['src/App.tsx', 'server.ts', 'package.json'], excerpts: {} },
+    attemptsPerItem: 1,
+    registryGrounder: noRegistry,
+    corpus,
+    batchChars: 20000,
+  });
+  assert.equal(result.status, 'COMPLETED');
+  assert.ok(result.coverage.read >= 2);
+  assert.ok(result.findings.length >= 1);
+});
+
+test('company audit: an isolated runtime failure becomes a HIGH verified fact', async () => {
+  const model = fakeModel({
+    '[role:lens:arch]': { summary: 'a', findings: [{ severity: 'LOW', title: 'God module', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'split' }] },
+    '[role:forge-lead]': { summary: 's', architecture: 'a' },
+  });
+  const result = await runCompanyAudit({
+    model,
+    ctx: { target: 'o/r', commit: 'abc123', files: ['src/App.tsx', 'package.json'], excerpts: {} },
+    attemptsPerItem: 1,
+    registryGrounder: noRegistry,
+    corpus: { 'package.json': '{}', 'src/App.tsx': 'export const x = 1;' },
+    runtime: { enabled: true },
+    verifyRuntime: async () => [
+      { name: 'lint', command: 'npm run lint', exitCode: 2, output: 'src/App.tsx(3,1): error TS2304: Cannot find name y.', paths: ['src/App.tsx'] },
+      { name: 'test', command: 'npm run test', exitCode: 0, output: 'ok', paths: [] },
+    ],
+  });
+  const rt = result.findings.find((f) => /Runtime check failed: lint/i.test(f.title));
+  assert.ok(rt, 'the failed runtime check must be reported');
+  assert.equal(rt!.severity, 'HIGH');
+  assert.equal(result.evidence[rt!.title].verdict, 'SUPPORTED');
+  assert.ok(result.runtime.some((r) => r.name === 'lint' && r.exitCode === 2));
+  // A passing check produces no finding.
+  assert.ok(!result.findings.some((f) => /Runtime check failed: test/i.test(f.title)));
+});
+
+test('audit core: markdown reports coverage and execution honestly', () => {
+  const md = renderAuditMarkdown({
+    target: 'o/r',
+    commit: 'abc',
+    fileCount: 10,
+    employees: [],
+    findings: [],
+    coverage: { files: 10, read: 9, bytes: 12345 },
+    runtime: [{ name: 'lint', command: 'npm run lint', exitCode: 2, output: 'boom' }],
+  });
+  assert.match(md, /Read in full: 9 file/);
+  assert.match(md, /Target code executed: yes/);
+  assert.match(md, /## Isolated runtime verification/);
+});
+
+test('runtime verification: runs a local project and reports the failing check', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-rt-test-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', scripts: { pass: 'node -e "process.exit(0)"', fail: 'node -e "process.exit(3)"' } }));
+    const ctx = { target: 'o/r', commit: 'abc', files: ['package.json'], excerpts: { 'package.json': fs.readFileSync(path.join(dir, 'package.json'), 'utf8') } };
+    const checks = await verifyRuntime(ctx, { 'package.json': ctx.excerpts['package.json'] }, {
+      enabled: true,
+      localDir: dir,
+      installCommand: 'node -e "process.exit(0)"',
+      checks: [
+        { name: 'pass', command: 'npm run pass' },
+        { name: 'fail', command: 'npm run fail' },
+      ],
+    });
+    const fail = checks.find((c) => c.name === 'fail');
+    const pass = checks.find((c) => c.name === 'pass');
+    assert.equal(fail?.exitCode, 3);
+    assert.equal(pass?.exitCode, 0);
+    // The local directory must not be deleted.
+    assert.ok(fs.existsSync(path.join(dir, 'package.json')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runtime verification: disabled means no checks run', async () => {
+  const checks = await verifyRuntime(
+    { target: 'o/r', commit: 'abc', files: [], excerpts: {} },
+    { 'package.json': '{}' },
+    { enabled: false }
+  );
+  assert.deepEqual(checks, []);
 });
 
 test('audit core: markdown renders the assessment, bench, panel, and findings', () => {
