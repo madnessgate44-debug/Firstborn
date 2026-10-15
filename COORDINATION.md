@@ -1096,3 +1096,57 @@ but the *run* was mediocre — roughly half its findings were confidently wrong.
   edit-anchor bug — tracked outside this entry.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-EVIDENCE-LEDGER-20261015-03`
+
+#### Context
+Owner's question: "I cannot rely on a model to check another model, and I cannot
+read the code — what do I do?" The answer that shaped this work: never verify by
+reading code; instead make the audit prove itself in a form a non-coder can check
+in seconds. Replace an *opinion* ("this is XSS") with a *check* whose raw result
+anyone can read ("0 matches → the claim is false").
+
+#### What shipped (branch `forge/evidence-ledger`)
+- **`src/company/evidence.ts` (new).** Downloads the exact-commit source as a
+  tarball, parses it in memory (no target code runs), and settles claims
+  deterministically: an XSS claim needs a real HTML sink
+  (`dangerouslySetInnerHTML`/`innerHTML`/…), a "hardcoded secret" claim needs a
+  literal credential, a "missing lockfile" claim is checked against the file list,
+  and `hasApiKey` / `--legacy-peer-deps` claims are checked by literal search.
+- **Report restructured** (`src/company/audit.ts`) into three sections, which is
+  the part the owner actually reads:
+  - **Verified facts** — a machine check confirmed it; each shows the command, the
+    raw result, and a one-click GitHub spot-check link.
+  - **Judgment calls** — opinions no check can decide; explicitly *not* proven.
+  - **Withdrawn by evidence** — a check disproved it; "do not act on these."
+- **`registry.ts`** gained `fetchRepoCorpus` (read-only; `GITHUB_TOKEN` used only
+  to raise rate limits).
+
+#### Evidence (observed)
+- `npm test`: **214 passed / 0 failed** (was 201; +13). `tsc --noEmit`: clean.
+- **Real Amina corpus** (`16ddf374`): 126 text files fetched; the previous false
+  "stored XSS" and false "hardcoded key" claims both return **CONTRADICTED** with
+  "0 matches".
+- **Live rerun** `company-audit.yml` run `38718332589`/`38718332592` on this branch,
+  target `madnessgate44-debug/Amina`: report reads
+  **Verified facts 2 / Judgment calls 10 / Withdrawn 1**.
+  - Verified: "Missing Lockfile" ("none of package-lock.json, yarn.lock, … (126
+    files)"), "--legacy-peer-deps" ("1 match, deploy-pages.yml:33").
+  - Withdrawn: "Hardcoded API Key" ("0 literals across 126 files") — the exact
+    failure mode that started this thread, now caught mechanically.
+  - The verification panel also objected to the same finding ("env var is used").
+
+#### Honest gaps
+- Three of four panel members returned **UNVERIFIED** ("no usable verdict") this
+  run. That is honest (never a false CONFIRM), but it means the panel added little;
+  the deterministic checks did the real work. Panel output-format reliability is
+  the next thing to fix.
+- Evidence checks cover render sinks, secrets, lockfiles, `hasApiKey`, and
+  `--legacy-peer-deps`. Other claim classes still fall to "judgment" by design.
+- The audit's own summary still miscounts severities (it said 4 HIGH/5 MEDIUM/3 LOW
+  when the tally was 5/6/3/1). The new report computes its counts mechanically, but
+  the prose summary remains a model paraphrase.
+
+No secrets, tokens, or credentials appear in this entry.
