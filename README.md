@@ -1,3 +1,4 @@
+> Verified by the Forge software company.
 # Firstborn / Forge
 
 Forge is the deterministic coding agent for the Firstborn project. It is designed to
