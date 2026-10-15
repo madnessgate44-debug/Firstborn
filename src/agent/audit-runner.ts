@@ -20,6 +20,38 @@ type Finding = {
 const target = (process.env.FORGE_TARGET_REPO || '').trim();
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
+/**
+ * Validate target repository string to prevent path injection.
+ * Returns true only for strict owner/repo format.
+ */
+export function isValidTargetRepo(input: string): boolean {
+  if (!input || input.includes('..') || input.includes('\\')) return false;
+  const parts = input.split('/');
+  if (parts.length !== 2) return false;
+  const [owner, repo] = parts;
+  if (!owner || !repo) return false;
+  if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) return false;
+  return true;
+}
+
+/**
+ * Construct a sanitized environment for running untrusted target code.
+ * Explicitly strips secrets, API keys, and write tokens.
+ */
+export function buildSafeEnv(): Record<string, string | undefined> {
+  const safe: Record<string, string | undefined> = {};
+  const blockList = ['GITHUB_TOKEN', 'GH_TOKEN', 'GOOGLE_API_KEY', 'GENAI_API_KEY', 'API_KEY', 'SECRET', 'TOKEN', 'PRIVATE_KEY', 'DEPLOY'];
+  for (const [key, value] of Object.entries(process.env)) {
+    const upper = key.toUpperCase();
+    if (blockList.some((b) => upper.includes(b))) continue;
+    if (key === 'PATH' || key === 'HOME' || key === 'USER' || key === 'TMPDIR' || key === 'NODE_ENV') {
+      safe[key] = value;
+    }
+  }
+  safe['NODE_ENV'] = 'test';
+  return safe;
+}
+
 const SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
 const MAX_MODEL_FINDINGS = 8;
 
@@ -92,7 +124,7 @@ async function getTextFile(owner: string, repo: string, filePath: string, ref: s
 }
 
 async function main(): Promise<void> {
-  if (!repoPattern.test(target) || target.includes('..')) throw new Error('FORGE_TARGET_REPO must be an explicit owner/repo value.');
+  if (!isValidTargetRepo(target)) throw new Error('FORGE_TARGET_REPO must be a valid owner/repo value (e.g., owner/repo).');
   const [owner, repo] = target.split('/');
   const metadata = await getJson(`https://api.github.com/repos/${owner}/${repo}`);
   const branch = metadata.default_branch;
