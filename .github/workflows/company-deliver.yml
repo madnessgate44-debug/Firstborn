@@ -5,8 +5,10 @@ name: Forge Company Delivery
 # isolated `forge/` branch, and opens a pull request. It never merges and never
 # writes to the base branch.
 #
-# Cross-repo push needs a token with `repo` scope on the target, supplied as the
-# FORGE_DELIVER_TOKEN secret (the built-in GITHUB_TOKEN only reaches this repo).
+# No extra secret is required for repositories this workflow's token can already
+# reach: the built-in GITHUB_TOKEN (contents + pull-requests: write) clones,
+# pushes, and opens the PR. Only a *different* owner's repository needs a PAT,
+# supplied as FORGE_DELIVER_TOKEN, which takes precedence when set.
 on:
   workflow_dispatch:
     inputs:
@@ -24,7 +26,8 @@ on:
         default: '1'
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   company-deliver:
@@ -49,11 +52,16 @@ jobs:
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Must be a PAT with `repo` scope on the target; GITHUB_TOKEN cannot
-          # push across repositories.
-          GITHUB_TOKEN: ${{ secrets.FORGE_DELIVER_TOKEN }}
+          # Prefer a PAT when one is configured (needed only for another owner's
+          # repo); otherwise fall back to the built-in token, which reaches this
+          # account's repositories and needs no setup.
+          GITHUB_TOKEN: ${{ secrets.FORGE_DELIVER_TOKEN || secrets.GITHUB_TOKEN }}
           FORGE_DELIVER_ATTEMPTS: ${{ inputs.attempts }}
-        run: npx tsx scripts/deliver.ts "${{ inputs.target_repo }}" "${{ inputs.goal }}"
+          # Passed through env, never interpolated into the command line, so a
+          # goal containing shell metacharacters cannot inject a command.
+          TARGET_REPO: ${{ inputs.target_repo }}
+          GOAL: ${{ inputs.goal }}
+        run: npx tsx scripts/deliver.ts "$TARGET_REPO" "$GOAL"
 
       - name: Upload the delivery report
         if: always()

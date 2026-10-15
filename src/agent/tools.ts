@@ -317,7 +317,7 @@ export function buildForgeTools(options: {
     });
     tools.push({
       name: 'write_file',
-      description: 'Create or overwrite a file in the workspace. Input: {"path":"...","content":"..."}. Mutating.',
+      description: 'Create a NEW file in the workspace. Input: {"path":"...","content":"..."}. Refuses to overwrite an existing file — use edit_file for that. Mutating.',
       mutating: true,
       run: async (input, ctx: LoopContext): Promise<ToolObservation> => {
         const rel = str(input, 'path');
@@ -326,6 +326,7 @@ export function buildForgeTools(options: {
         if (!ws) return { ok: false, output: 'No workspace available; cannot write files.' };
         const abs = resolveInWorkspace(ws, rel);
         if (!abs) return { ok: false, output: `Refusing to write outside the workspace: ${rel}` };
+        if (existsSync(abs)) return { ok: false, output: 'File exists. Use edit_file.' };
         mkdirSync(path.dirname(abs), { recursive: true });
         writeFileSync(abs, content);
         return { ok: true, output: `Wrote ${content.length} byte(s) to ${rel} in ${ctx.workspace}.` };

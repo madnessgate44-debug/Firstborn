@@ -32,7 +32,7 @@ export interface BrainSpec {
 export function buildRolePrompt(spec: BrainSpec, state: AgentBrainState): string {
   const toolList = state.tools.map((t) => `- ${t.name}: ${t.description}`).join('\n');
   const history = state.history.length
-    ? state.history.map((h) => `step ${h.index}: ${h.action.tool} -> ${h.observation.ok ? 'ok' : 'FAILED'}: ${h.observation.output.slice(0, 400)}`).join('\n')
+    ? state.history.map((h) => `step ${h.index}: ${h.action.tool} -> ${h.observation.ok ? 'ok' : 'FAILED'}: ${h.observation.output.slice(0, 4000)}`).join('\n')
     : '(no actions yet)';
   const upstream = state.memory?.trim() ? `What earlier roles produced (JSON, oldest first):\n${state.memory.trim().slice(0, 6000)}\n` : '';
   const sequence = spec.sequence?.length
@@ -49,6 +49,8 @@ Choose exactly ONE next action. Return compact JSON only, no markdown:
 Rules:
 - Do NOT repeat an action you already took; its result will not change.
 - Read a file before editing it.
+- To change an existing file, use edit_file with a small, unique old_string and copy it exactly from what you read. Do not rewrite a whole file from memory: you may only have seen part of it, and a whole-file write can silently delete everything you did not see.
+- Use write_file only to create a new file.
 - ${spec.artifactHint}
 - When your sequence is complete (or if you cannot proceed), finish: {"tool":"finish","input":{"summary":"...","data":{...}}}.
 - Use only tools from the list. Never invent a tool. Respond only with valid JSON.`;

@@ -16,7 +16,7 @@ import { modelBrain } from '../src/company/brains.ts';
 import { buildRoleTools } from '../src/company/role-tools.ts';
 import { DEFAULT_ROSTER } from '../src/company/roles.ts';
 import type { Role } from '../src/company/roles.ts';
-import { deliverChange, type PullRequestOpener } from '../src/company/deliver.ts';
+import { deliverChange, type PullRequestOpener, type DeliveryExpectation } from '../src/company/deliver.ts';
 import { fetchRepoContext } from '../src/company/repo-context.ts';
 import type { AgentAction, AgentBrain } from '../src/kernel/loop.ts';
 
@@ -27,7 +27,13 @@ const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const ROLE_SEQUENCE: Record<string, string[]> = {
   pm: ['finish with your requirements artifact (data.items = acceptance criteria)'],
   architect: ['read_file on the files named in the goal', 'finish with your design artifact (data.design, data.files)'],
-  implementer: ['read_file on each file you will change', 'write_file with the corrected content', 'run_check the "test" command', 'finish with your change artifact'],
+  implementer: [
+    'read_file on each file you will change',
+    'edit_file with minimal anchors: old_str is a small unique snippet copied exactly from what you read, new_str is the replacement',
+    'never retype a whole file — you may only have seen part of it',
+    'run_check the "test" command',
+    'finish with your change artifact',
+  ],
   reviewer: ['read_file on the changed file', 'finish with your review artifact (data.blockers = number)'],
   qa: ['run_check the "test" command', 'run_check the "lint" command', 'finish with your evidence artifact'],
   security: ['read_file on the changed file', 'finish with your security artifact (data.clean = boolean)'],
@@ -70,6 +76,7 @@ function scriptedRoster(workspaceDir: string): (item: { id: string; title: strin
     const scripts: Record<string, AgentAction[]> = {
       implementer: [
         { tool: 'write_file', input: { path: EDIT_PATH, content } },
+        { tool: 'run_check', input: { command: 'test' } },
         { tool: 'finish', input: { summary: 'wrote the probe file', data: { files: { [EDIT_PATH]: content } } } },
       ],
       qa: [
@@ -114,13 +121,37 @@ const openPr: PullRequestOpener = async ({ target, head, base, title, body, toke
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const scripted = args.includes('--scripted');
-  const positional = args.filter((a) => !a.startsWith('--'));
+  const valueFlags = new Set(['--expect-file', '--expect-contains', '--max-deletions']);
+  const flags: Record<string, string> = {};
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (valueFlags.has(a)) {
+      flags[a] = args[i + 1] ?? '';
+      i += 1;
+    } else if (!a.startsWith('--')) {
+      positional.push(a);
+    }
+  }
   const target = (positional[0] || '').trim();
   const goal = positional.slice(1).join(' ').trim() || 'Address the audit findings.';
   if (!repoPattern.test(target) || target.includes('..')) {
-    console.error('usage: npm run deliver -- [--scripted] owner/repo "goal"');
+    console.error('usage: npm run deliver -- [--scripted] [--expect-file <path>] [--expect-contains <text>] [--max-deletions <n>] owner/repo "goal"');
     process.exitCode = 2;
     return;
+  }
+
+  const expect: DeliveryExpectation[] = [];
+  if (flags['--expect-contains'] !== undefined) {
+    const maxDeletions = flags['--max-deletions'] !== undefined ? Number.parseInt(flags['--max-deletions'], 10) : undefined;
+    expect.push({
+      file: flags['--expect-file'] || undefined,
+      addedLinesContain: flags['--expect-contains'],
+      maxDeletions: Number.isNaN(maxDeletions as number) ? undefined : maxDeletions,
+    });
+  } else if (flags['--max-deletions'] !== undefined) {
+    const maxDeletions = Number.parseInt(flags['--max-deletions'], 10);
+    expect.push({ file: flags['--expect-file'] || undefined, maxDeletions: Number.isNaN(maxDeletions) ? undefined : maxDeletions });
   }
 
   const ctx = await fetchRepoContext(target);
@@ -147,6 +178,7 @@ async function main(): Promise<void> {
     rosterFor: model ? modelRoster(model, workspaceDir) : scriptedRoster(workspaceDir),
     attemptsPerItem: Math.max(1, Number.parseInt(process.env.FORGE_DELIVER_ATTEMPTS ?? '', 10) || 1),
     push: process.env.FORGE_DELIVER_PUSH !== 'false',
+    expect,
     openPr,
   });
 

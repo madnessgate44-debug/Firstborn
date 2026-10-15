@@ -19,9 +19,33 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { runCompany, type WorkItem } from './company.ts';
 import type { Role } from './roles.ts';
-import type { LoopLimits } from '../kernel/loop.ts';
+import type { LoopLimits, LoopStep } from '../kernel/loop.ts';
 import { runCommand } from './runner.ts';
 import type { AuditFinding } from './audit.ts';
+
+/**
+ * Shrink-guard thresholds. A partial read written back as a whole file shows up
+ * as a large deletion count; these constants are what "large" means. They are
+ * deliberately conservative so an honest edit never trips them.
+ */
+export const SHRINK_MIN_DELETIONS = 30; // a modified file must delete at least this many lines...
+export const SHRINK_DELETION_RATIO = 0.3; // ...AND at least this fraction of its original lines...
+export const SHRINK_ADDITION_MARGIN = 20; // ...AND more deletions than additions plus this margin.
+export const TOTAL_MIN_DELETIONS = 50; // across the whole change, deletions must exceed...
+export const TOTAL_DELETION_MULTIPLE = 5; // ...this multiple of total additions.
+
+/**
+ * An assertion the final diff must satisfy. This is what makes "success" mean
+ * "the goal was met", not merely "it still builds".
+ */
+export interface DeliveryExpectation {
+  /** Limit to one path, e.g. "README.md". Omit to consider every changed file. */
+  file?: string;
+  /** Added lines must contain this substring somewhere in the diff. */
+  addedLinesContain?: string;
+  /** Fail if any changed file deletes more than this many lines. */
+  maxDeletions?: number;
+}
 
 export interface GitResult {
   code: number;
@@ -79,6 +103,16 @@ export interface DeliveryOptions {
   limits?: LoopLimits;
   /** Override the target's checks. Defaults to its package.json test/lint scripts. */
   authorizedCommands?: Record<string, string>;
+  /** Assertions the final diff must satisfy for the run to count as success. */
+  expect?: DeliveryExpectation[];
+  /** Override the shrink-guard thresholds (tests use this to force a trip). */
+  thresholds?: {
+    minDeletions?: number;
+    deletionRatio?: number;
+    additionMargin?: number;
+    totalMinDeletions?: number;
+    totalDeletionMultiple?: number;
+  };
   /** Findings this run set out to fix (carried into the report and the PR body). */
   findings?: AuditFinding[];
   /** Injectable effects. */
@@ -98,6 +132,10 @@ export interface DeliveryResult {
   reason: string;
   changedFiles: string[];
   checks: { name: string; status: 'PASSED' | 'FAILED'; output: string }[];
+  /** How each expectation was judged, so the report shows the goal was checked. */
+  expected: { assertion: string; met: boolean; detail: string }[];
+  /** Known limitations of this run that no check can cover. */
+  gaps: string[];
   prUrl?: string;
   prNumber?: number;
   findings: AuditFinding[];
@@ -146,14 +184,48 @@ function renderDeliveryMarkdown(r: Omit<DeliveryResult, 'markdown'>): string {
     '',
     '## Verification (the target\'s own checks)',
     ...(r.checks.length ? r.checks.map((c) => `- ${c.name}: ${c.status}`) : ['- (no checks were available to run)']),
+    ...(r.expected.length
+      ? [
+          '',
+          '## Goal assertions (what "success" required)',
+          ...r.expected.map((e) => `- ${e.met ? 'MET' : 'NOT MET'} — ${e.assertion}: ${e.detail}`),
+        ]
+      : []),
+    ...(r.gaps.length ? ['', '## Known gaps', ...r.gaps.map((g) => `- ${g}`)] : []),
     ...(r.prUrl ? ['', `## Pull request`, `- ${r.prUrl}`] : []),
     '',
     '## Guarantees',
     '- The change was committed to an isolated `forge/` branch, never to the base branch.',
     '- The pull request is opened, never merged.',
-    '- The run is BLOCKED unless there was a real diff and every available check passed.',
+    '- The run is BLOCKED unless there was a real diff, the goal assertions were met, and every available check passed.',
   ];
   return lines.join('\n');
+}
+
+/**
+ * Bind the implementer's "finish" to real evidence: it may only finish once it
+ * actually mutated a file (edit_file or write_file) and the target's "test"
+ * check passed *after* that mutation. A stub that merely claims completion is
+ * refused, and the loop gives the role another turn instead.
+ */
+function withEvidenceGate(rosterFor: DeliveryOptions['rosterFor']): DeliveryOptions['rosterFor'] {
+  return (item, attempt) =>
+    rosterFor(item, attempt).map((role) => {
+      if (role.id !== 'implementer' || role.verifyCompletion) return role;
+      return {
+        ...role,
+        verifyCompletion: ({ history }: { history: LoopStep[] }) => {
+          const mutations = history.filter((h) => (h.action.tool === 'edit_file' || h.action.tool === 'write_file') && h.observation.ok);
+          if (!mutations.length) return { ok: false, reason: 'no file was actually changed yet; make the change before finishing' };
+          const lastMutation = mutations[mutations.length - 1].index;
+          const testAfter = history.some(
+            (h) => h.action.tool === 'run_check' && h.action.input?.command === 'test' && h.observation.ok && h.index > lastMutation,
+          );
+          if (!testAfter) return { ok: false, reason: 'run the "test" check after your last change, then finish' };
+          return { ok: true };
+        },
+      };
+    });
 }
 
 export async function deliverChange(options: DeliveryOptions): Promise<DeliveryResult> {
@@ -161,6 +233,14 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
   const baseBranch = options.baseBranch ?? 'main';
   const push = options.push ?? true;
   const findings = options.findings ?? [];
+  const expect = options.expect ?? [];
+  const t = {
+    minDeletions: options.thresholds?.minDeletions ?? SHRINK_MIN_DELETIONS,
+    deletionRatio: options.thresholds?.deletionRatio ?? SHRINK_DELETION_RATIO,
+    additionMargin: options.thresholds?.additionMargin ?? SHRINK_ADDITION_MARGIN,
+    totalMinDeletions: options.thresholds?.totalMinDeletions ?? TOTAL_MIN_DELETIONS,
+    totalDeletionMultiple: options.thresholds?.totalDeletionMultiple ?? TOTAL_DELETION_MULTIPLE,
+  };
 
   const base: DeliveryResult = {
     target: options.target,
@@ -172,6 +252,10 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
     reason: '',
     changedFiles: [],
     checks: [],
+    expected: [],
+    gaps: [
+      'Truncated model output cannot be detected: ModelResult exposes no finish reason or token-limit signal, so an output cut off at the token limit is treated as a complete action.',
+    ],
     findings,
     markdown: '',
   };
@@ -227,11 +311,31 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
     }
   }
   if (hasDeps) {
-    const install = existsSync(path.join(dir, 'package-lock.json')) ? 'npm ci' : 'npm install';
-    const installResult = await runCommand(install, dir);
+    let installCmd = existsSync(path.join(dir, 'package-lock.json')) ? 'npm ci' : 'npm install';
+    let installResult = await runCommand(installCmd, dir);
+    // Some real projects have a peer-dependency conflict that only
+    // `--legacy-peer-deps` resolves (Amina is one). Retry once and record which
+    // command actually worked, rather than failing a target that its own team
+    // can still test.
+    if (installResult.status === 'FAILED' && /ERESOLVE|peer dep|Conflicting peer/i.test(installResult.output)) {
+      installCmd = `${installCmd} --legacy-peer-deps`;
+      installResult = await runCommand(installCmd, dir);
+    }
     if (installResult.status === 'FAILED') {
       checks.push({ name: 'install', status: 'FAILED', output: redact(installResult.output, options.token).slice(0, 2000) });
       return finish({ status: 'BLOCKED', reason: `dependency install failed: ${installResult.output.split('\n')[0] ?? 'unknown'}`, checks });
+    }
+    checks.push({ name: installCmd === 'npm ci' || installCmd === 'npm install' ? 'install' : `install (${installCmd})`, status: 'PASSED', output: '' });
+  }
+
+  // Establish the baseline: if the target's checks already fail at the base
+  // commit, a later failure cannot be attributed to the company's change, so
+  // refuse up front rather than take blame (or credit) for a pre-existing break.
+  for (const name of Object.keys(authorized)) {
+    const base = await runCommand(authorized[name], dir);
+    checks.push({ name: `baseline:${name}`, status: base.status, output: redact(base.output, options.token).slice(0, 2000) });
+    if (base.status === 'FAILED') {
+      return finish({ status: 'BLOCKED', reason: `the target's "${name}" check already fails at ${options.commit.slice(0, 8)}; cannot verify a change against a broken baseline`, checks });
     }
   }
 
@@ -239,7 +343,7 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
   const company = await runCompany({
     goal: options.goal,
     plan: options.plan ?? ((g) => [{ id: 'w1', title: g }]),
-    rosterFor: options.rosterFor,
+    rosterFor: withEvidenceGate(options.rosterFor),
     attemptsPerItem: options.attemptsPerItem ?? 2,
     maxRoleRuns: options.maxRoleRuns ?? 40,
     limits: options.limits,
@@ -277,7 +381,93 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
     return finish({ status: 'BLOCKED', reason: `no change was produced (company: ${company.reason})`, checks });
   }
 
-  // 5. Run the target's real checks. A failing check stops delivery.
+  // A free model that reads a file and writes back only a fragment silently
+  // deletes the rest. Tests and lint do not read a README or config, so a
+  // "verified" run can still be destructive. This guard runs before the target's
+  // checks and blocks any change that shrinks an existing file or the change as a
+  // whole. Whole-file deletions (a clear intent) are left to the checks.
+  const numstat = await git.run(['diff', '--cached', '--numstat', options.commit], dir);
+  const stats: { file: string; added: number; deleted: number; originalLines: number }[] = [];
+  for (const line of numstat.stdout.split('\n')) {
+    const [addedRaw, deletedRaw, ...rest] = line.split('\t');
+    const file = rest.join('\t');
+    if (!file || addedRaw === '-' || deletedRaw === '-') continue;
+    const abs = path.join(dir, file);
+    if (!existsSync(abs)) continue; // a whole-file deletion; not a "modification"
+    const original = await git.run(['show', `${options.commit}:${file}`], dir);
+    const originalLines = original.code === 0 ? original.stdout.split('\n').length : 0;
+    stats.push({ file, added: Number(addedRaw), deleted: Number(deletedRaw), originalLines });
+  }
+
+  const shrinkViolations: string[] = [];
+  let totalAdded = 0;
+  let totalDeleted = 0;
+  for (const s of stats) {
+    totalAdded += s.added;
+    totalDeleted += s.deleted;
+    if (s.deleted > s.added + t.additionMargin && s.deleted > t.deletionRatio * s.originalLines && s.deleted > t.minDeletions) {
+      shrinkViolations.push(`${s.file} (+${s.added}/-${s.deleted} of ${s.originalLines} original line(s))`);
+    }
+  }
+  const totalShrunk = totalDeleted > t.totalDeletionMultiple * totalAdded && totalDeleted > t.totalMinDeletions;
+  if (shrinkViolations.length || totalShrunk) {
+    const detail = shrinkViolations.length
+      ? `files: ${shrinkViolations.join(', ')}`
+      : `the change deletes ${totalDeleted} line(s) and adds ${totalAdded} in total`;
+    checks.push({ name: 'shrink-guard', status: 'FAILED', output: detail });
+    return finish({
+      status: 'BLOCKED',
+      reason: `refusing a change that destroys existing content (${detail}); a partial read can silently gut a file`,
+      changedFiles,
+      checks,
+    });
+  }
+  checks.push({ name: 'shrink-guard', status: 'PASSED', output: `${stats.length} modified file(s); no file shrinks beyond the guard` });
+
+  // 5. Judge the goal assertions against the real diff, before trusting the build.
+  const expected: DeliveryResult['expected'] = [];
+  const addedLinesFor = async (file?: string): Promise<string> => {
+    const args = ['diff', '--cached', options.commit];
+    if (file) args.push('--', file);
+    const d = await git.run(args, dir);
+    return d.stdout
+      .split('\n')
+      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+      .join('\n');
+  };
+  for (const e of expect) {
+    const label = [e.file ? `file=${e.file}` : 'any file', e.addedLinesContain ? `added~="${e.addedLinesContain}"` : '', e.maxDeletions !== undefined ? `maxDeletions=${e.maxDeletions}` : '']
+      .filter(Boolean)
+      .join(' ');
+    let met = true;
+    let detail = 'ok';
+    if (e.addedLinesContain !== undefined) {
+      const added = await addedLinesFor(e.file);
+      met = added.includes(e.addedLinesContain);
+      detail = met ? `added lines contain ${JSON.stringify(e.addedLinesContain)}` : `added lines do not contain ${JSON.stringify(e.addedLinesContain)}`;
+    }
+    if (met && e.maxDeletions !== undefined) {
+      const considered = e.file ? stats.filter((s) => s.file === e.file) : stats;
+      const worst = considered.reduce((m, s) => Math.max(m, s.deleted), 0);
+      met = worst <= e.maxDeletions;
+      detail = met ? `max deletions ${worst} <= ${e.maxDeletions}` : `deletes ${worst} line(s), over the allowed ${e.maxDeletions}`;
+    }
+    expected.push({ assertion: label, met, detail });
+  }
+  const unmet = expected.filter((e) => !e.met);
+  if (unmet.length) {
+    checks.push({ name: 'expect', status: 'FAILED', output: unmet.map((e) => `${e.assertion}: ${e.detail}`).join('; ') });
+    return finish({
+      status: 'BLOCKED',
+      reason: `the change does not meet the goal assertion(s): ${unmet.map((e) => `${e.assertion} (${e.detail})`).join('; ')}`,
+      changedFiles,
+      checks,
+      expected,
+    });
+  }
+  if (expected.length) checks.push({ name: 'expect', status: 'PASSED', output: `${expected.length} assertion(s) met` });
+
+  // 6. Run the target's real checks. A failing check stops delivery.
   for (const name of Object.keys(authorized)) {
     const res = await runCommand(authorized[name], dir);
     checks.push({ name, status: res.status, output: redact(res.output, options.token).slice(0, 2000) });
@@ -294,7 +484,7 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
   const headCommit = head.stdout.trim();
 
   if (!push) {
-    return finish({ status: 'COMPLETED', reason: 'built and verified locally (push disabled)', headCommit, changedFiles, checks });
+    return finish({ status: 'COMPLETED', reason: 'built and verified locally (push disabled)', headCommit, changedFiles, checks, expected });
   }
 
   const pushResult = await git.run(['push', 'origin', `HEAD:refs/heads/${options.branch}`], dir);
@@ -323,5 +513,5 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
     }
   }
 
-  return finish({ status: 'COMPLETED', reason: `pushed ${changedFiles.length} file(s) to ${options.branch}${pr ? ` and opened PR #${pr.number}` : ''}`, headCommit, changedFiles, checks, prUrl: pr?.url, prNumber: pr?.number });
+  return finish({ status: 'COMPLETED', reason: `pushed ${changedFiles.length} file(s) to ${options.branch}${pr ? ` and opened PR #${pr.number}` : ''}`, headCommit, changedFiles, checks, expected, prUrl: pr?.url, prNumber: pr?.number });
 }

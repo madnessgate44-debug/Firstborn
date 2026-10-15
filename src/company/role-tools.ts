@@ -36,7 +36,7 @@ export function buildRoleTools(options: RoleToolsOptions): AgentTool[] {
   });
 
   return base.map((tool) => {
-    if (tool.name !== 'write_file') return tool;
+    if (tool.name !== 'write_file' && tool.name !== 'edit_file') return tool;
     const original = tool.run;
     return {
       ...tool,
