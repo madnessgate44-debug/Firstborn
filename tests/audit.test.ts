@@ -94,6 +94,9 @@ test('audit core: markdown renders the assessment, bench, panel, and findings', 
   assert.match(md, /HIGH — X/);
 });
 
+/** A deterministic registry grounder so tests never hit the network. */
+const noRegistry = { get: () => null };
+
 test('company audit: the whole company runs — lenses compete, Forge synthesizes, the panel verifies', async () => {
   const model = fakeModel({
     '[role:lens:arch]': { summary: 'a', findings: [{ severity: 'MEDIUM', title: 'God module', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'split' }] },
@@ -106,7 +109,7 @@ test('company audit: the whole company runs — lenses compete, Forge synthesize
     '[role:verify:Security Engineer]': { verdict: 'OBJECT', reason: 'one risk understated' },
     '[role:verify:Release Engineer]': { verdict: 'CONFIRM', reason: 'fit to hand over' },
   });
-  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 2 });
+  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 2, registryGrounder: noRegistry });
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.employees.length, 4);
   assert.ok(result.findings.length >= 4);
@@ -126,10 +129,36 @@ test('company audit: an attempt that invents a path cannot win', async () => {
     '[role:forge-lead]': { summary: 's', architecture: 'a' },
     '[role:verify:Reviewer]': { verdict: 'CONFIRM', reason: 'ok' },
   });
-  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1 });
+  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry });
   // The architecture item has no eligible attempt, so the whole run is blocked.
   assert.equal(result.status, 'BLOCKED');
   assert.ok(!result.findings.some((f) => f.title === 'Ghost'));
+});
+
+test('company audit: version claims the registry contradicts are dropped and noted', async () => {
+  const model = fakeModel({
+    '[role:lens:arch]': { summary: 'a', findings: [{ severity: 'LOW', title: 'God module', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'split' }] },
+    '[role:lens:sec]': { summary: 's', findings: [{ severity: 'HIGH', title: 'Client key', paths: ['src/App.tsx'], basis: 'inferred', evidence: 'e', recommendation: 'proxy' }] },
+    '[role:lens:quality]': { summary: 'q', findings: [{ severity: 'HIGH', title: 'Invalid TypeScript version', paths: ['package.json'], basis: 'observed', evidence: '"typescript": "^7.0.2" is outdated', recommendation: 'downgrade' }] },
+    '[role:lens:config]': { summary: 'c', findings: [{ severity: 'HIGH', title: 'Outdated dotenv', paths: ['package.json'], basis: 'observed', evidence: 'dotenv ^17.2.3 has vulnerabilities', recommendation: 'upgrade' }] },
+    '[role:forge-lead]': { summary: 's', architecture: 'a' },
+    '[role:verify:Reviewer]': { verdict: 'CONFIRM', reason: 'ok' },
+  });
+  const pkgCtx: RepoContext = {
+    ...ctx,
+    files: ['package.json', 'server.ts', 'src/App.tsx', 'src/services/__tests__/x.test.ts'],
+    excerpts: { 'package.json': JSON.stringify({ dependencies: { dotenv: '^17.2.3' }, devDependencies: { typescript: '^7.0.2' } }) },
+  };
+  const result = await runCompanyAudit({
+    model,
+    ctx: pkgCtx,
+    attemptsPerItem: 1,
+    registryGrounder: { get: (n) => ({ typescript: { latest: '7.0.2', versions: ['5.9.2', '7.0.2'] }, dotenv: { latest: '18.0.8', versions: ['17.2.3', '18.0.8'] } })[n] ?? null },
+  });
+  assert.ok(!result.findings.some((f) => /typescript/i.test(f.title)));
+  assert.ok(!result.findings.some((f) => /dotenv/i.test(f.title)));
+  assert.ok(result.groundingNotes.some((n) => /registry contradicts/i.test(n)));
+  assert.match(result.markdown, /## Version grounding \(npm registry\)/);
 });
 
 test('company audit: the rubric makes citations mandatory and the plan is one item per lens', () => {
