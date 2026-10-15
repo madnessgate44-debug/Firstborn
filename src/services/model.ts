@@ -187,13 +187,17 @@ export class ModelService {
   }
 
   async generatePlanAndPatch(prompt: string, contextFiles: { path: string; content: string }[]): Promise<ModelGenerationResult> {
+    // The separators are drawn from a weird token so a model cannot mistake them
+    // for file content and reuse one as an exact "find" anchor (exhaustion run:
+    // models anchored on the literal "--- END FILE ---" and could never apply).
     const fileContexts = contextFiles
-      .map((f) => `--- FILE: ${f.path} ---\n${f.content}\n--- END FILE ---`)
+      .map((f) => `<<<FORGE_CONTEXT_FILE path="${f.path}" (harness marker, not file content)>>>\n${f.content}\n<<<FORGE_END_CONTEXT_FILE (harness marker, not file content)>>>`)
       .join('\n\n');
 
     const fullPrompt = `You are Forge, the precise coding and audit agent for Firstborn.
 Follow these rules:
 - Inspect the supplied target-repository files; never pretend to have inspected files not supplied.
+- Lines like <<<FORGE_CONTEXT_FILE ...>>> and <<<FORGE_END_CONTEXT_FILE ...>>> are harness markers, NOT file content. Never use them as a "find" anchor; copy every find string only from real file content between the markers.
 - Number requirements and give testable acceptance criteria before proposing edits.
 - Make the smallest bounded changes. Do not alter unrelated files.
 - Preserve syntax and scope boundaries: never insert a top-level declaration inside an interface, class, function, or other block; choose an exact anchor at the correct scope.
