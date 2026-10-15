@@ -67,7 +67,39 @@ Forge drives a real headless Chromium through `BrowserService`
 - Browser read-only repeats are steered to `think` (anti-loop guard in
   `src/services/model.ts`).
 
+## The Software Company (Forge is the lead)
+
+Forge and its software company are **one thing** on `main` (merged in #89).
+Forge is the lead agent; the company is the org of roles it can run.
+
+- **Engine** (`src/company/`): `company.ts` (`runCompany`), `team.ts` (`runTeam`),
+  `roles.ts`, `judge.ts`, `bus.ts` (`ArtifactBus`), `role-tools.ts`
+  (`buildRoleTools`), `model.ts`, `brains.ts`, `runner.ts`.
+- **Hardened loop** (`src/kernel/loop.ts`): the bounded agent loop the roles run
+  on, with workspace tools and authorization.
+- **Read-only audit** (`src/company/audit.ts`, `audit-company.ts`): a real company
+  run in two phases.
+  - Phase 1 — four audit lenses (Architecture, Security, Quality, Configuration)
+    compete as work items. The judge has a **mandatory** rule: every finding must
+    cite a path that exists in the repository, so an invented path cannot win.
+  - Phase 2 — Forge synthesizes; the verification panel (Reviewer, QA, Security,
+    Release) independently checks the report and records a `CONFIRM | OBJECT`
+    verdict with a reason. Objections are kept in the report, never hidden.
+  - Verifiers receive the same file excerpts the lenses used and must judge only
+    against them — a verifier may not invent versions or facts to dispute a
+    finding (fixed in #90).
+- **Entry points**: `npm run audit -- <owner/repo>` (read-only company audit),
+  `npm run company` (coding company), `scripts/audit.ts`, `scripts/company.ts`.
+- **CI**: `.github/workflows/company-audit.yml` dispatches a read-only company
+  audit of any `owner/repo` using the repository's Groq/Gemini secrets.
+
+The audit is read-only: it never writes to the target, creates branches, or runs
+target code, and it treats audited file content as untrusted data.
+
 ## Verification Commands
 
 - `npm run lint` — `tsc --noEmit`; expect exit 0.
-- `npm test` — full suite on real Chromium; expect all pass, 0 skipped.
+- `npm test` — full suite on real Chromium; expect all pass, 0 skipped (187 tests).
+- `npm run build` — Vite build; expect exit 0.
+- `npm run audit -- <owner/repo>` — read-only company audit; needs Groq/Gemini
+  keys for the keyed path (otherwise it uses the keyless free router).
