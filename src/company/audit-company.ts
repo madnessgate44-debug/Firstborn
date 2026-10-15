@@ -1,0 +1,303 @@
+/**
+ * Company audit: the whole software company performing a read-only audit.
+ *
+ * Two phases, both driven by the real company engine (`runCompany`):
+ *
+ *   Phase 1 — four audit lenses (Architecture, Security, Quality, Configuration)
+ *   each become a work item with competing attempts. The judge picks a winner per
+ *   lens; a MANDATORY rubric rule is that every finding cites a path that exists
+ *   in the repository, so an attempt that invents a path cannot win.
+ *
+ *   Phase 2 — Forge (the lead) synthesizes the integrated findings, and the
+ *   company's verification panel (Reviewer, QA, Security, Release) independently
+ *   checks the report: every cited path must exist and every finding must be
+ *   supported by the evidence it claims. Objections are surfaced, never hidden.
+ *
+ * Read-only: roles have no write tools and never execute the target's code.
+ */
+import { runCompany, type WorkItem } from './company.ts';
+import { FINISH_TOOL, type AgentAction, type AgentTool } from '../kernel/loop.ts';
+import type { Role } from './roles.ts';
+import type { Rubric } from './judge.ts';
+import type { ChatMessage, ModelResult } from './model.ts';
+import {
+  DEFAULT_AUDIT_BENCH,
+  buildAuditEmployeePrompt,
+  mergeFindings,
+  renderAuditMarkdown,
+  type AuditEmployee,
+  type AuditFinding,
+} from './audit.ts';
+
+/** The slice of ModelService the audit needs; lets tests inject a fake. */
+export interface AuditModel {
+  completeJson<T>(messages: ChatMessage[], fullPrompt: string): Promise<{ value: T | null; result: ModelResult }>;
+}
+
+export interface RepoContext {
+  target: string;
+  commit: string;
+  files: string[];
+  excerpts: Record<string, string>;
+}
+
+const SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'];
+
+/** The audit "CEO": one work item per lens. Pure, so it is testable. */
+export function auditPlan(bench: AuditEmployee[] = DEFAULT_AUDIT_BENCH): (goal: string) => WorkItem[] {
+  return (goal) => bench.map((e) => ({ id: e.id, title: `${e.title} — ${goal}` }));
+}
+
+/** The verification panel that checks Forge's report, in order. */
+export const VERIFY_PANEL = ['Reviewer', 'QA Engineer', 'Security Engineer', 'Release Engineer'] as const;
+
+const thinkTool: AgentTool = {
+  name: 'think',
+  description: 'Reason privately. Its output is not used.',
+  run: async () => ({ ok: true, output: 'ok' }),
+};
+
+const finish = (summary: string, data: Record<string, unknown>): AgentAction => ({ tool: FINISH_TOOL, input: { summary, data } });
+
+function findingsFromHistory(history: { action: AgentAction }[]): any[] {
+  const last = [...history].reverse().find((h) => h.action.tool === FINISH_TOOL);
+  const data = last?.action.input?.data as { findings?: unknown } | undefined;
+  return Array.isArray(data?.findings) ? (data!.findings as any[]) : [];
+}
+
+/** Mandatory gate: every finding must cite at least one path that exists. */
+function makeVerifyCitations(known: Set<string>) {
+  return ({ history }: { history: { action: AgentAction }[] }) => {
+    const bad = findingsFromHistory(history).filter((f) => !Array.isArray(f?.paths) || !f.paths.some((p: unknown) => typeof p === 'string' && known.has(p)));
+    return bad.length ? { ok: false, reason: `${bad.length} finding(s) cited no path present in the inventory` } : { ok: true };
+  };
+}
+
+/** One audit lens, as a company role. */
+function lensRole(model: AuditModel, employee: AuditEmployee, ctx: RepoContext, attempt: number, known: Set<string>): Role {
+  return {
+    id: employee.id,
+    title: `${employee.title} (attempt ${attempt})`,
+    mandate: employee.mandate,
+    authority: 'read-only',
+    produces: 'note',
+    tools: [thinkTool],
+    brain: async (): Promise<AgentAction> => {
+      const prompt = buildAuditEmployeePrompt(employee, ctx);
+      const { value } = await model.completeJson<{ summary?: string; findings?: unknown[] }>(
+        [{ role: 'system', content: `You are the ${employee.title} [role:lens:${employee.id}]. Return valid JSON only.` }, { role: 'user', content: prompt }],
+        prompt
+      );
+      return finish(typeof value?.summary === 'string' ? value.summary : '', { findings: Array.isArray(value?.findings) ? value!.findings : [] });
+    },
+    verifyCompletion: makeVerifyCitations(known),
+  };
+}
+
+/** Forge, the lead, synthesizing the integrated findings into an assessment. */
+function leadRole(model: AuditModel, ctx: RepoContext, findings: AuditFinding[]): Role {
+  return {
+    id: 'forge',
+    title: 'Forge (Lead Auditor)',
+    mandate: 'Synthesize the audit bench findings into a concise assessment and architecture note.',
+    authority: 'read-only',
+    produces: 'note',
+    tools: [thinkTool],
+    brain: async (): Promise<AgentAction> => {
+      const prompt = `You are Forge, the lead auditor in a software company, writing the final read-only audit of ${ctx.target} at ${ctx.commit}.
+The bench produced these validated findings (JSON):
+${JSON.stringify(findings.slice(0, 30), null, 1)}
+Write a short overall assessment and a short architecture description, based ONLY on these findings and the file inventory. Do not invent files or findings.
+Return compact JSON only: {"summary":"...","architecture":"..."}`;
+      const { value } = await model.completeJson<{ summary?: string; architecture?: string }>(
+        [{ role: 'system', content: 'You are Forge, the lead auditor [role:forge-lead]. Return valid JSON only.' }, { role: 'user', content: prompt }],
+        prompt
+      );
+      return finish('lead synthesis', { summary: typeof value?.summary === 'string' ? value.summary : '', architecture: typeof value?.architecture === 'string' ? value.architecture : '' });
+    },
+  };
+}
+
+/** A verification-panel member that independently checks the report. */
+function verifierRole(model: AuditModel, name: string, ctx: RepoContext, findings: AuditFinding[]): Role {
+  const mandate =
+    name === 'Reviewer'
+      ? 'Check the audit report for correctness: every cited path must exist and every finding must be supported.'
+      : name === 'QA Engineer'
+        ? 'Check that the audit produced concrete, testable findings rather than vague or unverifiable claims.'
+        : name === 'Security Engineer'
+          ? 'Check the audit for missed security risks and for any finding that overstates or understates risk.'
+          : 'Decide whether this audit report is fit to hand to the repository owner.';
+  return {
+    id: name,
+    title: name,
+    mandate,
+    authority: 'read-only',
+    produces: 'note',
+    tools: [thinkTool],
+    brain: async (): Promise<AgentAction> => {
+      const prompt = `You are the ${name} on the verification panel for a read-only audit of ${ctx.target} at ${ctx.commit}.
+Your mandate: ${mandate}
+Repository inventory:
+${ctx.files.join('\n')}
+Audit findings to verify (JSON):
+${JSON.stringify(findings.slice(0, 30), null, 1)}
+Rules:
+- Judge only what is shown. Do not invent files or findings.
+- "ok" is true only if the report is sound for your mandate; otherwise false with a specific objection.
+Return compact JSON only: {"ok":true|false,"note":"one sentence"}`;
+      const { value } = await model.completeJson<{ ok?: boolean; note?: string }>(
+        [{ role: 'system', content: `You are the ${name} [role:verify:${name}]. Return valid JSON only.` }, { role: 'user', content: prompt }],
+        prompt
+      );
+      return finish(`${name} verification`, { ok: value?.ok === true, note: typeof value?.note === 'string' ? value.note : 'no note' });
+    },
+  };
+}
+
+/** The audit rubric: honesty and evidence, enforced by the judge. */
+export function buildAuditRubric(known: Set<string>): Rubric[] {
+  const noteFindings = (ctx: any) => {
+    const f = ctx.bus.latest(ctx.attempt, 'note')?.data?.findings;
+    return Array.isArray(f) ? (f as any[]) : null;
+  };
+  return [
+    { name: 'completed', points: 3, mandatory: true, test: ({ run }) => run.status === 'COMPLETED' },
+    {
+      name: 'citations-valid',
+      points: 5,
+      mandatory: true,
+      test: (ctx) => {
+        const f = noteFindings(ctx);
+        if (!f) return false;
+        return f.every((x) => Array.isArray(x?.paths) && x.paths.some((p: unknown) => typeof p === 'string' && known.has(p)));
+      },
+    },
+    { name: 'findings-present', points: 2, test: (ctx) => (noteFindings(ctx)?.length ?? 0) > 0 },
+  ];
+}
+
+export interface CompanyAuditResult {
+  target: string;
+  commit: string;
+  fileCount: number;
+  employees: { id: string; title: string; provider: string; model: string; success: boolean; note: string }[];
+  findings: AuditFinding[];
+  synthesis: { summary: string; architecture: string };
+  verification: { role: string; ok: boolean; note: string }[];
+  winners: string[];
+  status: 'COMPLETED' | 'BLOCKED';
+  reason: string;
+  markdown: string;
+}
+
+/** Normalize a raw model finding against the inventory. */
+function normalizeFinding(f: any, known: Set<string>, raisedBy: string): AuditFinding | null {
+  const paths = (Array.isArray(f?.paths) ? f.paths : []).filter((p: unknown): p is string => typeof p === 'string' && known.has(p));
+  if (!f || typeof f.title !== 'string' || paths.length === 0) return null;
+  return {
+    severity: (SEVERITIES.includes(f.severity) ? f.severity : 'INFO') as AuditFinding['severity'],
+    title: f.title.trim(),
+    paths,
+    basis: (f.basis === 'observed' ? 'observed' : 'inferred') as AuditFinding['basis'],
+    evidence: typeof f.evidence === 'string' && f.evidence.trim() ? f.evidence.trim() : 'No evidence text supplied.',
+    recommendation: typeof f.recommendation === 'string' ? f.recommendation : '',
+    raisedBy,
+  };
+}
+
+export async function runCompanyAudit(options: {
+  model: AuditModel;
+  ctx: RepoContext;
+  attemptsPerItem?: number;
+  bench?: AuditEmployee[];
+  providerInfo?: { primaryProvider: string; fallbackConfigured: boolean };
+}): Promise<CompanyAuditResult> {
+  const bench = options.bench ?? DEFAULT_AUDIT_BENCH;
+  const attempts = options.attemptsPerItem ?? 2;
+  const known = new Set(options.ctx.files);
+  const goal = `Read-only audit of ${options.ctx.target} at ${options.ctx.commit.slice(0, 8)}`;
+  const provider = options.providerInfo?.primaryProvider ?? 'company model';
+
+  // ---- Phase 1: the audit lenses compete. ----
+  const phase1 = await runCompany({
+    goal,
+    plan: auditPlan(bench),
+    rosterFor: (item, attempt) => {
+      const employee = bench.find((e) => e.id === item.id) ?? bench[0];
+      return [lensRole(options.model, employee, options.ctx, attempt, known)];
+    },
+    attemptsPerItem: attempts,
+    maxRoleRuns: Math.max(4, bench.length * attempts + 2),
+    rubric: buildAuditRubric(known),
+    integrate: () => ({ ok: true, reason: 'audit is read-only' }),
+  });
+
+  // Integrate only the winning lens attempts' findings.
+  const collected: AuditFinding[] = [];
+  const employees: CompanyAuditResult['employees'] = [];
+  for (const { item, competition } of phase1.items) {
+    if (item.id === 'synthesis') continue;
+    const employee = bench.find((e) => e.id === item.id) ?? bench[0];
+    const winner = competition.winner;
+    const raw = winner ? ((phase1.bus.latest(winner, 'note')?.data?.findings as any[]) ?? []) : [];
+    const valid = raw.map((f) => normalizeFinding(f, known, employee.title)).filter((f): f is AuditFinding => f !== null);
+    collected.push(...valid);
+    employees.push({ id: employee.id, title: employee.title, provider, model: winner ?? '(no eligible attempt)', success: Boolean(winner), note: winner ? `${valid.length} finding(s)` : competition.reason });
+  }
+  const findings = mergeFindings(collected);
+
+  // ---- Phase 2: Forge synthesizes, then the panel verifies. ----
+  const phase2 = await runCompany({
+    goal: `Synthesize and verify the audit of ${options.ctx.target}`,
+    plan: () => [
+      { id: 'synthesis', title: 'Forge lead synthesis' },
+      { id: 'verify', title: 'Verification panel' },
+    ],
+    rosterFor: (item) =>
+      item.id === 'synthesis'
+        ? [leadRole(options.model, options.ctx, findings)]
+        : VERIFY_PANEL.map((name) => verifierRole(options.model, name, options.ctx, findings)),
+    attemptsPerItem: 1,
+    maxRoleRuns: 8,
+    rubric: [
+      { name: 'completed', points: 3, mandatory: true, test: ({ run }) => run.status === 'COMPLETED' },
+      { name: 'has-synthesis', points: 2, test: (ctx) => Boolean((ctx.bus.latest(ctx.attempt, 'note')?.data?.summary as string | undefined)?.trim()) },
+    ],
+    integrate: () => ({ ok: true, reason: 'audit is read-only' }),
+  });
+
+  const synthesisArtifact = phase2.bus.latest('synthesis#1', 'note');
+  const synthesis = {
+    summary: String(synthesisArtifact?.data?.summary ?? ''),
+    architecture: String(synthesisArtifact?.data?.architecture ?? ''),
+  };
+  const verification = phase2.bus
+    .forScope('verify#1')
+    .filter((a) => a.kind === 'note')
+    .map((a) => ({ role: a.author, ok: a.data?.ok === true, note: String(a.data?.note ?? '') }));
+
+  const status: CompanyAuditResult['status'] = findings.length ? 'COMPLETED' : 'BLOCKED';
+  const markdown = renderAuditMarkdown({
+    target: options.ctx.target,
+    commit: options.ctx.commit,
+    fileCount: options.ctx.files.length,
+    employees,
+    findings,
+    synthesis,
+    verification,
+  });
+  return {
+    target: options.ctx.target,
+    commit: options.ctx.commit,
+    fileCount: options.ctx.files.length,
+    employees,
+    findings,
+    synthesis,
+    verification,
+    winners: phase1.winners,
+    status,
+    reason: status === 'COMPLETED' ? `${findings.length} finding(s) across ${employees.length} lens(es)` : 'no findings survived evidence validation',
+    markdown,
+  };
+}
