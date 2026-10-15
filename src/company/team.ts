@@ -12,6 +12,9 @@ import * as path from 'node:path';
 import type { ArtifactBus } from './bus.ts';
 import type { Role, RoleInput, RoleResult } from './roles.ts';
 
+/** Workspace tools that change a file on disk. */
+const MUTATING_TOOLS = new Set(['write_file', 'edit_file']);
+
 export interface TeamRun {
   workItem: string;
   status: 'COMPLETED' | 'BLOCKED' | 'FAILED';
@@ -107,9 +110,12 @@ export async function runTeam(options: TeamOptions): Promise<TeamRun> {
     }
     // Capture files the role actually wrote to disk, so the change map reflects
     // real writes even when the brain did not enumerate them in its finish data.
+    // `edit_file` is included: the role prompt requires it for existing files
+    // (write_file is refused on an existing path), so an edit-only role would
+    // otherwise report no change and the company would block a real success.
     if (options.workspaceDir) {
       for (const step of loop.steps) {
-        if (step.action.tool !== 'write_file' || !step.observation.ok) continue;
+        if (!MUTATING_TOOLS.has(step.action.tool) || !step.observation.ok) continue;
         const rel = step.action.input?.path;
         if (typeof rel !== 'string') continue;
         try {

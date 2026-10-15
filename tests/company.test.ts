@@ -55,6 +55,32 @@ test('a team runs its roster and every role posts an artifact', async () => {
   assert.equal(run.changes['src/a.ts'], 'export const a = 1;\n');
 });
 
+test('a role that edits an existing file (write_file is refused) still counts as a change', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'forge-team-edit-'));
+  writeFileSync(path.join(dir, 'index.js'), "module.exports = { version: '0.0.0' };\n");
+
+  const bus = new ArtifactBus();
+  const editRole: Role = {
+    id: 'implementer',
+    title: 'Implementer',
+    mandate: 'change the file',
+    authority: 'branch-write',
+    produces: 'change',
+    tools: buildWorkspaceTools({ workspace: dir, allowMutation: true }),
+    // The prompt requires edit_file for existing files; write_file is refused.
+    brain: brainThat(
+      { tool: 'read_file', input: { path: 'index.js' } },
+      { tool: 'write_file', input: { path: 'index.js', content: "module.exports = { version: '1.0.0' };\n" } },
+      { tool: 'edit_file', input: { path: 'index.js', old_str: "version: '0.0.0'", new_str: "version: '1.0.0'" } },
+      finish({ summary: 'bumped the version' }, 'done'),
+    ),
+  };
+
+  const run = await runTeam({ goal: 'g', workItem: 'w', scope: 'w#1', roster: [editRole], bus, workspaceDir: dir });
+  assert.equal(run.status, 'COMPLETED');
+  assert.equal(run.changes['index.js'], "module.exports = { version: '1.0.0' };\n");
+});
+
 test('a team stops early when a role fails', async () => {
   const bus = new ArtifactBus();
   let secondRan = false;
