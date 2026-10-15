@@ -93,11 +93,17 @@ Forge is the lead agent; the company is the org of roles it can run.
   runs the implementation team inside the clone, runs the target's own `test`/`lint`,
   and opens a pull request on an isolated `forge/` branch. It refuses to push when
   there is no diff, when the target declares no checks, or when any check fails; it
-  never merges and never writes to the base branch. Entry point:
-  `npm run deliver -- owner/repo "goal"` (add `--scripted` for a deterministic run
-  with no model keys). CI: `.github/workflows/company-deliver.yml`, which needs a
-  `FORGE_DELIVER_TOKEN` secret (a PAT with `repo` scope — the built-in token cannot
-  push across repositories).
+  never merges and never writes to the base branch. The report and PR body only
+  claim the target was "audited" when a real audit produced the findings
+  (`audited` flag); a goal typed on the command line is reported as not audited.
+  `DeliveryExpectation.touchedAny` refuses a change that does not touch the file a
+  finding names. Entry point: `npm run deliver -- owner/repo "goal"`; add
+  `--audit` to run the real audit first and deliver its single top finding (this
+  is what makes the "audited" claim true), or `--scripted` for a deterministic run
+  with no model keys. CI: `.github/workflows/company-deliver.yml`; its `goal` input
+  defaults to empty so `--audit` picks the finding (a non-empty goal overrides the
+  audit). Cross-repo delivery needs `FORGE_DELIVER_TOKEN` (a PAT with `repo` scope);
+  same-owner targets work with the built-in token.
 - **Entry points**: `npm run audit -- <owner/repo>` (read-only company audit),
   `npm run company` (coding company), `npm run deliver -- owner/repo "goal"`
   (audit → verified PR), `scripts/audit.ts`, `scripts/company.ts`,
@@ -111,7 +117,7 @@ target code, and it treats audited file content as untrusted data.
 ## Verification Commands
 
 - `npm run lint` — `tsc --noEmit`; expect exit 0.
-- `npm test` — full suite on real Chromium; expect all pass, 0 skipped (187 tests).
+- `npm test` — full suite on real Chromium; expect all pass, 0 skipped (231 tests).
 - `npm run build` — Vite build; expect exit 0.
 - `npm run audit -- <owner/repo>` — read-only company audit; needs Groq/Gemini
   keys for the keyed path (otherwise it uses the keyless free router).
