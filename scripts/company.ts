@@ -19,6 +19,7 @@ import { DEFAULT_ROSTER } from '../src/company/roles.ts';
 import type { Role } from '../src/company/roles.ts';
 import type { AgentAction, AgentBrain } from '../src/kernel/loop.ts';
 import { ModelService } from '../src/company/model.ts';
+import type { TaskTier } from '../src/company/model.ts';
 import { modelBrain } from '../src/company/brains.ts';
 import { buildRoleTools } from '../src/company/role-tools.ts';
 
@@ -91,6 +92,17 @@ const ROLE_SEQUENCE: Record<string, string[]> = {
   release: ['finish with your decision artifact (data.ship = boolean)'],
 };
 
+/**
+ * Work tier per role. Easy work — turning a goal into requirements, reviewing a
+ * diff, recording evidence, deciding to ship — needs no provider key, so it rides
+ * the free keyless routes. Hard work — actually writing the code — may use the
+ * configured keys (Rock, Gemini) and fall back to keyless.
+ */
+const EASY_ROLES = new Set(['pm', 'architect', 'reviewer', 'qa', 'security', 'release']);
+function tierForRole(id: string): TaskTier {
+  return EASY_ROLES.has(id) ? 'easy' : 'hard';
+}
+
 function modelRoster(model: ModelService, attempt: number, workspaceDir: string): Role[] {
   return DEFAULT_ROSTER.map((r) => ({
     id: r.id,
@@ -110,6 +122,7 @@ function modelRoster(model: ModelService, attempt: number, workspaceDir: string)
       mandate: r.mandate,
       sequence: ROLE_SEQUENCE[r.id],
       artifactHint: `Emit your "${r.produces}" artifact in data.`,
+      tier: tierForRole(r.id),
     }),
   }));
 }
@@ -156,6 +169,7 @@ async function main(): Promise<void> {
     }
   }
   console.log('Changed files:', Object.keys(result.integratedChanges).length ? Object.keys(result.integratedChanges).join(', ') : '(none)');
+  console.log('Routing: easy roles (pm, architect, reviewer, qa, security, release) ride keyless; implementer is hard (keys first).');
   if (result.status !== 'COMPLETED') process.exitCode = 1;
 }
 

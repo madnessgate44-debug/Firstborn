@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelService, isKeylessOnly, CREDENTIAL_ENV_NAMES, extractJson, type ChatMessage } from '../src/company/model.ts';
+import { ModelService, isKeylessOnly, CREDENTIAL_ENV_NAMES, extractJson, routeAliasesFor, type ChatMessage } from '../src/company/model.ts';
 import { guardRepeatedReadOnly, buildRolePrompt, modelBrain } from '../src/company/brains.ts';
 import type { AgentBrainState } from '../src/kernel/loop.ts';
 
@@ -74,6 +74,18 @@ test('a model brain parses a valid action and guards repeats', async () => {
 test('ChatMessage type is usable for a system+user pair', () => {
   const messages: ChatMessage[] = [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }];
   assert.equal(messages.length, 2);
+});
+
+test('easy work is routed to the cheap keyless aliases first, hard work to the strong ones', () => {
+  const easy = routeAliasesFor('easy');
+  const hard = routeAliasesFor('hard');
+  // Easy work should try a fast/small (keyless) route before any large model.
+  assert.ok(easy.indexOf('chat:fast') < easy.indexOf('chat:large'));
+  assert.ok(easy.indexOf('chat:small') < easy.indexOf('chat:large'));
+  // Hard work should still try the strongest route first.
+  assert.equal(hard[0], 'chat:large');
+  // Both tiers keep every alias as a fallback, so a route can always be reached.
+  assert.deepEqual([...easy].sort(), [...hard].sort());
 });
 
 test('extractJson parses fenced and prose-wrapped JSON, and returns null on garbage', () => {

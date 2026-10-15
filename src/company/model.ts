@@ -36,6 +36,21 @@ export function isKeylessOnly(env: NodeJS.ProcessEnv = process.env): boolean {
   return (env.FIRSTBORN_KEYLESS_ONLY ?? '').trim().toLowerCase() === 'true';
 }
 
+/**
+ * Work tier. `easy` work — planning, prose, reviews — needs no provider key and
+ * should ride the free keyless routes. `hard` work (writing code, real checks)
+ * may use configured keys first and fall back to keyless.
+ */
+export type TaskTier = 'easy' | 'hard';
+
+const EASY_ALIASES = ['chat:fast', 'chat:small', 'chat', 'chat:large', 'chat:best'];
+const HARD_ALIASES = ['chat:large', 'chat', 'chat:fast', 'chat:small', 'chat:best'];
+
+/** The alias attempt order for a tier: cheap-first for easy, strong-first for hard. */
+export function routeAliasesFor(tier: TaskTier): string[] {
+  return tier === 'easy' ? [...EASY_ALIASES] : [...HARD_ALIASES];
+}
+
 export interface ModelServiceOptions {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
@@ -83,12 +98,15 @@ export class ModelService {
    * only when no provider key is configured, so the audit does not silently degrade
    * to the weakest model when real keys are available.
    */
-  async complete(messages: ChatMessage[], fullPrompt: string): Promise<ModelResult> {
+  async complete(messages: ChatMessage[], fullPrompt: string, tier: TaskTier = 'hard'): Promise<ModelResult> {
     const routeErrors: string[] = [];
     let invokedProvider = 'freelm free-tier router';
     let invokedModel = 'chat';
     const timeoutMs = options_timeout(this.env, 40000);
-    const hasProviderKeys = CREDENTIAL_ENV_NAMES.some((n) => (this.env[n] ?? '').trim());
+    // Easy work should not spend a provider key: it is routed keyless even when
+    // keys are configured. Hard work prefers configured keys and falls back to
+    // keyless endpoints.
+    const hasProviderKeys = tier === 'hard' && CREDENTIAL_ENV_NAMES.some((n) => (this.env[n] ?? '').trim());
 
     try {
       const llm = FreeLLM.fromEnv({
@@ -117,7 +135,7 @@ export class ModelService {
           await new Promise((resolve) => setTimeout(resolve, waitMs));
         }
         let availabilityFailure = false;
-        for (const alias of ['chat:large', 'chat', 'chat:fast', 'chat:small', 'chat:best']) {
+        for (const alias of routeAliasesFor(tier)) {
           if (Date.now() > deadline) break;
           try {
             const response = await llm.chat(messages, {
@@ -175,8 +193,8 @@ export class ModelService {
   }
 
   /** Ask the model for a compact JSON object; returns null on any unusable output. */
-  async completeJson<T>(messages: ChatMessage[], fullPrompt: string): Promise<{ value: T | null; result: ModelResult }> {
-    const result = await this.complete(messages, fullPrompt);
+  async completeJson<T>(messages: ChatMessage[], fullPrompt: string, tier: TaskTier = 'hard'): Promise<{ value: T | null; result: ModelResult }> {
+    const result = await this.complete(messages, fullPrompt, tier);
     if (!result.success || !result.text.trim()) return { value: null, result };
     const value = extractJson<T>(result.text);
     return { value, result };
