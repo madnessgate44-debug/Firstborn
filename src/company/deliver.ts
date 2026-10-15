@@ -47,6 +47,8 @@ export interface DeliveryExpectation {
   maxDeletions?: number;
   /** Fail if any changed file adds more than this many lines. */
   maxAdditions?: number;
+  /** The diff must include at least one of these paths (the finding's files). */
+  touchedAny?: string[];
 }
 
 export interface GitResult {
@@ -117,6 +119,12 @@ export interface DeliveryOptions {
   };
   /** Findings this run set out to fix (carried into the report and the PR body). */
   findings?: AuditFinding[];
+  /**
+   * True only when `findings` came from a real audit of this target. Governs
+   * whether the report may say the target was audited. Defaults to false, so a
+   * hand-typed goal is reported honestly as "not audited".
+   */
+  audited?: boolean;
   /** Injectable effects. */
   git?: GitRunner;
   openPr?: PullRequestOpener;
@@ -138,6 +146,8 @@ export interface DeliveryResult {
   expected: { assertion: string; met: boolean; detail: string }[];
   /** Known limitations of this run that no check can cover. */
   gaps: string[];
+  /** True when an audit produced the findings this run set out to fix. */
+  audited: boolean;
   prUrl?: string;
   prNumber?: number;
   findings: AuditFinding[];
@@ -179,7 +189,12 @@ function renderDeliveryMarkdown(r: Omit<DeliveryResult, 'markdown'>): string {
     `- Status: ${r.status} — ${r.reason}`,
     '',
     '## What this set out to fix',
-    ...(r.findings.length ? r.findings.map((f) => `- ${f.severity} — ${f.title}`) : ['- (no findings supplied)']),
+    ...(r.findings.length
+      ? [
+          `- Source: ${r.audited ? 'an audit of this target' : 'a goal supplied directly (NOT audited)'}`,
+          ...r.findings.map((f) => `- ${f.severity} — ${f.title}`),
+        ]
+      : [r.audited ? '- Source: an audit of this target (it produced no findings)' : '- Source: a goal supplied directly (no audit was run)']),
     '',
     '## Files changed',
     ...(r.changedFiles.length ? r.changedFiles.map((f) => `- ${f}`) : ['- (none)']),
@@ -258,6 +273,7 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
     gaps: [
       'Truncated model output cannot be detected: ModelResult exposes no finish reason or token-limit signal, so an output cut off at the token limit is treated as a complete action.',
     ],
+    audited: options.audited ?? false,
     findings,
     markdown: '',
   };
@@ -443,6 +459,7 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
       e.addedLinesContain ? `added~="${e.addedLinesContain}"` : '',
       e.maxDeletions !== undefined ? `maxDeletions=${e.maxDeletions}` : '',
       e.maxAdditions !== undefined ? `maxAdditions=${e.maxAdditions}` : '',
+      e.touchedAny?.length ? `touchedAny=[${e.touchedAny.join(',')}]` : '',
     ]
       .filter(Boolean)
       .join(' ');
@@ -464,6 +481,11 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
       const most = considered.reduce((m, s) => Math.max(m, s.added), 0);
       met = most <= e.maxAdditions;
       detail = met ? `max additions ${most} <= ${e.maxAdditions}` : `adds ${most} line(s), over the allowed ${e.maxAdditions}`;
+    }
+    if (met && e.touchedAny?.length) {
+      const touched = changedFiles.filter((f) => e.touchedAny!.includes(f));
+      met = touched.length > 0;
+      detail = met ? `touched ${touched.join(', ')}` : `none of the finding's files were changed (${e.touchedAny.join(', ')}); a new file does not fix this`;
     }
     expected.push({ assertion: label, met, detail });
   }
@@ -507,10 +529,12 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
 
   // 7. Open the pull request (never merge).
   const body = [
-    `The Forge software company audited \`${options.target}\` at \`${options.commit.slice(0, 8)}\` and proposes this change.`,
+    options.audited
+      ? `The Forge software company audited \`${options.target}\` at \`${options.commit.slice(0, 8)}\` and proposes this change to address its findings.`
+      : `The Forge software company proposes this change to \`${options.target}\` at \`${options.commit.slice(0, 8)}\`. No audit was run; the goal below was supplied directly.`,
     '',
     '## What this addresses',
-    ...(findings.length ? findings.map((f) => `- ${f.severity} — ${f.title}`) : ['- (no findings supplied)']),
+    ...(findings.length ? findings.map((f) => `- ${f.severity} — ${f.title}`) : ['- (no audit findings; the goal was supplied directly)']),
     '',
     '## Verification',
     ...checks.map((c) => `- ${c.name}: ${c.status}`),

@@ -448,3 +448,61 @@ test('delivery refuses to push a change it cannot verify (no checks declared)', 
   assert.equal(result.status, 'BLOCKED');
   assert.match(result.reason, /no test or lint script/);
 });
+
+test('honesty: a goal supplied directly is reported as NOT audited (report + PR body)', async () => {
+  const { remoteDir, commit } = seedRemote();
+  const work = tmp('deliver-work-');
+  let body = '';
+  const result = await deliverChange({
+    target: 'local/seed', goal: 'bump the version', commit, branch: 'forge/no-audit', workspaceDir: work,
+    token: 't', remoteUrl: remoteDir, rosterFor: rosterForWorkspace(work), attemptsPerItem: 1, push: true,
+    openPr: async ({ body: b }) => { body = b; return { url: 'https://example.test/pr/n', number: 7 }; },
+  });
+  assert.equal(result.status, 'COMPLETED', result.reason);
+  assert.equal(result.audited, false);
+  // The report must not claim the target was audited.
+  assert.doesNotMatch(result.markdown, /audited `local\/seed`/);
+  assert.match(result.markdown, /NOT audited|no audit was run/);
+  // The PR body must not claim an audit happened.
+  assert.doesNotMatch(body, /audited `local\/seed`/);
+  assert.match(body, /No audit was run/);
+  assert.doesNotMatch(body, /no findings supplied/);
+});
+
+test('honesty: findings from a real audit let the report say the target was audited', async () => {
+  const { remoteDir, commit } = seedRemote();
+  const work = tmp('deliver-work-');
+  let body = '';
+  const result = await deliverChange({
+    target: 'local/seed', goal: 'address the audit', commit, branch: 'forge/audited', workspaceDir: work,
+    token: 't', remoteUrl: remoteDir, rosterFor: rosterForWorkspace(work), attemptsPerItem: 1, push: true,
+    audited: true,
+    findings: [{ severity: 'MEDIUM', title: 'version is stale', paths: ['index.js'], basis: 'observed', evidence: 'index.js declares 1.0.0', recommendation: 'bump it', raisedBy: 'Quality Auditor' }],
+    openPr: async ({ body: b }) => { body = b; return { url: 'https://example.test/pr/a', number: 8 }; },
+  });
+  assert.equal(result.status, 'COMPLETED', result.reason);
+  assert.equal(result.audited, true);
+  assert.equal(result.findings.length, 1);
+  assert.match(result.markdown, /Source: an audit of this target/);
+  assert.match(body, /audited `local\/seed`/);
+  assert.match(body, /MEDIUM — version is stale/);
+});
+
+test('a change that does not touch the finding\'s file is refused (touchedAny)', async () => {
+  const { remoteDir, commit } = seedRemote();
+  const work = tmp('deliver-work-');
+  const result = await deliverChange({
+    target: 'local/seed', goal: 'fix the coupling in server.ts', commit, branch: 'forge/touch', workspaceDir: work,
+    token: 't', remoteUrl: remoteDir, rosterFor: rosterForWorkspace(work), attemptsPerItem: 1, push: false,
+    audited: true,
+    findings: [{ severity: 'HIGH', title: 'server.ts instantiates services directly', paths: ['server.ts'], basis: 'observed', evidence: 'new ForgeAgent() in a route handler', recommendation: 'inject the dependency', raisedBy: 'Architecture Auditor' }],
+    // The roster changes index.js, never server.ts, so this must be blocked.
+    expect: [{ touchedAny: ['server.ts'] }],
+  });
+  assert.equal(result.status, 'BLOCKED');
+  assert.match(result.reason, /does not meet the goal assertion/);
+  const assertion = result.expected.find((e) => e.assertion.includes('touchedAny'));
+  assert.ok(assertion, 'the touchedAny assertion should be recorded');
+  assert.equal(assertion!.met, false);
+  assert.match(assertion!.detail, /none of the finding's files were changed/);
+});

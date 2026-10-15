@@ -1284,3 +1284,59 @@ instructions said "write_file with the corrected content".
 2. Optionally set `FORGE_DELIVER_TOKEN` for cross-repo delivery.
 
 No secrets, tokens, or credentials appear in this entry.
+---
+
+### Entry: `OPENHANDS-AUDIT-DELIVER-INTEGRATION-20261015-06`
+
+#### Context
+Ahmed asked for the delivery path to stop *claiming* an audit it never ran, and
+for the audit system to actually drive a change. Two defects were confirmed in
+the live artifact `.firstborn/evidence/company-delivery.json` (run of the
+`--expect-contains ... --max-additions 1` proof): `findings: []`, and the PR body
+asserted "The Forge software company **audited** `...` and proposes this change."
+No audit ran — the goal was typed on the command line. That is the same class of
+overclaim as the earlier "+2/-0 reported as a clean single-line change".
+
+#### Changes
+- **`src/company/deliver.ts`.** New `audited` flag on `DeliveryOptions` /
+  `DeliveryResult` (default `false`). The report and the PR body now say
+  "audited ... to address its findings" only when `audited` is true; otherwise
+  they say the goal was supplied directly and no audit was run. New
+  `DeliveryExpectation.touchedAny`: the diff must include one of the finding's own
+  files, so a change that only adds a new file cannot be reported as fixing a
+  finding in an existing file.
+- **`scripts/deliver.ts`.** New `--audit` (and `--expect-touches`). With `--audit`
+  the CLI runs the real `runCompanyAudit`, writes `company-audit.{json,md}`,
+  delivers **one** bounded finding (highest severity first) rather than a
+  twelve-finding mega-goal, and auto-adds `touchedAny` = that finding's files. A
+  supplied goal still runs, but is reported honestly as not audit-driven.
+- **`.github/workflows/company-deliver.yml`.** New `audit` input (default
+  `true`), audit artifacts uploaded alongside the delivery report.
+
+#### Evidence (observed)
+- `npm run lint` (`tsc --noEmit`): exit 0. `npm test`: **231 passed / 0 failed**
+  (was 230; +1 net after replacing one test and adding `touchedAny` + honesty
+  cases). `npm run build`: exit 0.
+- **Live run 1** (unbounded goal, before the one-finding fix): audit COMPLETED,
+  12 findings, delivery BLOCKED — a twelve-finding goal produced no eligible
+  attempt. Correct behaviour, wrong task shape.
+- **Live run 2** (bounded, before `touchedAny`): audit COMPLETED, top HIGH finding
+  delivered, checks passed, **PR #100**. The body was honest ("audited ... to
+  address its findings"), **but the diff only added `src/container/ServiceContainer.ts`
+  and never touched `server.ts`** — so it did not fix the finding. PR #100 closed
+  and its branch deleted; this is the gap `touchedAny` closes.
+- **Live run 3** (bounded + `touchedAny`): audit COMPLETED, 12 findings, top HIGH
+  finding ("GitHub token exposed in client-side state", files `src/App.tsx`). The
+  change *did* touch `src/App.tsx`, and then the target's own **lint failed**, so
+  the run refused to push (`BLOCKED | check "lint" failed`). Safety layers working
+  in sequence: correct file, then the target's tests as the authority.
+
+#### Blockers / notes
+- The audit and the delivery each make their own model calls; with the keyless
+  free route a full run is slow (~5 minutes) and not fully deterministic. The
+  audit's own reliability work (registry grounding, adversarial panel) is tracked
+  in `OPENHANDS-AUDIT-ACCURACY-20261015-02`.
+- Still open: the keyed *coding* path (freelm routing); other registries (PyPI,
+  Go, Maven) are not grounded.
+
+No secrets, tokens, or credentials appear in this entry.

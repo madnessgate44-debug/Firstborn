@@ -24,6 +24,10 @@ on:
         description: 'Independent attempts per work item'
         required: true
         default: '1'
+      audit:
+        description: 'Run the real audit first and deliver its findings (true/false)'
+        required: true
+        default: 'true'
 
 permissions:
   contents: write
@@ -61,7 +65,10 @@ jobs:
           # goal containing shell metacharacters cannot inject a command.
           TARGET_REPO: ${{ inputs.target_repo }}
           GOAL: ${{ inputs.goal }}
-        run: npx tsx scripts/deliver.ts "$TARGET_REPO" "$GOAL"
+          # 'true' (default) audits first, so the report's "audited <target>"
+          # claim is true. 'false' delivers the typed goal, reported as not audited.
+          AUDIT_FLAG: ${{ inputs.audit == 'true' && '--audit' || '' }}
+        run: npx tsx scripts/deliver.ts $AUDIT_FLAG "$TARGET_REPO" "$GOAL"
 
       - name: Upload the delivery report
         if: always()
@@ -71,4 +78,6 @@ jobs:
           path: |
             .firstborn/evidence/company-delivery.md
             .firstborn/evidence/company-delivery.json
+            .firstborn/evidence/company-audit.md
+            .firstborn/evidence/company-audit.json
           if-no-files-found: warn

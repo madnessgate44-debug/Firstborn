@@ -17,6 +17,8 @@ import { buildRoleTools } from '../src/company/role-tools.ts';
 import { DEFAULT_ROSTER } from '../src/company/roles.ts';
 import type { Role } from '../src/company/roles.ts';
 import { deliverChange, type PullRequestOpener, type DeliveryExpectation } from '../src/company/deliver.ts';
+import { runCompanyAudit } from '../src/company/audit-company.ts';
+import type { AuditFinding } from '../src/company/audit.ts';
 import { fetchRepoContext } from '../src/company/repo-context.ts';
 import type { AgentAction, AgentBrain } from '../src/kernel/loop.ts';
 
@@ -121,7 +123,8 @@ const openPr: PullRequestOpener = async ({ target, head, base, title, body, toke
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const scripted = args.includes('--scripted');
-  const valueFlags = new Set(['--expect-file', '--expect-contains', '--max-deletions', '--max-additions']);
+  const runAudit = args.includes('--audit');
+  const valueFlags = new Set(['--expect-file', '--expect-contains', '--max-deletions', '--max-additions', '--expect-touches']);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -134,9 +137,9 @@ async function main(): Promise<void> {
     }
   }
   const target = (positional[0] || '').trim();
-  const goal = positional.slice(1).join(' ').trim() || 'Address the audit findings.';
+  const goalArg = positional.slice(1).join(' ').trim();
   if (!repoPattern.test(target) || target.includes('..')) {
-    console.error('usage: npm run deliver -- [--scripted] [--expect-file <path>] [--expect-contains <text>] [--max-deletions <n>] [--max-additions <n>] owner/repo "goal"');
+    console.error('usage: npm run deliver -- [--scripted] [--audit] [--expect-file <path>] [--expect-contains <text>] [--max-deletions <n>] [--max-additions <n>] owner/repo "goal"');
     process.exitCode = 2;
     return;
   }
@@ -147,31 +150,87 @@ async function main(): Promise<void> {
     const n = Number.parseInt(flags[flag], 10);
     return Number.isNaN(n) ? undefined : n;
   };
+  const touchedAny = flags['--expect-touches'] !== undefined
+    ? flags['--expect-touches'].split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined;
   if (flags['--expect-contains'] !== undefined) {
     expect.push({
       file: flags['--expect-file'] || undefined,
       addedLinesContain: flags['--expect-contains'],
       maxDeletions: parseCount('--max-deletions'),
       maxAdditions: parseCount('--max-additions'),
+      touchedAny,
     });
-  } else if (flags['--max-deletions'] !== undefined || flags['--max-additions'] !== undefined) {
+  } else if (flags['--max-deletions'] !== undefined || flags['--max-additions'] !== undefined || touchedAny) {
     expect.push({
       file: flags['--expect-file'] || undefined,
       maxDeletions: parseCount('--max-deletions'),
       maxAdditions: parseCount('--max-additions'),
+      touchedAny,
     });
   }
 
   const ctx = await fetchRepoContext(target);
-  console.log(`[deliver] ${ctx.target} @ ${ctx.commit.slice(0, 8)}; goal: ${goal}`);
 
   const model = scripted ? null : new ModelService();
+  const providerInfo = model ? model.getProviderInfo() : { primaryProvider: 'scripted', fallbackConfigured: false };
   if (model) {
-    const info = model.getProviderInfo();
-    console.log(`[deliver] model: ${info.primaryProvider}; Gemini fallback configured: ${info.fallbackConfigured}`);
+    console.log(`[deliver] model: ${providerInfo.primaryProvider}; Gemini fallback configured: ${providerInfo.fallbackConfigured}`);
   } else {
     console.log('[deliver] scripted roster (deterministic; proves the delivery path, not model quality)');
   }
+
+  // Optional: run the real audit first and deliver its findings. This is what
+  // makes the report's "audited <target>" claim true. `--goal` supplies the
+  // instruction (a manual goal is never called an audit).
+  let audited = false;
+  let findings: AuditFinding[] = [];
+  let goal = goalArg;
+  if (runAudit) {
+    if (!model) {
+      console.error('[deliver] --audit needs a model; --scripted cannot audit. Run without --scripted, or drop --audit.');
+      process.exitCode = 2;
+      return;
+    }
+    const attempts = Math.max(1, Number.parseInt(process.env.FORGE_AUDIT_ATTEMPTS ?? '', 10) || 2);
+    console.log(`[deliver] auditing ${ctx.target} @ ${ctx.commit.slice(0, 8)} (attempts=${attempts}) ...`);
+    const audit = await runCompanyAudit({ model, ctx, attemptsPerItem: attempts, providerInfo });
+    const outDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(path.join(outDir, 'company-audit.json'), JSON.stringify(audit, null, 2) + '\n');
+    fs.writeFileSync(path.join(outDir, 'company-audit.md'), audit.markdown + '\n');
+    findings = audit.findings;
+    audited = audit.status === 'COMPLETED' && findings.length > 0;
+    console.log(`[deliver] audit: status ${audit.status}; ${findings.length} finding(s)`);
+    if (!findings.length) {
+      console.log('[deliver] the audit produced no findings; nothing to deliver. Stopping.');
+      return;
+    }
+    // Highest severity first, then the order the audit produced.
+    const rank: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2, INFO: 3 };
+    const top = [...findings].sort((a, b) => rank[a.severity] - rank[b.severity])[0];
+    // A change that only adds a new file does not fix a finding in an existing
+    // file. Require the diff to touch one of the finding's own files.
+    if (top.paths.length && !expect.some((e) => e.touchedAny?.length)) {
+      expect.push({ touchedAny: top.paths });
+    }
+    if (goalArg) {
+      // A supplied goal means the run follows the goal, not the findings. Say so
+      // honestly rather than claiming the change addresses the audit.
+      goal = goalArg;
+      audited = false;
+      console.log('[deliver] a goal was supplied, so this run follows the goal, not the audit findings; the report will say so.');
+    } else {
+      // Deliver ONE bounded finding, not the whole report: a goal that lists
+      // twelve findings is not a change anyone can make or verify in one run.
+      findings = [top];
+      goal = `Fix this ${top.severity} audit finding: ${top.title}. Files: ${top.paths.join(', ')}. Evidence: ${top.evidence}${top.recommendation ? ` Recommendation: ${top.recommendation}` : ''}`;
+      console.log(`[deliver] delivering the top finding (${top.severity}): ${top.title}`);
+    }
+  }
+  if (!goal) goal = 'Address the audit findings.';
+
+  console.log(`[deliver] ${ctx.target} @ ${ctx.commit.slice(0, 8)}; goal: ${goal}`);
 
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-deliver-'));
   const branch = `forge/deliver-${ctx.commit.slice(0, 8)}-${Date.now().toString(36)}`;
@@ -187,6 +246,8 @@ async function main(): Promise<void> {
     attemptsPerItem: Math.max(1, Number.parseInt(process.env.FORGE_DELIVER_ATTEMPTS ?? '', 10) || 1),
     push: process.env.FORGE_DELIVER_PUSH !== 'false',
     expect,
+    audited,
+    findings,
     openPr,
   });
 
