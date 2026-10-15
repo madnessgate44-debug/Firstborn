@@ -45,6 +45,8 @@ export interface DeliveryExpectation {
   addedLinesContain?: string;
   /** Fail if any changed file deletes more than this many lines. */
   maxDeletions?: number;
+  /** Fail if any changed file adds more than this many lines. */
+  maxAdditions?: number;
 }
 
 export interface GitResult {
@@ -436,7 +438,12 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
       .join('\n');
   };
   for (const e of expect) {
-    const label = [e.file ? `file=${e.file}` : 'any file', e.addedLinesContain ? `added~="${e.addedLinesContain}"` : '', e.maxDeletions !== undefined ? `maxDeletions=${e.maxDeletions}` : '']
+    const label = [
+      e.file ? `file=${e.file}` : 'any file',
+      e.addedLinesContain ? `added~="${e.addedLinesContain}"` : '',
+      e.maxDeletions !== undefined ? `maxDeletions=${e.maxDeletions}` : '',
+      e.maxAdditions !== undefined ? `maxAdditions=${e.maxAdditions}` : '',
+    ]
       .filter(Boolean)
       .join(' ');
     let met = true;
@@ -451,6 +458,12 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
       const worst = considered.reduce((m, s) => Math.max(m, s.deleted), 0);
       met = worst <= e.maxDeletions;
       detail = met ? `max deletions ${worst} <= ${e.maxDeletions}` : `deletes ${worst} line(s), over the allowed ${e.maxDeletions}`;
+    }
+    if (met && e.maxAdditions !== undefined) {
+      const considered = e.file ? stats.filter((s) => s.file === e.file) : stats;
+      const most = considered.reduce((m, s) => Math.max(m, s.added), 0);
+      met = most <= e.maxAdditions;
+      detail = met ? `max additions ${most} <= ${e.maxAdditions}` : `adds ${most} line(s), over the allowed ${e.maxAdditions}`;
     }
     expected.push({ assertion: label, met, detail });
   }

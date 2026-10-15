@@ -121,7 +121,7 @@ const openPr: PullRequestOpener = async ({ target, head, base, title, body, toke
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const scripted = args.includes('--scripted');
-  const valueFlags = new Set(['--expect-file', '--expect-contains', '--max-deletions']);
+  const valueFlags = new Set(['--expect-file', '--expect-contains', '--max-deletions', '--max-additions']);
   const flags: Record<string, string> = {};
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -136,22 +136,30 @@ async function main(): Promise<void> {
   const target = (positional[0] || '').trim();
   const goal = positional.slice(1).join(' ').trim() || 'Address the audit findings.';
   if (!repoPattern.test(target) || target.includes('..')) {
-    console.error('usage: npm run deliver -- [--scripted] [--expect-file <path>] [--expect-contains <text>] [--max-deletions <n>] owner/repo "goal"');
+    console.error('usage: npm run deliver -- [--scripted] [--expect-file <path>] [--expect-contains <text>] [--max-deletions <n>] [--max-additions <n>] owner/repo "goal"');
     process.exitCode = 2;
     return;
   }
 
   const expect: DeliveryExpectation[] = [];
+  const parseCount = (flag: string): number | undefined => {
+    if (flags[flag] === undefined) return undefined;
+    const n = Number.parseInt(flags[flag], 10);
+    return Number.isNaN(n) ? undefined : n;
+  };
   if (flags['--expect-contains'] !== undefined) {
-    const maxDeletions = flags['--max-deletions'] !== undefined ? Number.parseInt(flags['--max-deletions'], 10) : undefined;
     expect.push({
       file: flags['--expect-file'] || undefined,
       addedLinesContain: flags['--expect-contains'],
-      maxDeletions: Number.isNaN(maxDeletions as number) ? undefined : maxDeletions,
+      maxDeletions: parseCount('--max-deletions'),
+      maxAdditions: parseCount('--max-additions'),
     });
-  } else if (flags['--max-deletions'] !== undefined) {
-    const maxDeletions = Number.parseInt(flags['--max-deletions'], 10);
-    expect.push({ file: flags['--expect-file'] || undefined, maxDeletions: Number.isNaN(maxDeletions) ? undefined : maxDeletions });
+  } else if (flags['--max-deletions'] !== undefined || flags['--max-additions'] !== undefined) {
+    expect.push({
+      file: flags['--expect-file'] || undefined,
+      maxDeletions: parseCount('--max-deletions'),
+      maxAdditions: parseCount('--max-additions'),
+    });
   }
 
   const ctx = await fetchRepoContext(target);

@@ -352,6 +352,30 @@ test('expect: a change that violates maxDeletions:0 is blocked', async () => {
   assert.doesNotMatch(git(['branch', '--list'], remoteDir), /forge\/expect-del/);
 });
 
+test('expect: a change that violates maxAdditions:1 is blocked (the +2 blank line)', async () => {
+  const { remoteDir, commit } = seedReadmeRepo();
+  const work = tmp('deliver-work-');
+  // Adds two lines where the goal asked for one.
+  const script: AgentAction[] = [
+    { tool: 'read_file', input: { path: 'README.md' } },
+    {
+      tool: 'edit_file',
+      input: { path: 'README.md', old_str: 'line 1 of the readme\n', new_str: '> Verified by the Forge software company.\n\nline 1 of the readme\n' },
+    },
+    { tool: 'run_check', input: { command: 'test' } },
+    { tool: 'finish', input: { summary: 'added a line and a blank', data: {} } },
+  ];
+  const result = await deliverChange({
+    target: 'local/seed', goal: 'add one line', commit, branch: 'forge/expect-add',
+    workspaceDir: work, token: 't', remoteUrl: remoteDir, rosterFor: rosterScript(work, script),
+    attemptsPerItem: 1, push: true,
+    expect: [{ file: 'README.md', addedLinesContain: 'Verified by the Forge software company.', maxDeletions: 0, maxAdditions: 1 }],
+  });
+  assert.equal(result.status, 'BLOCKED');
+  assert.match(result.reason, /adds 2 line/);
+  assert.doesNotMatch(git(['branch', '--list'], remoteDir), /forge\/expect-add/);
+});
+
 test('edit_file: unique match edits; zero and multiple matches are rejected; outside the workspace is rejected', async () => {
   const work = tmp('tools-');
   fs.writeFileSync(path.join(work, 'a.txt'), 'alpha\nbeta\ngamma\n');
