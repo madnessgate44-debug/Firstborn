@@ -78,7 +78,6 @@ app.get('/api/health', (req, res) => {
     model: modelService.getProviderInfo(),
     environment: {
       nodeVersion: process.version,
-      hasGeminiKey: !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY',
     },
   });
 });
