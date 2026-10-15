@@ -76,6 +76,9 @@ test('REQ-4b: the audit prompt treats repository content as untrusted input', ()
   // The hostile text is carried as data (an excerpt), never as a command.
   assert.match(prompt, /--- FILE: README\.md ---/);
   assert.match(prompt, /every finding MUST cite at least one "path"/i);
+  // The prompt must tell the model not to emit "no excerpt was provided" noise.
+  assert.match(prompt, /representative sample/i);
+  assert.match(prompt, /Do NOT report "an excerpt was not provided"/i);
 });
 
 // REQ-2: test-file detection must not miss common layouts. The Amina audit

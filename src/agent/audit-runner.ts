@@ -169,11 +169,32 @@ async function main(): Promise<void> {
   checks.push({ check: 'GitHub Actions workflow inventory', result: workflowFiles.length ? 'PASS' : 'FAIL', evidence: workflowFiles.length ? workflowFiles.join(', ') : 'No .github/workflows YAML files found' });
   if (!workflowFiles.length) findings.push({ severity: 'MEDIUM', title: 'No GitHub Actions workflows detected', evidence: ['No workflow YAML files found under .github/workflows.'], recommendation: 'Add CI for build and test checks that can run reproducibly.' });
 
-  const keyPaths = [...new Set([readme, 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts', 'app/build.gradle', 'app/build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'package.json', ...workflowFiles.slice(0, 5)].filter((p): p is string => Boolean(p && has(p))))];
+  // Excerpt selection. The audit's reasoning is only as good as what the model
+  // can read. Selecting only README/build/package/workflow files left the model
+  // blind to the actual source, so it filled the gap with "no excerpt was
+  // provided" meta-findings and mis-stated that the repo had no tests. Include
+  // representative source and test files (bounded) so findings describe the code.
+  const sourceCandidates = files.filter((p: string) =>
+    /\.(ts|tsx|js|jsx|mjs|cjs|py|go|kt|java|rs|rb|cs|swift)$/i.test(p) && !/(^|\/)(node_modules|dist|build)\//.test(p)
+  );
+  const testSet = new Set(testFiles);
+  const entrypoints = [
+    'server.ts', 'server.js', 'server.mjs', 'index.js', 'index.ts', 'main.ts', 'main.js',
+    'src/main.tsx', 'src/main.ts', 'src/App.tsx', 'src/App.ts', 'app/page.tsx', 'app/layout.tsx',
+  ].filter(has);
+  const testExcerpts = sourceCandidates.filter((p: string) => testSet.has(p)).slice(0, 4);
+  const sourceExcerpts = sourceCandidates.filter((p: string) => !testSet.has(p)).slice(0, 14);
+  const MAX_EXCERPTS = 22;
+  const keyPaths = [...new Set([
+    readme, 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts',
+    'app/build.gradle', 'app/build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties',
+    'package.json', 'tsconfig.json', 'vite.config.ts', 'vite.config.js',
+    ...workflowFiles.slice(0, 5), ...entrypoints, ...testExcerpts, ...sourceExcerpts,
+  ].filter((p): p is string => Boolean(p && has(p))))].slice(0, MAX_EXCERPTS);
   const excerpts: Record<string, string> = {};
   for (const p of keyPaths) {
     const value = await getTextFile(owner, repo, p, branch);
-    if (value !== null) excerpts[p] = value.slice(0, 5000);
+    if (value !== null) excerpts[p] = value.slice(0, 4000);
   }
 
   checks.push({ check: 'Build/test execution', result: 'NOT_RUN', evidence: 'Audit mode deliberately does not execute target-repository scripts or build configuration. Static prerequisites only; no target code was run.' });
