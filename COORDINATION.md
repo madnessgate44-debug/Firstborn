@@ -1213,6 +1213,74 @@ report generator, not a company. This entry closes the loop.
 1. Rotate the token that was embedded in this workspace's `git remote` (I removed
    it and sanitized the URL, but it was exposed in terminal output).
 2. Confirm the scratch repository to use for the live cross-repo test.
-3. Add `FORGE_DELIVER_TOKEN` (a PAT with `repo` scope) to the repo secrets.
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-DELIVER-SAFETY-20261015-05`
+
+#### Context
+PR #96 was a real, closed, unmerged delivery whose body reported install/test/lint
+PASSED — while its diff was `README.md +2/-239`, cut off mid-word. A truncated read
+was written back as a whole file. Root cause: `write_file` was the only mutation tool
+and overwrote whole files; nothing compared old and new content; the implementer
+instructions said "write_file with the corrected content".
+
+#### What shipped (branch `forge/company-deliver`, PR #94, commit `7d67d47`)
+- `edit_file` in `src/kernel/loop.ts`: exact-anchor replace. `old_str` must occur
+  exactly once; zero or multiple matches are refused. Returns lines added/removed.
+  Accepts `old_str`/`new_str` and `old_string`/`new_string`.
+- `write_file` now creates only. Overwriting an existing file returns
+  "File exists. Use edit_file." Mirrored in `src/company/role-tools.ts` and the
+  agent toolset `src/agent/tools.ts`.
+- Implementer sequence (`scripts/deliver.ts`) is read_file → edit_file with minimal
+  anchors → run_check "test" → finish, and says never retype a whole file.
+- Shrink guard in `src/company/deliver.ts`, run **before** the target's checks and
+  recorded under Checks as `shrink-guard`. Per file: `deletions > additions + 20`
+  AND `deletions > 30%` of the original line count AND `deletions > 30`. Total:
+  `deletions > 5x additions` AND `deletions > 50`. Thresholds are constants with a
+  `DeliveryOptions.thresholds` override.
+- Goal assertions: `DeliveryOptions.expect` (`file`, `addedLinesContain`,
+  `maxDeletions`, `maxAdditions`), CLI `--expect-file/--expect-contains/
+  --max-deletions/--max-additions`. An unmet assertion → BLOCKED.
+- Evidence gate: the implementer's `finish` is refused unless it really mutated a
+  file and ran `run_check "test"` successfully after the last mutation.
+- Report records the goal assertions and the known truncation gap.
+- `company-deliver.yml` passes inputs via `env:` (`TARGET_REPO`, `GOAL`), not shell
+  interpolation.
+
+#### Evidence (observed, run in this sandbox)
+- `npm run lint` (`tsc --noEmit`): exit 0. `npm run build` (vite): exit 0.
+- `npm test`: **227 passed / 0 failed** (was 220). `tests/deliver.test.ts`: 14/14.
+- Regression tests reproduce #96 with real git and a real bare repo: `write_file`
+  refuses to overwrite a 242-line README; an `edit_file` that deletes 240 lines is
+  BLOCKED by the shrink guard and no branch is pushed; a `maxDeletions:0` /
+  `maxAdditions:1` violation is BLOCKED.
+- **Live model run** (keyless free route, real clone at `cd8f9eae`), goal "add one
+  line to the top of README.md":
+  `npx tsx scripts/deliver.ts --expect-file README.md --expect-contains "Verified
+  by the Forge software company." --max-deletions 0 --max-additions 1 ...`
+  → COMPLETED, `README.md +1/-0`, **PR #99**
+  (`forge/deliver-cd8f9eae-mv9grn9c`). CI: Verification and Build Checks success;
+  Sentinel success after a re-run. PR #99 and its branch were then closed/deleted
+  as cleanup. A first attempt without `--max-additions` produced `+2/-0` (a stray
+  blank line) and was accepted — that is why `maxAdditions` was added.
+
+#### Honest gaps
+- Truncation is still undetectable: `ModelResult` (`src/company/model.ts`) exposes
+  no finish reason or token-limit signal. This is recorded in every delivery report
+  under "Known gaps". The shrink guard catches the *effect* of a truncated read, not
+  the truncation itself.
+- The Sentinel gate failed once on this branch on `MCP tools/call browser_query
+  answers in plain English` — a 30s timeout in a browser test unrelated to this
+  change (it passes locally in ~0.6s). Re-running the job passed. This looks flaky;
+  worth a retry or a longer timeout, but not fixed here.
+- Cross-repo delivery is still unproven (no `FORGE_DELIVER_TOKEN`; this sandbox
+  cannot create repos). Delivery is proven against Firstborn only.
+
+#### Action needed from the owner
+1. **Still open:** rotate the token embedded in this workspace's `git remote`
+   (removed and sanitized, but it was exposed in terminal output). Not handled here.
+2. Optionally set `FORGE_DELIVER_TOKEN` for cross-repo delivery.
 
 No secrets, tokens, or credentials appear in this entry.
