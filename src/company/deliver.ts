@@ -15,7 +15,7 @@
  * cannot evidence. If any step cannot be done honestly, the run is BLOCKED.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { runCompany, type WorkItem } from './company.ts';
 import type { Role } from './roles.ts';
@@ -212,6 +212,29 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
     return finish({ reason: 'the target declares no test or lint script, so no change can be verified; refusing to push unverified work' });
   }
 
+  // Prepare dependencies before the team works, so QA can run the target's real
+  // checks during the run. Only install when the target declares dependencies; a
+  // lockfile-less install on a dependency-free target would add files to the diff.
+  const checks: DeliveryResult['checks'] = [];
+  const pkgPath = path.join(dir, 'package.json');
+  let hasDeps = false;
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      hasDeps = Object.keys(pkg.dependencies ?? {}).length > 0 || Object.keys(pkg.devDependencies ?? {}).length > 0;
+    } catch {
+      hasDeps = false;
+    }
+  }
+  if (hasDeps) {
+    const install = existsSync(path.join(dir, 'package-lock.json')) ? 'npm ci' : 'npm install';
+    const installResult = await runCommand(install, dir);
+    if (installResult.status === 'FAILED') {
+      checks.push({ name: 'install', status: 'FAILED', output: redact(installResult.output, options.token).slice(0, 2000) });
+      return finish({ status: 'BLOCKED', reason: `dependency install failed: ${installResult.output.split('\n')[0] ?? 'unknown'}`, checks });
+    }
+  }
+
   // 3. Run the implementation team inside the clone.
   const company = await runCompany({
     goal: options.goal,
@@ -229,34 +252,32 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
   });
 
   // 4. Refuse to continue without a real, non-empty diff against the base commit.
-  const diff = await git.run(['diff', '--name-only', options.commit], dir);
+  //    Stage first: `git diff` ignores new files, so a change that adds a file
+  //    would otherwise look empty. node_modules is excluded locally (via
+  //    .git/info/exclude) so an install never leaks into the change even when the
+  //    target has no .gitignore of its own.
+  const excludeRel = (await git.run(['rev-parse', '--git-path', 'info/exclude'], dir)).stdout.trim();
+  if (excludeRel) {
+    const excludeAbs = path.isAbsolute(excludeRel) ? excludeRel : path.join(dir, excludeRel);
+    try {
+      const current = existsSync(excludeAbs) ? readFileSync(excludeAbs, 'utf8') : '';
+      if (!/^node_modules\/?$/m.test(current)) {
+        mkdirSync(path.dirname(excludeAbs), { recursive: true });
+        appendFileSync(excludeAbs, `${current.endsWith('\n') || !current ? '' : '\n'}node_modules/\n`);
+      }
+    } catch {
+      /* best effort; the commit step will surface a real failure */
+    }
+  }
+  const add = await git.run(['add', '-A'], dir);
+  if (add.code !== 0) return finish({ reason: `git add failed: ${redact(add.stderr, options.token).trim()}`, checks });
+  const diff = await git.run(['diff', '--cached', '--name-only', options.commit], dir);
   const changedFiles = diff.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   if (!changedFiles.length) {
-    return finish({ status: 'BLOCKED', reason: `no change was produced (company: ${company.reason})` });
+    return finish({ status: 'BLOCKED', reason: `no change was produced (company: ${company.reason})`, checks });
   }
 
   // 5. Run the target's real checks. A failing check stops delivery.
-  //    Only install when the target actually declares dependencies; a lockfile-less
-  //    install on a dependency-free target would otherwise add files to the diff.
-  const pkgPath = path.join(dir, 'package.json');
-  let hasDeps = false;
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-      hasDeps = Object.keys(pkg.dependencies ?? {}).length > 0 || Object.keys(pkg.devDependencies ?? {}).length > 0;
-    } catch {
-      hasDeps = false;
-    }
-  }
-  const checks: DeliveryResult['checks'] = [];
-  if (hasDeps) {
-    const install = existsSync(path.join(dir, 'package-lock.json')) ? 'npm ci' : 'npm install';
-    const installResult = await runCommand(install, dir);
-    if (installResult.status === 'FAILED') {
-      checks.push({ name: 'install', status: 'FAILED', output: redact(installResult.output, options.token).slice(0, 2000) });
-      return finish({ status: 'BLOCKED', reason: `dependency install failed: ${installResult.output.split('\n')[0] ?? 'unknown'}`, changedFiles, checks });
-    }
-  }
   for (const name of Object.keys(authorized)) {
     const res = await runCommand(authorized[name], dir);
     checks.push({ name, status: res.status, output: redact(res.output, options.token).slice(0, 2000) });
@@ -266,8 +287,6 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
   }
 
   // 6. Commit and push an isolated branch.
-  const add = await git.run(['add', '-A'], dir);
-  if (add.code !== 0) return finish({ reason: `git add failed: ${redact(add.stderr, options.token).trim()}`, changedFiles, checks });
   const message = `forge: ${options.goal}\n\nProposed by the Forge software company from an audit of ${options.target} at ${options.commit.slice(0, 8)}.\n\nCo-authored-by: openhands <openhands@all-hands.dev>`;
   const commit = await git.run(['commit', '-q', '-m', message], dir);
   if (commit.code !== 0) return finish({ reason: `git commit failed: ${redact(commit.stderr, options.token).trim()}`, changedFiles, checks });

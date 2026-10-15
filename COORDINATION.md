@@ -1097,6 +1097,7 @@ but the *run* was mediocre — roughly half its findings were confidently wrong.
 
 No secrets, tokens, or credentials appear in this entry.
 
+
 ---
 
 ### Entry: `OPENHANDS-EVIDENCE-LEDGER-20261015-03`
@@ -1148,5 +1149,70 @@ anyone can read ("0 matches → the claim is false").
 - The audit's own summary still miscounts severities (it said 4 HIGH/5 MEDIUM/3 LOW
   when the tally was 5/6/3/1). The new report computes its counts mechanically, but
   the prose summary remains a model paraphrase.
+
+No secrets, tokens, or credentials appear in this entry.
+
+
+---
+
+### Entry: `OPENHANDS-COMPANY-DELIVERY-20261015-04`
+
+#### Context
+Owner: "we need the software company to be as a real software company" — the
+company could audit but never *act*. An audit ending in a Markdown file is a
+report generator, not a company. This entry closes the loop.
+
+#### What shipped (branch `forge/company-deliver`, PR #94)
+- **`src/company/deliver.ts`** — `deliverChange()`:
+  1. clone the target **pinned at the audited commit**;
+  2. run the implementation team inside the clone (target's own test/lint only);
+  3. refuse to continue without a real, non-empty diff;
+  4. run the target's real checks; refuse to push if any fails;
+  5. commit, push a `forge/` branch, open a pull request.
+- **`src/company/repo-context.ts`** — read-only repo fetcher extracted from
+  `scripts/audit.ts` (importing the old script ran an audit as a side effect).
+- **`scripts/deliver.ts`** + `npm run deliver` — CLI, with a `--scripted` mode for
+  deterministic plumbing runs that need no model keys.
+- **`.github/workflows/company-deliver.yml`** — needs `FORGE_DELIVER_TOKEN`
+  (a PAT with `repo` scope; the built-in token cannot push cross-repo).
+
+#### Hard guarantees (in code, not convention)
+- branch must start with `forge/` and must not be the base branch;
+- no diff → BLOCKED; target declares no checks → BLOCKED; any check fails → BLOCKED;
+- never merges, never writes to the base branch; the token is redacted from output.
+
+#### Evidence (observed)
+- `npm test`: **220 passed / 0 failed** (was 214; +6). `tsc --noEmit`: clean.
+- `tests/deliver.test.ts` uses **real git against a real bare repository**:
+  the branch really lands on the remote, the base branch is untouched, a failing
+  target check blocks the push, a non-`forge/` branch is refused, a target with no
+  checks is refused, and an add-only change (which `git diff` alone would miss) is
+  detected.
+- **Live end-to-end run** (`--scripted`, this sandbox has no model keys):
+  `npx tsx scripts/deliver.ts --scripted madnessgate44-debug/Firstborn "..."`.
+  Real clone at `cd8f9eae`, real `npm ci`, the real **219-test** suite PASSED,
+  `tsc --noEmit` PASSED, branch `forge/deliver-cd8f9eae-mv9eqmb2` pushed, **PR #95**
+  opened. PR #95 and its branch were then closed/deleted as cleanup.
+- Two real bugs were found and fixed by that live run: `git diff` ignores untracked
+  files (a new-file change looked empty), and the `:(exclude)` pathspec aborted
+  `git add`; delivery now stages first and excludes `node_modules` via
+  `.git/info/exclude`.
+
+#### Honest gaps
+- The live run used the **scripted** roster. The **model** delivery path is unproven
+  end to end here because this sandbox has no provider keys (they are CI secrets);
+  it must be exercised via the workflow.
+- **Cross-repo delivery is unproven**: the `FORGE_DELIVER_TOKEN` secret is not set,
+  and this sandbox token cannot create repos. Delivery has only been proven against
+  the Firstborn repo itself.
+- Delivery runs one work item with the whole roster; turning a *list* of findings
+  into a set of work items is not wired yet.
+- The model panel's reliability gap (recorded in entry `-03`) still applies.
+
+#### Action needed from the owner
+1. Rotate the token that was embedded in this workspace's `git remote` (I removed
+   it and sanitized the URL, but it was exposed in terminal output).
+2. Confirm the scratch repository to use for the live cross-repo test.
+3. Add `FORGE_DELIVER_TOKEN` (a PAT with `repo` scope) to the repo secrets.
 
 No secrets, tokens, or credentials appear in this entry.

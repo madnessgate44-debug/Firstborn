@@ -26,14 +26,16 @@ function git(args: string[], cwd?: string): string {
  * A real bare repository to push to, seeded with a real commit on `main`.
  * This is the target the company will change — no mocking of git or the FS.
  */
-function seedRemote(): { remoteDir: string; commit: string } {
+function seedRemote(opts: { testScript?: string } = {}): { remoteDir: string; commit: string } {
   const remoteDir = tmp('deliver-remote-');
   git(['init', '--bare', '-q', '-b', 'main', remoteDir]);
   const seedDir = tmp('deliver-seed-');
   git(['init', '-q', '-b', 'main', seedDir]);
-  fs.writeFileSync(path.join(seedDir, 'package.json'), JSON.stringify({ name: 'sample-target', scripts: { test: 'node check.js' } }, null, 2));
+  const testScript = opts.testScript ?? 'node check.js';
+  fs.writeFileSync(path.join(seedDir, 'package.json'), JSON.stringify({ name: 'sample-target', scripts: { test: testScript } }, null, 2));
   fs.writeFileSync(path.join(seedDir, 'index.js'), "module.exports = { version: '0.0.0' };\n");
   fs.writeFileSync(path.join(seedDir, 'check.js'), "const v = require('./index.js').version;\nif (v !== '1.0.0') { console.error('expected 1.0.0, got ' + v); process.exit(1); }\n");
+  fs.writeFileSync(path.join(seedDir, 'pass.js'), 'process.exit(0);\n');
   git(['-c', 'user.name=seed', '-c', 'user.email=seed@example.com', 'add', '-A'], seedDir);
   git(['-c', 'user.name=seed', '-c', 'user.email=seed@example.com', 'commit', '-q', '-m', 'seed'], seedDir);
   const commit = git(['rev-parse', 'HEAD'], seedDir);
@@ -146,6 +148,44 @@ test('delivery refuses to push when the target\'s own check fails', async () => 
   // No branch was created on the remote.
   const branches = git(['branch', '--list'], remoteDir);
   assert.doesNotMatch(branches, /forge\/broken/);
+});
+
+test('delivery detects a change that only adds a new file', async () => {
+  const { remoteDir, commit } = seedRemote({ testScript: 'node pass.js' });
+  const work = tmp('deliver-work-');
+  const addFile = (_item: WorkItem, _attempt: number): Role[] => {
+    return DEFAULT_ROSTER.map((r) => {
+      const script: AgentAction[] =
+        r.id === 'implementer'
+          ? [
+              { tool: 'write_file', input: { path: 'NEW.md', content: '# new\n' } },
+              { tool: 'finish', input: { summary: 'added a file', data: { files: { 'NEW.md': '# new\n' } } } },
+            ]
+          : r.id === 'qa'
+            ? [
+                { tool: 'run_check', input: { command: 'test' } },
+                { tool: 'finish', input: { summary: 'ran the check', data: {} } },
+              ]
+            : [{ tool: 'finish', input: { summary: r.id, data: r.id === 'security' ? { clean: true } : r.id === 'reviewer' ? { blockers: 0 } : {} } }];
+      let i = 0;
+      return {
+        ...r,
+        tools: buildRoleTools({ workspaceDir: work, canMutate: r.authority === 'branch-write' }),
+        brain: (async () => script[Math.min(i++, script.length - 1)]) as AgentBrain,
+      };
+    });
+  };
+  const result = await deliverChange({
+    target: 'local/seed', goal: 'add a file', commit, branch: 'forge/add-only',
+    workspaceDir: work, token: 'unused-in-local-test', remoteUrl: remoteDir,
+    rosterFor: addFile, attemptsPerItem: 1, push: true,
+    openPr: async () => ({ url: 'https://example.test/pr/2', number: 2 }),
+  });
+  // `git diff` alone would miss an untracked file; the run must still see it.
+  assert.equal(result.status, 'COMPLETED', result.reason);
+  assert.deepEqual(result.changedFiles, ['NEW.md']);
+  const remoteHead = git(['rev-parse', 'refs/heads/forge/add-only'], remoteDir);
+  assert.equal(remoteHead, result.headCommit);
 });
 
 test('delivery refuses a branch that is not under forge/', async () => {

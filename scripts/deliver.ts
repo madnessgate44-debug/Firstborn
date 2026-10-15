@@ -18,6 +18,7 @@ import { DEFAULT_ROSTER } from '../src/company/roles.ts';
 import type { Role } from '../src/company/roles.ts';
 import { deliverChange, type PullRequestOpener } from '../src/company/deliver.ts';
 import { fetchRepoContext } from '../src/company/repo-context.ts';
+import type { AgentAction, AgentBrain } from '../src/kernel/loop.ts';
 
 const TOKEN = process.env.GITHUB_TOKEN || '';
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -56,6 +57,49 @@ function modelRoster(model: ModelService, workspaceDir: string): (item: { id: st
     }));
 }
 
+/**
+ * A deterministic roster for offline plumbing tests (`--scripted`). The
+ * implementer makes a trivial, verifiable edit and QA records the check it
+ * really ran; the rest of the roster is evidence-only. It proves the delivery
+ * path (clone → team → checks → branch → push → PR) without needing model keys.
+ */
+function scriptedRoster(workspaceDir: string): (item: { id: string; title: string }, attempt: number) => Role[] {
+  const EDIT_PATH = 'FORGE-DELIVERY-PROBE.md';
+  const content = `# Forge delivery probe\n\nThis file was written by the Forge software company to prove the delivery path end to end.\n`;
+  const brain = (id: string): AgentBrain => {
+    const scripts: Record<string, AgentAction[]> = {
+      implementer: [
+        { tool: 'write_file', input: { path: EDIT_PATH, content } },
+        { tool: 'finish', input: { summary: 'wrote the probe file', data: { files: { [EDIT_PATH]: content } } } },
+      ],
+      qa: [
+        { tool: 'run_check', input: { command: 'test' } },
+        { tool: 'run_check', input: { command: 'lint' } },
+        { tool: 'finish', input: { summary: 'ran the checks', data: {} } },
+      ],
+      security: [{ tool: 'finish', input: { summary: 'no escapes', data: { clean: true } } }],
+      reviewer: [{ tool: 'finish', input: { summary: 'change is correct', data: { blockers: 0 } } }],
+      release: [{ tool: 'finish', input: { summary: 'may ship', data: { ship: true } } }],
+      pm: [{ tool: 'finish', input: { summary: 'requirement: probe the path', data: { items: ['probe file exists'] } } }],
+      architect: [{ tool: 'finish', input: { summary: 'add one file', data: { files: [EDIT_PATH] } } }],
+    };
+    const script = scripts[id] ?? [{ tool: 'finish', input: { summary: id, data: {} } }];
+    let i = 0;
+    return async () => script[Math.min(i++, script.length - 1)];
+  };
+  return () =>
+    DEFAULT_ROSTER.map((r) => ({
+      id: r.id,
+      title: r.title,
+      mandate: r.mandate,
+      authority: r.authority,
+      consumes: r.consumes,
+      produces: r.produces,
+      tools: buildRoleTools({ workspaceDir, canMutate: r.authority === 'branch-write', allowedRoots: [''] }),
+      brain: brain(r.id),
+    }));
+}
+
 const openPr: PullRequestOpener = async ({ target, head, base, title, body, token }) => {
   const res = await fetch(`https://api.github.com/repos/${target}/pulls`, {
     method: 'POST',
@@ -69,10 +113,12 @@ const openPr: PullRequestOpener = async ({ target, head, base, title, body, toke
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const target = (args[0] || '').trim();
-  const goal = args.slice(1).join(' ').trim() || 'Address the audit findings.';
+  const scripted = args.includes('--scripted');
+  const positional = args.filter((a) => !a.startsWith('--'));
+  const target = (positional[0] || '').trim();
+  const goal = positional.slice(1).join(' ').trim() || 'Address the audit findings.';
   if (!repoPattern.test(target) || target.includes('..')) {
-    console.error('usage: npm run deliver -- owner/repo "goal"');
+    console.error('usage: npm run deliver -- [--scripted] owner/repo "goal"');
     process.exitCode = 2;
     return;
   }
@@ -80,9 +126,13 @@ async function main(): Promise<void> {
   const ctx = await fetchRepoContext(target);
   console.log(`[deliver] ${ctx.target} @ ${ctx.commit.slice(0, 8)}; goal: ${goal}`);
 
-  const model = new ModelService();
-  const info = model.getProviderInfo();
-  console.log(`[deliver] model: ${info.primaryProvider}; Gemini fallback configured: ${info.fallbackConfigured}`);
+  const model = scripted ? null : new ModelService();
+  if (model) {
+    const info = model.getProviderInfo();
+    console.log(`[deliver] model: ${info.primaryProvider}; Gemini fallback configured: ${info.fallbackConfigured}`);
+  } else {
+    console.log('[deliver] scripted roster (deterministic; proves the delivery path, not model quality)');
+  }
 
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-deliver-'));
   const branch = `forge/deliver-${ctx.commit.slice(0, 8)}-${Date.now().toString(36)}`;
@@ -94,7 +144,7 @@ async function main(): Promise<void> {
     branch,
     workspaceDir,
     token: TOKEN,
-    rosterFor: modelRoster(model, workspaceDir),
+    rosterFor: model ? modelRoster(model, workspaceDir) : scriptedRoster(workspaceDir),
     attemptsPerItem: Math.max(1, Number.parseInt(process.env.FORGE_DELIVER_ATTEMPTS ?? '', 10) || 1),
     push: process.env.FORGE_DELIVER_PUSH !== 'false',
     openPr,
