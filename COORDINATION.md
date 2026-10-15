@@ -1304,7 +1304,9 @@ overclaim as the earlier "+2/-0 reported as a clean single-line change".
   they say the goal was supplied directly and no audit was run. New
   `DeliveryExpectation.touchedAny`: the diff must include one of the finding's own
   files, so a change that only adds a new file cannot be reported as fixing a
-  finding in an existing file.
+  finding in an existing file. The assertion record is now carried into every
+  later outcome, so a run blocked by a failing check still reports what it was
+  trying to achieve (previously `expected` came back empty on that path).
 - **`scripts/deliver.ts`.** New `--audit` (and `--expect-touches`). With `--audit`
   the CLI runs the real `runCompanyAudit`, writes `company-audit.{json,md}`,
   delivers **one** bounded finding (highest severity first) rather than a

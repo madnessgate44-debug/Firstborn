@@ -490,6 +490,9 @@ export async function deliverChange(options: DeliveryOptions): Promise<DeliveryR
     expected.push({ assertion: label, met, detail });
   }
   const unmet = expected.filter((e) => !e.met);
+  // Carry the assertion record into every later outcome, so a run blocked by a
+  // failing check still reports what it was trying to achieve and whether it did.
+  base.expected = expected;
   if (unmet.length) {
     checks.push({ name: 'expect', status: 'FAILED', output: unmet.map((e) => `${e.assertion}: ${e.detail}`).join('; ') });
     return finish({

@@ -150,9 +150,15 @@ test('delivery refuses to push when the target\'s own check fails', async () => 
     rosterFor: rosterForWorkspace(work, { bad: true }),
     attemptsPerItem: 1,
     push: true,
+    // The bad change still touches index.js, so this assertion is met; the
+    // target's failing test is what blocks the run.
+    expect: [{ touchedAny: ['index.js'] }],
   });
   assert.equal(result.status, 'BLOCKED');
   assert.match(result.reason, /check "test" failed/);
+  // The assertion record survives the later failing check.
+  assert.equal(result.expected.length, 1);
+  assert.equal(result.expected[0].met, true);
   // No branch was created on the remote.
   const branches = git(['branch', '--list'], remoteDir);
   assert.doesNotMatch(branches, /forge\/broken/);
