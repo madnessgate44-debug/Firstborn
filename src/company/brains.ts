@@ -7,7 +7,7 @@
  * ends the role safely instead of spinning.
  */
 import type { AgentAction, AgentBrain, AgentBrainState } from '../kernel/loop.ts';
-import type { ModelService, ChatMessage } from './model.ts';
+import type { ModelService, ChatMessage, TaskTier } from './model.ts';
 
 /** Tools whose identical repeat cannot yield new information. */
 const IDEMPOTENT_TOOLS = new Set(['read_file', 'think', 'list_files', 'search', 'find_files', 'run_check']);
@@ -27,6 +27,8 @@ export interface BrainSpec {
   artifactHint: string;
   /** An explicit tool sequence the role should follow. Rendered prominently. */
   sequence?: string[];
+  /** Work tier: `easy` routes keyless (planning, review, decisions); `hard` may use keys. */
+  tier?: TaskTier;
 }
 
 export function buildRolePrompt(spec: BrainSpec, state: AgentBrainState): string {
@@ -68,7 +70,7 @@ export function modelBrain(model: ModelService, spec: BrainSpec): AgentBrain {
       { role: 'system', content: 'You are a careful senior software engineer. Return valid JSON only.' },
       { role: 'user', content: prompt },
     ];
-    const { value } = await model.completeJson<{ tool?: string; input?: Record<string, unknown> }>(messages, prompt);
+    const { value } = await model.completeJson<{ tool?: string; input?: Record<string, unknown> }>(messages, prompt, spec.tier ?? 'hard');
     if (value && typeof value.tool === 'string') {
       return guardRepeatedReadOnly({ tool: value.tool, input: value.input }, state.history);
     }
