@@ -113,3 +113,16 @@ test('REQ-2: detectTestFiles matches the real Amina inventory', () => {
   assert.equal(detectTestFiles(amina).length, 3);
 });
 
+
+test('REQ-3: non-JSON model prose is rejected, not counted as a clean result', () => {
+  const files = ['package.json', 'src/App.tsx'];
+  const prose = 'Sure! Here is my review of the repository. It looks mostly fine to me.';
+  const v = validateModelFindings(prose, files);
+  assert.equal(v.findings.length, 0);
+  assert.equal(v.summary, '');
+  assert.equal(v.architecture, '');
+  // The runner must treat this as FAIL, not PASS-with-zero-findings.
+  const usable = v.findings.length > 0 || Boolean(v.summary) || Boolean(v.architecture);
+  assert.equal(usable, false);
+});
+

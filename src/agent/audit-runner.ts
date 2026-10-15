@@ -200,12 +200,21 @@ async function main(): Promise<void> {
     });
     if (result.success && result.text.trim()) {
       const validated = validateModelFindings(result.text, files);
-      modelSummary = validated.summary;
-      modelArchitecture = validated.architecture;
-      modelFindings = validated.findings;
-      modelStatus = 'PASS';
-      modelNote = `${validated.findings.length} validated finding(s) via ${result.provider}/${result.model}; ${validated.rejected} rejected for citing no known path.`;
-      findings.push(...modelFindings);
+      // A model response that yields no summary, no architecture, and no findings
+      // was not parseable audit JSON. Reporting that as PASS with "0 findings"
+      // would read like a clean bill of health, so treat it as a failure instead.
+      const usable = validated.findings.length > 0 || Boolean(validated.summary) || Boolean(validated.architecture);
+      if (usable) {
+        modelSummary = validated.summary;
+        modelArchitecture = validated.architecture;
+        modelFindings = validated.findings;
+        modelStatus = 'PASS';
+        modelNote = `${validated.findings.length} validated finding(s) via ${result.provider}/${result.model}; ${validated.rejected} rejected for citing no known path.`;
+        findings.push(...modelFindings);
+      } else {
+        modelStatus = 'FAIL';
+        modelNote = `Model returned no parseable audit JSON (${result.provider}/${result.model}); static inventory only.`;
+      }
     } else {
       modelStatus = 'FAIL';
       modelNote = `Model analysis unavailable (${result.error || 'no usable text'}); static inventory only.`;
