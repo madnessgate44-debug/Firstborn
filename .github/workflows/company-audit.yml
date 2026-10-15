@@ -1,0 +1,57 @@
+name: Forge Company Audit
+
+# The software company performs a read-only audit of a target repository.
+# Runs on the `company` branch, which holds Forge + the company as one thing.
+# Read-only: no target writes, no target code executed.
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'Target repository in owner/repo format'
+        required: true
+        default: 'madnessgate44-debug/Amina'
+      attempts:
+        description: 'Independent attempts per audit lens'
+        required: true
+        default: '2'
+
+permissions:
+  contents: read
+
+jobs:
+  company-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the company
+        uses: actions/checkout@v4
+        with:
+          ref: company/main
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the company audit
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORGE_AUDIT_ATTEMPTS: ${{ inputs.attempts }}
+        run: npx tsx scripts/audit.ts "${{ inputs.target_repo }}"
+
+      - name: Upload the audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: company-audit
+          path: |
+            .firstborn/evidence/company-audit.md
+            .firstborn/evidence/company-audit.json
+          if-no-files-found: warn
