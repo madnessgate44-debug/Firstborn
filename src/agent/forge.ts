@@ -192,11 +192,10 @@ export function evaluateRequirementEvidence(
   const attemptEvidence = results.map((result) => `${result.command}=${result.exitCode}`).join(', ');
   const criterion = `${requirement.acceptanceCriteria ?? ''} ${requirement.description ?? ''}`.toLowerCase();
 
-  const matchesCommand = (command: string): boolean => {
-    const lower = command.toLowerCase();
-    const scriptName = lower === 'npm test' ? 'test' : lower.replace(/^npm run /, '');
-    return criterion.includes(lower) || criterion.includes(scriptName);
-  };
+  // Only a literal full command mention is criterion evidence. Matching a bare
+  // script name (for example, "test" or "lint") creates false PASS results when
+  // those words appear in ordinary prose unrelated to the verification method.
+  const matchesCommand = (command: string): boolean => criterion.includes(command.toLowerCase());
 
   const explicit = (requirement.checkCommands ?? []).map((c) => c.toLowerCase());
   const referencedChecks = results.filter((result) => {
