@@ -216,9 +216,11 @@ async function main(): Promise<void> {
     }
     if (goalArg) {
       // A supplied goal means the run follows the goal, not the findings. Say so
-      // honestly rather than claiming the change addresses the audit.
+      // honestly rather than claiming the change addresses the audit: drop the
+      // findings from the delivery expectation (they remain in company-audit.json).
       goal = goalArg;
       audited = false;
+      findings = [];
       console.log('[deliver] a goal was supplied, so this run follows the goal, not the audit findings; the report will say so.');
     } else {
       // Deliver ONE bounded finding, not the whole report: a goal that lists
