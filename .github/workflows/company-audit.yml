@@ -1,7 +1,7 @@
 name: Forge Company Audit
 
 # The software company performs a read-only audit of a target repository.
-# Runs on the `company` branch, which holds Forge + the company as one thing.
+# Forge and the company are one thing, living together on `main`.
 # Read-only: no target writes, no target code executed.
 on:
   workflow_dispatch:
@@ -26,7 +26,6 @@ jobs:
       - name: Check out the company
         uses: actions/checkout@v4
         with:
-          ref: company/main
           persist-credentials: false
 
       - name: Set up Node
