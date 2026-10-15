@@ -261,3 +261,31 @@ export async function buildRegistryGrounder(
   );
   return { get: (n: string) => map.get(n) ?? null };
 }
+
+/**
+ * Download the exact-commit source as a tarball and parse it into a file map.
+ * Read-only: it never checks out or runs the target's code.
+ */
+export async function fetchRepoCorpus(
+  target: string,
+  commit: string,
+  timeoutMs = 30000
+): Promise<Record<string, string> | null> {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(target) || target.includes('..')) return null;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${target}/tarball/${commit}`, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'forge-company-audit',
+        ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    const gz = Buffer.from(await res.arrayBuffer());
+    const { parseTarGz } = await import('./evidence.ts');
+    return parseTarGz(gz);
+  } catch {
+    return null;
+  }
+}

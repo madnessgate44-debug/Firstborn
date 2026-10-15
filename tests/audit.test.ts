@@ -109,7 +109,7 @@ test('company audit: the whole company runs — lenses compete, Forge synthesize
     '[role:verify:Security Engineer]': { verdict: 'OBJECT', reason: 'one risk understated' },
     '[role:verify:Release Engineer]': { verdict: 'CONFIRM', reason: 'fit to hand over' },
   });
-  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 2, registryGrounder: noRegistry });
+  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 2, registryGrounder: noRegistry, corpus: null });
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.employees.length, 4);
   assert.ok(result.findings.length >= 4);
@@ -129,7 +129,7 @@ test('company audit: an attempt that invents a path cannot win', async () => {
     '[role:forge-lead]': { summary: 's', architecture: 'a' },
     '[role:verify:Reviewer]': { verdict: 'CONFIRM', reason: 'ok' },
   });
-  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry });
+  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry, corpus: null });
   // The architecture item has no eligible attempt, so the whole run is blocked.
   assert.equal(result.status, 'BLOCKED');
   assert.ok(!result.findings.some((f) => f.title === 'Ghost'));
@@ -179,7 +179,7 @@ test('company audit: a panel member that returns nothing usable is UNVERIFIED, n
     // The Reviewer answers with an empty object — the old code read that as CONFIRM.
     '[role:verify:Reviewer]': {},
   });
-  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry });
+  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry, corpus: null });
   const reviewer = result.verification.find((v) => v.role === 'Reviewer')!;
   assert.equal(reviewer.verdict, 'UNVERIFIED');
   assert.doesNotMatch(result.markdown, /Reviewer: CONFIRMED/);
