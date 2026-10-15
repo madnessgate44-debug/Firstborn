@@ -24,6 +24,32 @@ const SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
 const MAX_MODEL_FINDINGS = 8;
 
 /**
+ * Paths that are test files or test directories, by common convention:
+ * a `test`/`tests`/`__tests__`/`spec`/`specs` path segment, a `*.test.*` or
+ * `*.spec.*` file, Android's `src/test` and `src/androidTest`, Go's `_test.go`,
+ * and Python's `test_*.py` / `*_test.py`. The previous pattern only accepted a
+ * literal `test/`, `tests/`, `src/test`, or `src/androidTest` prefix at the very
+ * start of the path, so it missed every `__tests__` and `*.test.ts` file — and
+ * reported "no tests" for repositories that plainly have them.
+ */
+export const TEST_PATH_PATTERN = new RegExp(
+  [
+    '(^|/)(tests?|__tests__|specs?|__specs__|src/(test|androidTest))(/|$)',
+    '\\.(test|spec)\\.[cm]?[jt]sx?$',
+    '_test\\.go$',
+    '(^|/)test_[^/]*\\.py$',
+    '(^|/)[^/]*_test\\.py$',
+  ].join('|'),
+  'i'
+);
+
+/** The subset of repository paths that are test files or test directories. */
+export function detectTestFiles(files: string[]): string[] {
+  return files.filter((p) => TEST_PATH_PATTERN.test(p));
+}
+
+
+/**
  * Parse and validate the model's audit JSON. The model output is untrusted, so a
  * finding is accepted only when it cites at least one path that actually exists in
  * the repository inventory; anything else is dropped and counted. This is what
@@ -119,7 +145,7 @@ async function main(): Promise<void> {
   const gradleWrapperScript = has('gradlew');
   const gradleWrapperJar = has('gradle/wrapper/gradle-wrapper.jar');
   const androidManifest = matching(/(^|\/)AndroidManifest\.xml$/);
-  const testFiles = matching(/(^|\/)(test|tests|src\/test|src\/androidTest)(\/|\.)/i);
+  const testFiles = detectTestFiles(files);
   const workflowFiles = matching(/^\.github\/workflows\/.*\.ya?ml$/);
   const lockfiles = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'gradle/libs.versions.toml'].filter(has);
 

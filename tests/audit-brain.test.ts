@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateModelFindings } from '../src/agent/audit-runner.ts';
+import { validateModelFindings, detectTestFiles } from '../src/agent/audit-runner.ts';
 import { buildAuditPrompt } from '../src/services/model.ts';
 
 // These tests exercise the real audit guardrails without any network or model
@@ -77,3 +77,39 @@ test('REQ-4b: the audit prompt treats repository content as untrusted input', ()
   assert.match(prompt, /--- FILE: README\.md ---/);
   assert.match(prompt, /every finding MUST cite at least one "path"/i);
 });
+
+// REQ-2: test-file detection must not miss common layouts. The Amina audit
+// reported "No conventional test paths found" while the repository plainly had
+// three `__tests__/*.test.ts` files, because the old pattern only matched a
+// literal test/tests segment at the very start of the path.
+test('REQ-2: detectTestFiles recognizes jest/__tests__, *.test.*, and other conventions', () => {
+  const present = [
+    'src/services/__tests__/integritySourceOfTruth.test.ts',
+    'src/services/teacher/__tests__/adaptiveLoop.test.ts',
+    'tests/foo.test.ts',
+    'test/bar.js',
+    'src/app.test.tsx',
+    'src/util.spec.ts',
+    'app/src/test/java/ExampleTest.java',
+    'app/src/androidTest/java/ExampleInstrumentedTest.java',
+    'pkg/handler_test.go',
+    'test_module.py',
+    'module_test.py',
+    'spec/models_spec.rb',
+  ];
+  for (const p of present) assert.equal(detectTestFiles([p]).length, 1, `expected to detect ${p}`);
+  const absent = ['src/app.ts', 'src/contest.ts', 'src/latest/index.ts', 'src/services/missionPlanner.ts', 'README.md', 'src/testUtils.ts'];
+  for (const p of absent) assert.equal(detectTestFiles([p]).length, 0, `must not treat ${p} as a test`);
+});
+
+test('REQ-2: detectTestFiles matches the real Amina inventory', () => {
+  const amina = [
+    'src/services/__tests__/integritySourceOfTruth.test.ts',
+    'src/services/teacher/__tests__/adaptiveLoop.test.ts',
+    'src/services/teaching/__tests__/teachingSession.test.ts',
+    'src/App.tsx',
+    'server.ts',
+  ];
+  assert.equal(detectTestFiles(amina).length, 3);
+});
+

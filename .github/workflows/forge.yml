@@ -87,28 +87,39 @@ jobs:
           TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id }}
         run: |
           # Bot-authored PRs are held at action_required until a human approves
-          # (GitHub change 2026-06-11). The held run is created a few seconds after
-          # the PR is opened, so poll for it. Approving needs actions:write; if this
+          # (GitHub change 2026-06-11). Approving needs actions:write; if this
           # token is not permitted, the step prints a notice and does not fail.
+          #
+          # More than one workflow triggers on the PR (e.g. "Verification and
+          # Build Checks" and "Sentinel Verification Gate"), and each is held
+          # separately. The previous version approved only the first run it saw
+          # and then stopped, so the other workflow was left at action_required
+          # and the gate never completed without a human clicking approve.
           BRANCH="forge/task-${TASK_ID}-${{ github.run_id }}"
-          APPROVED=0
-          for attempt in 1 2 3 4 5 6; do
-            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?status=action_required&per_page=50" \
-              --jq "[.workflow_runs[] | select(.head_branch==\"$BRANCH\")][0].id" 2>/dev/null || echo "")
-            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-              if gh api -X POST "repos/${{ github.repository }}/actions/runs/$RUN_ID/approve"; then
-                echo "APPROVED $RUN_ID on $BRANCH (attempt $attempt)"
-                APPROVED=1
+          approved=""
+          for attempt in $(seq 1 12); do
+            # Every run still held on this branch, newest first.
+            HELD=$(gh api "repos/${{ github.repository }}/actions/runs?status=action_required&per_page=100" \
+              --jq ".workflow_runs[] | select(.head_branch==\"$BRANCH\") | \"\(.id) \(.name)\"" 2>/dev/null || echo "")
+            while read -r RUN_ID RUN_NAME; do
+              [ -z "$RUN_ID" ] && continue
+              case " $approved " in *" $RUN_ID "*) continue ;; esac
+              if gh api -X POST "repos/${{ github.repository }}/actions/runs/$RUN_ID/approve" >/dev/null 2>&1; then
+                echo "APPROVED $RUN_ID ($RUN_NAME) on $BRANCH (attempt $attempt)"
+                approved="$approved $RUN_ID"
               else
-                echo "NOTICE: token not permitted to approve $RUN_ID; verification remains pending human approval."
+                echo "NOTICE: token not permitted to approve $RUN_ID ($RUN_NAME); verification remains pending human approval."
+                approved="$approved $RUN_ID"
               fi
-              break
-            fi
-            echo "Held run for $BRANCH not visible yet (attempt $attempt); waiting..."
+            done <<< "$HELD"
+            # Keep polling until every workflow that runs on the PR has been seen
+            # and approved, so none is left behind.
             sleep 10
           done
-          if [ "$APPROVED" != "1" ]; then
-            echo "No held verification run approved for $BRANCH."
+          if [ -z "$approved" ]; then
+            echo "No held verification runs found for $BRANCH."
+          else
+            echo "Approved runs:$approved"
           fi
 
       - name: Finalize workflow evidence
