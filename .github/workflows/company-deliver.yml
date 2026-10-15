@@ -17,9 +17,9 @@ on:
         required: true
         default: 'madnessgate44-debug/Amina'
       goal:
-        description: 'What the company should change'
-        required: true
-        default: 'Fix the findings from the latest audit.'
+        description: 'Optional: a manual goal. Leave empty to let --audit pick the top finding.'
+        required: false
+        default: ''
       attempts:
         description: 'Independent attempts per work item'
         required: true
