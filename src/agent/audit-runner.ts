@@ -24,6 +24,32 @@ const SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
 const MAX_MODEL_FINDINGS = 8;
 
 /**
+ * Paths that are test files or test directories, by common convention:
+ * a `test`/`tests`/`__tests__`/`spec`/`specs` path segment, a `*.test.*` or
+ * `*.spec.*` file, Android's `src/test` and `src/androidTest`, Go's `_test.go`,
+ * and Python's `test_*.py` / `*_test.py`. The previous pattern only accepted a
+ * literal `test/`, `tests/`, `src/test`, or `src/androidTest` prefix at the very
+ * start of the path, so it missed every `__tests__` and `*.test.ts` file — and
+ * reported "no tests" for repositories that plainly have them.
+ */
+export const TEST_PATH_PATTERN = new RegExp(
+  [
+    '(^|/)(tests?|__tests__|specs?|__specs__|src/(test|androidTest))(/|$)',
+    '\\.(test|spec)\\.[cm]?[jt]sx?$',
+    '_test\\.go$',
+    '(^|/)test_[^/]*\\.py$',
+    '(^|/)[^/]*_test\\.py$',
+  ].join('|'),
+  'i'
+);
+
+/** The subset of repository paths that are test files or test directories. */
+export function detectTestFiles(files: string[]): string[] {
+  return files.filter((p) => TEST_PATH_PATTERN.test(p));
+}
+
+
+/**
  * Parse and validate the model's audit JSON. The model output is untrusted, so a
  * finding is accepted only when it cites at least one path that actually exists in
  * the repository inventory; anything else is dropped and counted. This is what
@@ -119,7 +145,7 @@ async function main(): Promise<void> {
   const gradleWrapperScript = has('gradlew');
   const gradleWrapperJar = has('gradle/wrapper/gradle-wrapper.jar');
   const androidManifest = matching(/(^|\/)AndroidManifest\.xml$/);
-  const testFiles = matching(/(^|\/)(test|tests|src\/test|src\/androidTest)(\/|\.)/i);
+  const testFiles = detectTestFiles(files);
   const workflowFiles = matching(/^\.github\/workflows\/.*\.ya?ml$/);
   const lockfiles = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'gradle/libs.versions.toml'].filter(has);
 
@@ -143,11 +169,32 @@ async function main(): Promise<void> {
   checks.push({ check: 'GitHub Actions workflow inventory', result: workflowFiles.length ? 'PASS' : 'FAIL', evidence: workflowFiles.length ? workflowFiles.join(', ') : 'No .github/workflows YAML files found' });
   if (!workflowFiles.length) findings.push({ severity: 'MEDIUM', title: 'No GitHub Actions workflows detected', evidence: ['No workflow YAML files found under .github/workflows.'], recommendation: 'Add CI for build and test checks that can run reproducibly.' });
 
-  const keyPaths = [...new Set([readme, 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts', 'app/build.gradle', 'app/build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'package.json', ...workflowFiles.slice(0, 5)].filter((p): p is string => Boolean(p && has(p))))];
+  // Excerpt selection. The audit's reasoning is only as good as what the model
+  // can read. Selecting only README/build/package/workflow files left the model
+  // blind to the actual source, so it filled the gap with "no excerpt was
+  // provided" meta-findings and mis-stated that the repo had no tests. Include
+  // representative source and test files (bounded) so findings describe the code.
+  const sourceCandidates = files.filter((p: string) =>
+    /\.(ts|tsx|js|jsx|mjs|cjs|py|go|kt|java|rs|rb|cs|swift)$/i.test(p) && !/(^|\/)(node_modules|dist|build)\//.test(p)
+  );
+  const testSet = new Set(testFiles);
+  const entrypoints = [
+    'server.ts', 'server.js', 'server.mjs', 'index.js', 'index.ts', 'main.ts', 'main.js',
+    'src/main.tsx', 'src/main.ts', 'src/App.tsx', 'src/App.ts', 'app/page.tsx', 'app/layout.tsx',
+  ].filter(has);
+  const testExcerpts = sourceCandidates.filter((p: string) => testSet.has(p)).slice(0, 4);
+  const sourceExcerpts = sourceCandidates.filter((p: string) => !testSet.has(p)).slice(0, 14);
+  const MAX_EXCERPTS = 22;
+  const keyPaths = [...new Set([
+    readme, 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts',
+    'app/build.gradle', 'app/build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties',
+    'package.json', 'tsconfig.json', 'vite.config.ts', 'vite.config.js',
+    ...workflowFiles.slice(0, 5), ...entrypoints, ...testExcerpts, ...sourceExcerpts,
+  ].filter((p): p is string => Boolean(p && has(p))))].slice(0, MAX_EXCERPTS);
   const excerpts: Record<string, string> = {};
   for (const p of keyPaths) {
     const value = await getTextFile(owner, repo, p, branch);
-    if (value !== null) excerpts[p] = value.slice(0, 5000);
+    if (value !== null) excerpts[p] = value.slice(0, 4000);
   }
 
   checks.push({ check: 'Build/test execution', result: 'NOT_RUN', evidence: 'Audit mode deliberately does not execute target-repository scripts or build configuration. Static prerequisites only; no target code was run.' });
@@ -174,12 +221,21 @@ async function main(): Promise<void> {
     });
     if (result.success && result.text.trim()) {
       const validated = validateModelFindings(result.text, files);
-      modelSummary = validated.summary;
-      modelArchitecture = validated.architecture;
-      modelFindings = validated.findings;
-      modelStatus = 'PASS';
-      modelNote = `${validated.findings.length} validated finding(s) via ${result.provider}/${result.model}; ${validated.rejected} rejected for citing no known path.`;
-      findings.push(...modelFindings);
+      // A model response that yields no summary, no architecture, and no findings
+      // was not parseable audit JSON. Reporting that as PASS with "0 findings"
+      // would read like a clean bill of health, so treat it as a failure instead.
+      const usable = validated.findings.length > 0 || Boolean(validated.summary) || Boolean(validated.architecture);
+      if (usable) {
+        modelSummary = validated.summary;
+        modelArchitecture = validated.architecture;
+        modelFindings = validated.findings;
+        modelStatus = 'PASS';
+        modelNote = `${validated.findings.length} validated finding(s) via ${result.provider}/${result.model}; ${validated.rejected} rejected for citing no known path.`;
+        findings.push(...modelFindings);
+      } else {
+        modelStatus = 'FAIL';
+        modelNote = `Model returned no parseable audit JSON (${result.provider}/${result.model}); static inventory only.`;
+      }
     } else {
       modelStatus = 'FAIL';
       modelNote = `Model analysis unavailable (${result.error || 'no usable text'}); static inventory only.`;
