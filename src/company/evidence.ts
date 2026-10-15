@@ -123,14 +123,28 @@ export function isHardcodedSecretClaim(text: string): boolean {
   return aboutSecret && hardcoded;
 }
 
+export function isLockfileClaim(text: string): boolean {
+  return /\b(lock ?file|package-lock|yarn\.lock|pnpm-lock|shrinkwrap|deterministic (build|install)|reproducible (build|install))\b/i.test(text);
+}
+
+export function isApiKeyStatusClaim(text: string): boolean {
+  return /\bhasapikey\b/i.test(text) || (/\bhealth\b/i.test(text) && /\bapi ?key\b/i.test(text) && /\b(expos|leak|disclos|reveal|presence|status|public)\b/i.test(text));
+}
+
+export function isLegacyPeerDepsClaim(text: string): boolean {
+  return /\blegacy[- ]peer[- ]deps\b/i.test(text);
+}
+
+const LOCKFILE_NEEDLES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'bun.lock'];
+
 /**
  * Settle a finding deterministically against the real source.
  *
- * - A render-sink (XSS) claim is contradicted when the corpus has zero HTML sinks;
- *   React escapes JSX by default, so there is no injection vector.
- * - A hardcoded-secret claim is contradicted when the corpus has zero literal
- *   credentials.
- * - Anything we cannot settle mechanically is an explicit *judgment*, not a fact.
+ * Each check is a question with a yes/no answer that the corpus can decide: does a
+ * raw-HTML sink exist? does a lockfile exist? is a literal credential committed? does
+ * a named string appear? A check that *confirms* a finding yields `verified-fact`;
+ * one that *refutes* it yields `CONTRADICTED`; a claim none of these can address
+ * stays an explicit `judgment`, never presented as a proven fact.
  */
 export function verifyFinding(
   finding: { title: string; evidence: string; recommendation: string; paths: string[] },
@@ -149,29 +163,28 @@ export function verifyFinding(
     needle: finding.paths[0],
   });
 
+  const settle = (supports: boolean): EvidenceOutcome => ({
+    verdict: supports ? 'SUPPORTED' : 'CONTRADICTED',
+    category: 'verified-fact',
+    checks,
+  });
+
   if (isRenderSinkClaim(text)) {
     const hits = searchMany(corpus, RENDER_SINKS);
-    const found = hits.length > 0;
     checks.push({
       claim: 'an unsafe HTML sink exists that could render untrusted content',
       command: `grep -rn "${RENDER_SINKS.join('|')}" <repo>`,
-      result: found
-        ? `${hits.length} match(es), e.g. ${hits[0].path}:${hits[0].line}`
-        : `0 matches across ${fileCount} files`,
-      supports: found,
+      result: hits.length ? `${hits.length} match(es), e.g. ${hits[0].path}:${hits[0].line}` : `0 matches across ${fileCount} files`,
+      supports: hits.length > 0,
       needle: 'dangerouslySetInnerHTML',
     });
-    return {
-      verdict: found ? 'SUPPORTED' : 'CONTRADICTED',
-      category: 'verified-fact',
-      checks,
-    };
+    return settle(hits.length > 0);
   }
 
   if (isHardcodedSecretClaim(text)) {
     const literal = Object.entries(corpus).flatMap(([path, content]) => {
       const m = content.match(SECRET_LITERAL_RE);
-      return m ? [{ path, match: m[0].slice(0, 8) + '…' }] : [];
+      return m ? [{ path }] : [];
     });
     checks.push({
       claim: 'a literal credential is present in the source',
@@ -180,11 +193,43 @@ export function verifyFinding(
       supports: literal.length > 0,
       needle: 'process.env',
     });
-    return {
-      verdict: literal.length ? 'SUPPORTED' : 'CONTRADICTED',
-      category: 'verified-fact',
-      checks,
-    };
+    return settle(literal.length > 0);
+  }
+
+  if (isLockfileClaim(text)) {
+    const present = LOCKFILE_NEEDLES.filter((n) => corpus[n] !== undefined);
+    checks.push({
+      claim: 'a package-manager lockfile is present in the repository',
+      command: `git ls-files | grep -E "${LOCKFILE_NEEDLES.join('|')}"`,
+      result: present.length ? `present: ${present.join(', ')}` : `none of ${LOCKFILE_NEEDLES.join(', ')} (${fileCount} files)`,
+      supports: present.length === 0, // the finding asserts a lockfile is *missing*
+      needle: 'package-lock.json',
+    });
+    return settle(present.length === 0);
+  }
+
+  if (isApiKeyStatusClaim(text)) {
+    const hits = searchMany(corpus, ['hasApiKey']);
+    checks.push({
+      claim: 'the source exposes whether an API key is configured',
+      command: `grep -rn "hasApiKey" <repo>`,
+      result: hits.length ? `${hits.length} match(es), e.g. ${hits[0].path}:${hits[0].line}` : '0 matches',
+      supports: hits.length > 0,
+      needle: 'hasApiKey',
+    });
+    return settle(hits.length > 0);
+  }
+
+  if (isLegacyPeerDepsClaim(text)) {
+    const hits = searchMany(corpus, ['legacy-peer-deps']);
+    checks.push({
+      claim: 'the CI workflow installs with --legacy-peer-deps',
+      command: `grep -rn "legacy-peer-deps" <repo>`,
+      result: hits.length ? `${hits.length} match(es), e.g. ${hits[0].path}:${hits[0].line}` : '0 matches',
+      supports: hits.length > 0,
+      needle: 'legacy-peer-deps',
+    });
+    return settle(hits.length > 0);
   }
 
   return { verdict: 'UNVERIFIED', category: 'judgment', checks };

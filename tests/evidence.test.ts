@@ -6,6 +6,9 @@ import {
   searchCorpus,
   isRenderSinkClaim,
   isHardcodedSecretClaim,
+  isLockfileClaim,
+  isApiKeyStatusClaim,
+  isLegacyPeerDepsClaim,
   verifyFinding,
   type EvidenceOutcome,
 } from '../src/company/evidence.ts';
@@ -119,6 +122,52 @@ test('evidence: claim detectors fire on the right words', () => {
   assert.ok(!isRenderSinkClaim('missing lockfile'));
   assert.ok(isHardcodedSecretClaim('hardcoded API key committed in source'));
   assert.ok(!isHardcodedSecretClaim('the API key is read from the environment'));
+  assert.ok(isLockfileClaim('Missing package lockfile leads to non-deterministic installs'));
+  assert.ok(!isLockfileClaim('business logic in the entrypoint'));
+  assert.ok(isApiKeyStatusClaim('Exposed API Key Status in Health Check hasApiKey'));
+  assert.ok(isLegacyPeerDepsClaim('CI uses --legacy-peer-deps'));
+});
+
+test('evidence: a missing-lockfile claim is CONFIRMED when no lockfile exists', () => {
+  const corpus = parseTarGz(tarGz(FILES));
+  const out = verifyFinding(
+    { title: 'Missing package lockfile for deterministic builds', evidence: 'no package-lock.json is present', recommendation: 'commit one', paths: ['package.json'] },
+    corpus,
+    3
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
+  assert.match(out.checks.find((c) => c.claim.includes('lockfile is present'))!.result, /none of/);
+});
+
+test('evidence: a missing-lockfile claim is CONTRADICTED when a lockfile exists', () => {
+  const corpus = parseTarGz(tarGz({ ...FILES, 'package-lock.json': '{}' }));
+  const out = verifyFinding(
+    { title: 'Missing lockfile', evidence: 'no lockfile', recommendation: '', paths: ['package.json'] },
+    corpus,
+    4
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+});
+
+test('evidence: a hasApiKey exposure claim is CONFIRMED when the field exists', () => {
+  const corpus = parseTarGz(tarGz(FILES));
+  const out = verifyFinding(
+    { title: 'Exposed API Key Status in Health Check', evidence: '/api/health returns hasApiKey: Boolean(apiKey)', recommendation: 'remove it', paths: ['server.ts'] },
+    corpus,
+    3
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
+  assert.match(out.checks.find((c) => c.claim.includes('exposes whether'))!.result, /match/);
+});
+
+test('evidence: a legacy-peer-deps claim is CONFIRMED against the workflow text', () => {
+  const corpus = parseTarGz(tarGz({ ...FILES, '.github/workflows/deploy-pages.yml': 'run: npm install --legacy-peer-deps' }));
+  const out = verifyFinding(
+    { title: 'CI uses --legacy-peer-deps', evidence: 'deploy-pages.yml installs with --legacy-peer-deps', recommendation: 'resolve peers', paths: ['.github/workflows/deploy-pages.yml'] },
+    corpus,
+    4
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
 });
 
 test('render: splits findings into verified / judgment / withdrawn with spot-check links', () => {
