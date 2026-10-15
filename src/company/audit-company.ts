@@ -33,9 +33,11 @@ import {
   groundFindings,
   parsePackageJson,
   isLockfileClaim,
+  fetchRepoCorpus,
   LOCKFILES,
   type ParsedDep,
 } from './registry.ts';
+import { verifyFinding, type EvidenceOutcome } from './evidence.ts';
 
 /** The slice of ModelService the audit needs; lets tests inject a fake. */
 export interface AuditModel {
@@ -226,6 +228,10 @@ export interface CompanyAuditResult {
   fileCount: number;
   employees: { id: string; title: string; provider: string; model: string; success: boolean; note: string }[];
   findings: AuditFinding[];
+  /** Per-finding deterministic evidence: the command, its raw result, and the verdict. */
+  evidence: Record<string, EvidenceOutcome>;
+  /** Counts for the two buckets the reader acts on. */
+  evidenceSummary: { verified: number; contradicted: number; judgment: number };
   synthesis: { summary: string; architecture: string };
   verification: { role: string; verdict: 'CONFIRM' | 'OBJECT' | 'UNVERIFIED'; reason: string }[];
   groundingNotes: string[];
@@ -258,6 +264,11 @@ export async function runCompanyAudit(options: {
   providerInfo?: { primaryProvider: string; fallbackConfigured: boolean };
   /** Registry version lookup for grounding version claims; defaults to the npm registry. */
   registryGrounder?: import('./registry.ts').VersionGrounder;
+  /**
+   * The exact-commit source, for deterministic evidence checks. Defaults to
+   * downloading the tarball; inject `null` in tests to skip the network.
+   */
+  corpus?: Record<string, string> | null;
 }): Promise<CompanyAuditResult> {
   const bench = options.bench ?? DEFAULT_AUDIT_BENCH;
   const attempts = options.attemptsPerItem ?? 2;
@@ -321,6 +332,18 @@ export async function runCompanyAudit(options: {
     ...(grounded.notes.length ? grounded.notes : ['No version claim was contradicted by the registry.']),
   ];
 
+  // ---- Evidence: settle what we can mechanically, and label the rest judgment. ----
+  const corpus = options.corpus !== undefined ? options.corpus : await fetchRepoCorpus(options.ctx.target, options.ctx.commit);
+  const evidence: Record<string, EvidenceOutcome> = {};
+  if (corpus) {
+    for (const f of findings) evidence[f.title] = verifyFinding(f, corpus, Object.keys(corpus).length);
+  }
+  const evidenceSummary = {
+    verified: Object.values(evidence).filter((e) => e.verdict === 'SUPPORTED').length,
+    contradicted: Object.values(evidence).filter((e) => e.verdict === 'CONTRADICTED').length,
+    judgment: findings.length - Object.values(evidence).filter((e) => e.verdict !== 'UNVERIFIED').length,
+  };
+
   // ---- Phase 2: Forge synthesizes, then the panel verifies. ----
   const phase2 = await runCompany({
     goal: `Synthesize and verify the audit of ${options.ctx.target}`,
@@ -362,6 +385,8 @@ export async function runCompanyAudit(options: {
     fileCount: options.ctx.files.length,
     employees,
     findings,
+    evidence,
+    evidenceSummary,
     synthesis,
     verification,
     groundingNotes,
@@ -372,6 +397,8 @@ export async function runCompanyAudit(options: {
     fileCount: options.ctx.files.length,
     employees,
     findings,
+    evidence,
+    evidenceSummary,
     synthesis,
     verification,
     groundingNotes,

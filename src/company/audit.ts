@@ -136,11 +136,43 @@ export function renderAuditMarkdown(input: {
   fileCount: number;
   employees: { id: string; title: string; provider: string; model: string; success: boolean; note: string }[];
   findings: AuditFinding[];
+  evidence?: Record<string, import('./evidence.ts').EvidenceOutcome>;
+  evidenceSummary?: { verified: number; contradicted: number; judgment: number };
   synthesis?: { summary: string; architecture: string };
   verification?: { role: string; verdict: 'CONFIRM' | 'OBJECT' | 'UNVERIFIED'; reason: string }[];
   /** Version-claim corrections/drops made by grounding, for transparency. */
   groundingNotes?: string[];
 }): string {
+  const outcomeOf = (f: AuditFinding) => input.evidence?.[f.title];
+  const verified = input.findings.filter((f) => outcomeOf(f)?.verdict === 'SUPPORTED');
+  const contradicted = input.findings.filter((f) => outcomeOf(f)?.verdict === 'CONTRADICTED');
+  const judgment = input.findings.filter((f) => {
+    const v = outcomeOf(f)?.verdict;
+    return v !== 'SUPPORTED' && v !== 'CONTRADICTED';
+  });
+
+  const detail = (f: AuditFinding) => {
+    const o = outcomeOf(f);
+    const lines = [
+      `### ${f.severity} — ${f.title}`,
+      `_Raised by: ${f.raisedBy} · basis: ${f.basis} · paths: ${f.paths.join(', ')}_`,
+      '',
+      `- Claim: ${f.evidence}`,
+      `- Recommendation: ${f.recommendation || '(none)'}`,
+    ];
+    if (o) {
+      for (const c of o.checks) {
+        lines.push(`- Check: \`${c.command}\``);
+        lines.push(`  - Result: ${c.result}`);
+        if (c.needle) {
+          const q = encodeURIComponent(`repo:${input.target} ${c.needle}`);
+          lines.push(`  - Spot-check yourself: [search GitHub for \`${c.needle}\`](https://github.com/search?q=${q}&type=code)`);
+        }
+      }
+    }
+    return lines.join('\n');
+  };
+
   return [
     `# Company Read-only Audit: ${input.target}`,
     '',
@@ -148,9 +180,24 @@ export function renderAuditMarkdown(input: {
     `- Tracked files: ${input.fileCount}`,
     '- Write access used: no',
     '- Target code executed: no',
+    '',
+    '## Read this first',
+    `- Verified facts: **${input.evidenceSummary?.verified ?? 0}** — each backed by a machine check you can rerun.`,
+    `- Judgment calls: **${input.evidenceSummary?.judgment ?? input.findings.length}** — opinions, not facts. Read them; do not treat them as proven.`,
+    `- Withdrawn by evidence: **${input.evidenceSummary?.contradicted ?? 0}** — a check disproved these. Do not act on them.`,
+    '',
+    'Every finding below shows the exact check that was run and its raw result, so you can',
+    'confirm it without reading the code: click the spot-check link and look at the count.',
     ...(input.synthesis?.summary ? ['', '## Assessment', input.synthesis.summary] : []),
     ...(input.synthesis?.architecture ? ['', '## Architecture', input.synthesis.architecture] : []),
     '',
+    '## Verified facts',
+    ...(verified.length ? verified.flatMap((f) => [detail(f), '']) : ['- None.']),
+    '## Judgment calls (opinions, not proven)',
+    ...(judgment.length ? judgment.flatMap((f) => [detail(f), '']) : ['- None.']),
+    ...(contradicted.length
+      ? ['## Withdrawn by evidence (do not act on these)', ...contradicted.flatMap((f) => [detail(f), ''])]
+      : []),
     '## Audit bench (every agent)',
     ...input.employees.map((e) => `- ${e.title}: ${e.success ? `PASS via ${e.provider}/${e.model}` : `FAIL (${e.note})`}`),
     ...(input.verification?.length
@@ -163,13 +210,6 @@ export function renderAuditMarkdown(input: {
     ...(input.groundingNotes?.length
       ? ['', '## Version grounding (npm registry)', ...input.groundingNotes.map((n) => `- ${n}`)]
       : []),
-    '',
-    '## Findings',
-    ...(input.findings.length
-      ? input.findings.map(
-          (f) => `- **${f.severity} — ${f.title}** _(raised by: ${f.raisedBy})_\n  - Paths: ${f.paths.join(', ')} (${f.basis})\n  - Evidence: ${f.evidence}\n  - Recommendation: ${f.recommendation}`
-        )
-      : ['- No findings survived evidence validation.']),
     '',
     '## Guarantees',
     '- No target repository writes',
