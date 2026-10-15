@@ -17,7 +17,8 @@
     "forreyra": "tsx scripts/forreyra.ts",
     "forreyra:mcp": "tsx src/mcp/forreyra-server.ts",
     "company": "tsx scripts/company.ts",
-    "audit": "tsx scripts/audit.ts"
+    "audit": "tsx scripts/audit.ts",
+    "deliver": "tsx scripts/deliver.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

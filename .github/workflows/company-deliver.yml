@@ -1,0 +1,83 @@
+name: Forge Company Delivery
+
+# The software company audits a target repository, then *implements* the fix:
+# it clones the target at the audited commit, runs its own checks, pushes an
+# isolated `forge/` branch, and opens a pull request. It never merges and never
+# writes to the base branch.
+#
+# No extra secret is required for repositories this workflow's token can already
+# reach: the built-in GITHUB_TOKEN (contents + pull-requests: write) clones,
+# pushes, and opens the PR. Only a *different* owner's repository needs a PAT,
+# supplied as FORGE_DELIVER_TOKEN, which takes precedence when set.
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'Target repository in owner/repo format'
+        required: true
+        default: 'madnessgate44-debug/Amina'
+      goal:
+        description: 'What the company should change'
+        required: true
+        default: 'Fix the findings from the latest audit.'
+      attempts:
+        description: 'Independent attempts per work item'
+        required: true
+        default: '1'
+      audit:
+        description: 'Run the real audit first and deliver its findings (true/false)'
+        required: true
+        default: 'true'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  company-deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out the company
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the company delivery
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Prefer a PAT when one is configured (needed only for another owner's
+          # repo); otherwise fall back to the built-in token, which reaches this
+          # account's repositories and needs no setup.
+          GITHUB_TOKEN: ${{ secrets.FORGE_DELIVER_TOKEN || secrets.GITHUB_TOKEN }}
+          FORGE_DELIVER_ATTEMPTS: ${{ inputs.attempts }}
+          # Passed through env, never interpolated into the command line, so a
+          # goal containing shell metacharacters cannot inject a command.
+          TARGET_REPO: ${{ inputs.target_repo }}
+          GOAL: ${{ inputs.goal }}
+          # 'true' (default) audits first, so the report's "audited <target>"
+          # claim is true. 'false' delivers the typed goal, reported as not audited.
+          AUDIT_FLAG: ${{ inputs.audit == 'true' && '--audit' || '' }}
+        run: npx tsx scripts/deliver.ts $AUDIT_FLAG "$TARGET_REPO" "$GOAL"
+
+      - name: Upload the delivery report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: company-delivery
+          path: |
+            .firstborn/evidence/company-delivery.md
+            .firstborn/evidence/company-delivery.json
+            .firstborn/evidence/company-audit.md
+            .firstborn/evidence/company-audit.json
+          if-no-files-found: warn

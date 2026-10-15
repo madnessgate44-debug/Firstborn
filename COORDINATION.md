@@ -1097,6 +1097,7 @@ but the *run* was mediocre — roughly half its findings were confidently wrong.
 
 No secrets, tokens, or credentials appear in this entry.
 
+
 ---
 
 ### Entry: `OPENHANDS-EVIDENCE-LEDGER-20261015-03`
@@ -1148,5 +1149,196 @@ anyone can read ("0 matches → the claim is false").
 - The audit's own summary still miscounts severities (it said 4 HIGH/5 MEDIUM/3 LOW
   when the tally was 5/6/3/1). The new report computes its counts mechanically, but
   the prose summary remains a model paraphrase.
+
+No secrets, tokens, or credentials appear in this entry.
+
+
+---
+
+### Entry: `OPENHANDS-COMPANY-DELIVERY-20261015-04`
+
+#### Context
+Owner: "we need the software company to be as a real software company" — the
+company could audit but never *act*. An audit ending in a Markdown file is a
+report generator, not a company. This entry closes the loop.
+
+#### What shipped (branch `forge/company-deliver`, PR #94)
+- **`src/company/deliver.ts`** — `deliverChange()`:
+  1. clone the target **pinned at the audited commit**;
+  2. run the implementation team inside the clone (target's own test/lint only);
+  3. refuse to continue without a real, non-empty diff;
+  4. run the target's real checks; refuse to push if any fails;
+  5. commit, push a `forge/` branch, open a pull request.
+- **`src/company/repo-context.ts`** — read-only repo fetcher extracted from
+  `scripts/audit.ts` (importing the old script ran an audit as a side effect).
+- **`scripts/deliver.ts`** + `npm run deliver` — CLI, with a `--scripted` mode for
+  deterministic plumbing runs that need no model keys.
+- **`.github/workflows/company-deliver.yml`** — needs `FORGE_DELIVER_TOKEN`
+  (a PAT with `repo` scope; the built-in token cannot push cross-repo).
+
+#### Hard guarantees (in code, not convention)
+- branch must start with `forge/` and must not be the base branch;
+- no diff → BLOCKED; target declares no checks → BLOCKED; any check fails → BLOCKED;
+- never merges, never writes to the base branch; the token is redacted from output.
+
+#### Evidence (observed)
+- `npm test`: **220 passed / 0 failed** (was 214; +6). `tsc --noEmit`: clean.
+- `tests/deliver.test.ts` uses **real git against a real bare repository**:
+  the branch really lands on the remote, the base branch is untouched, a failing
+  target check blocks the push, a non-`forge/` branch is refused, a target with no
+  checks is refused, and an add-only change (which `git diff` alone would miss) is
+  detected.
+- **Live end-to-end run** (`--scripted`, this sandbox has no model keys):
+  `npx tsx scripts/deliver.ts --scripted madnessgate44-debug/Firstborn "..."`.
+  Real clone at `cd8f9eae`, real `npm ci`, the real **219-test** suite PASSED,
+  `tsc --noEmit` PASSED, branch `forge/deliver-cd8f9eae-mv9eqmb2` pushed, **PR #95**
+  opened. PR #95 and its branch were then closed/deleted as cleanup.
+- Two real bugs were found and fixed by that live run: `git diff` ignores untracked
+  files (a new-file change looked empty), and the `:(exclude)` pathspec aborted
+  `git add`; delivery now stages first and excludes `node_modules` via
+  `.git/info/exclude`.
+
+#### Honest gaps
+- The live run used the **scripted** roster. The **model** delivery path is unproven
+  end to end here because this sandbox has no provider keys (they are CI secrets);
+  it must be exercised via the workflow.
+- **Cross-repo delivery is unproven**: the `FORGE_DELIVER_TOKEN` secret is not set,
+  and this sandbox token cannot create repos. Delivery has only been proven against
+  the Firstborn repo itself.
+- Delivery runs one work item with the whole roster; turning a *list* of findings
+  into a set of work items is not wired yet.
+- The model panel's reliability gap (recorded in entry `-03`) still applies.
+
+#### Action needed from the owner
+1. Rotate the token that was embedded in this workspace's `git remote` (I removed
+   it and sanitized the URL, but it was exposed in terminal output).
+2. Confirm the scratch repository to use for the live cross-repo test.
+No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-DELIVER-SAFETY-20261015-05`
+
+#### Context
+PR #96 was a real, closed, unmerged delivery whose body reported install/test/lint
+PASSED — while its diff was `README.md +2/-239`, cut off mid-word. A truncated read
+was written back as a whole file. Root cause: `write_file` was the only mutation tool
+and overwrote whole files; nothing compared old and new content; the implementer
+instructions said "write_file with the corrected content".
+
+#### What shipped (branch `forge/company-deliver`, PR #94, commit `7d67d47`)
+- `edit_file` in `src/kernel/loop.ts`: exact-anchor replace. `old_str` must occur
+  exactly once; zero or multiple matches are refused. Returns lines added/removed.
+  Accepts `old_str`/`new_str` and `old_string`/`new_string`.
+- `write_file` now creates only. Overwriting an existing file returns
+  "File exists. Use edit_file." Mirrored in `src/company/role-tools.ts` and the
+  agent toolset `src/agent/tools.ts`.
+- Implementer sequence (`scripts/deliver.ts`) is read_file → edit_file with minimal
+  anchors → run_check "test" → finish, and says never retype a whole file.
+- Shrink guard in `src/company/deliver.ts`, run **before** the target's checks and
+  recorded under Checks as `shrink-guard`. Per file: `deletions > additions + 20`
+  AND `deletions > 30%` of the original line count AND `deletions > 30`. Total:
+  `deletions > 5x additions` AND `deletions > 50`. Thresholds are constants with a
+  `DeliveryOptions.thresholds` override.
+- Goal assertions: `DeliveryOptions.expect` (`file`, `addedLinesContain`,
+  `maxDeletions`, `maxAdditions`), CLI `--expect-file/--expect-contains/
+  --max-deletions/--max-additions`. An unmet assertion → BLOCKED.
+- Evidence gate: the implementer's `finish` is refused unless it really mutated a
+  file and ran `run_check "test"` successfully after the last mutation.
+- Report records the goal assertions and the known truncation gap.
+- `company-deliver.yml` passes inputs via `env:` (`TARGET_REPO`, `GOAL`), not shell
+  interpolation.
+
+#### Evidence (observed, run in this sandbox)
+- `npm run lint` (`tsc --noEmit`): exit 0. `npm run build` (vite): exit 0.
+- `npm test`: **227 passed / 0 failed** (was 220). `tests/deliver.test.ts`: 14/14.
+- Regression tests reproduce #96 with real git and a real bare repo: `write_file`
+  refuses to overwrite a 242-line README; an `edit_file` that deletes 240 lines is
+  BLOCKED by the shrink guard and no branch is pushed; a `maxDeletions:0` /
+  `maxAdditions:1` violation is BLOCKED.
+- **Live model run** (keyless free route, real clone at `cd8f9eae`), goal "add one
+  line to the top of README.md":
+  `npx tsx scripts/deliver.ts --expect-file README.md --expect-contains "Verified
+  by the Forge software company." --max-deletions 0 --max-additions 1 ...`
+  → COMPLETED, `README.md +1/-0`, **PR #99**
+  (`forge/deliver-cd8f9eae-mv9grn9c`). CI: Verification and Build Checks success;
+  Sentinel success after a re-run. PR #99 and its branch were then closed/deleted
+  as cleanup. A first attempt without `--max-additions` produced `+2/-0` (a stray
+  blank line) and was accepted — that is why `maxAdditions` was added.
+
+#### Honest gaps
+- Truncation is still undetectable: `ModelResult` (`src/company/model.ts`) exposes
+  no finish reason or token-limit signal. This is recorded in every delivery report
+  under "Known gaps". The shrink guard catches the *effect* of a truncated read, not
+  the truncation itself.
+- The Sentinel gate failed once on this branch on `MCP tools/call browser_query
+  answers in plain English` — a 30s timeout in a browser test unrelated to this
+  change (it passes locally in ~0.6s). Re-running the job passed. This looks flaky;
+  worth a retry or a longer timeout, but not fixed here.
+- Cross-repo delivery is still unproven (no `FORGE_DELIVER_TOKEN`; this sandbox
+  cannot create repos). Delivery is proven against Firstborn only.
+
+#### Action needed from the owner
+1. **Still open:** rotate the token embedded in this workspace's `git remote`
+   (removed and sanitized, but it was exposed in terminal output). Not handled here.
+2. Optionally set `FORGE_DELIVER_TOKEN` for cross-repo delivery.
+
+No secrets, tokens, or credentials appear in this entry.
+---
+
+### Entry: `OPENHANDS-AUDIT-DELIVER-INTEGRATION-20261015-06`
+
+#### Context
+Ahmed asked for the delivery path to stop *claiming* an audit it never ran, and
+for the audit system to actually drive a change. Two defects were confirmed in
+the live artifact `.firstborn/evidence/company-delivery.json` (run of the
+`--expect-contains ... --max-additions 1` proof): `findings: []`, and the PR body
+asserted "The Forge software company **audited** `...` and proposes this change."
+No audit ran — the goal was typed on the command line. That is the same class of
+overclaim as the earlier "+2/-0 reported as a clean single-line change".
+
+#### Changes
+- **`src/company/deliver.ts`.** New `audited` flag on `DeliveryOptions` /
+  `DeliveryResult` (default `false`). The report and the PR body now say
+  "audited ... to address its findings" only when `audited` is true; otherwise
+  they say the goal was supplied directly and no audit was run. New
+  `DeliveryExpectation.touchedAny`: the diff must include one of the finding's own
+  files, so a change that only adds a new file cannot be reported as fixing a
+  finding in an existing file. The assertion record is now carried into every
+  later outcome, so a run blocked by a failing check still reports what it was
+  trying to achieve (previously `expected` came back empty on that path).
+- **`scripts/deliver.ts`.** New `--audit` (and `--expect-touches`). With `--audit`
+  the CLI runs the real `runCompanyAudit`, writes `company-audit.{json,md}`,
+  delivers **one** bounded finding (highest severity first) rather than a
+  twelve-finding mega-goal, and auto-adds `touchedAny` = that finding's files. A
+  supplied goal still runs, but is reported honestly as not audit-driven.
+- **`.github/workflows/company-deliver.yml`.** New `audit` input (default
+  `true`), audit artifacts uploaded alongside the delivery report.
+
+#### Evidence (observed)
+- `npm run lint` (`tsc --noEmit`): exit 0. `npm test`: **231 passed / 0 failed**
+  (was 230; +1 net after replacing one test and adding `touchedAny` + honesty
+  cases). `npm run build`: exit 0.
+- **Live run 1** (unbounded goal, before the one-finding fix): audit COMPLETED,
+  12 findings, delivery BLOCKED — a twelve-finding goal produced no eligible
+  attempt. Correct behaviour, wrong task shape.
+- **Live run 2** (bounded, before `touchedAny`): audit COMPLETED, top HIGH finding
+  delivered, checks passed, **PR #100**. The body was honest ("audited ... to
+  address its findings"), **but the diff only added `src/container/ServiceContainer.ts`
+  and never touched `server.ts`** — so it did not fix the finding. PR #100 closed
+  and its branch deleted; this is the gap `touchedAny` closes.
+- **Live run 3** (bounded + `touchedAny`): audit COMPLETED, 12 findings, top HIGH
+  finding ("GitHub token exposed in client-side state", files `src/App.tsx`). The
+  change *did* touch `src/App.tsx`, and then the target's own **lint failed**, so
+  the run refused to push (`BLOCKED | check "lint" failed`). Safety layers working
+  in sequence: correct file, then the target's tests as the authority.
+
+#### Blockers / notes
+- The audit and the delivery each make their own model calls; with the keyless
+  free route a full run is slow (~5 minutes) and not fully deterministic. The
+  audit's own reliability work (registry grounding, adversarial panel) is tracked
+  in `OPENHANDS-AUDIT-ACCURACY-20261015-02`.
+- Still open: the keyed *coding* path (freelm routing); other registries (PyPI,
+  Go, Maven) are not grounded.
 
 No secrets, tokens, or credentials appear in this entry.

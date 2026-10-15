@@ -282,7 +282,7 @@ export function buildWorkspaceTools(options: WorkspaceToolsOptions): AgentTool[]
   if (allowMutation) {
     tools.push({
       name: 'write_file',
-      description: 'Create or overwrite a file in the workspace. Input: {"path":"...","content":"..."}. Mutating.',
+      description: 'Create a NEW file in the workspace. Input: {"path":"...","content":"..."}. Refuses to overwrite an existing file — use edit_file for that. Mutating.',
       mutating: true,
       run: async (input) => {
         const rel = typeof input.path === 'string' ? input.path : '';
@@ -290,12 +290,44 @@ export function buildWorkspaceTools(options: WorkspaceToolsOptions): AgentTool[]
         if (!rel) return { ok: false, output: 'write_file requires a "path".' };
         const abs = resolveInWorkspace(workspace, rel);
         if (!abs) return { ok: false, output: `Refusing to write outside the workspace: ${rel}` };
+        if (existsSync(abs)) return { ok: false, output: `File exists. Use edit_file.` };
         try {
           mkdirSync(path.dirname(abs), { recursive: true });
           writeFileSync(abs, content);
           return { ok: true, output: `Wrote ${content.length} byte(s) to ${rel}.` };
         } catch (err) {
           return { ok: false, output: `Write failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    });
+    tools.push({
+      name: 'edit_file',
+      description: 'Replace a unique snippet in an existing file. Input: {"path":"...","old_str":"...","new_str":"..."}. Prefer this over write_file for existing files. Mutating.',
+      mutating: true,
+      run: async (input) => {
+        const rel = typeof input.path === 'string' ? input.path : '';
+        // Accept both spellings: `old_str`/`new_str` (the tool's own schema) and
+        // `old_string`/`new_string`, so a model that has seen either form works.
+        const oldStr = typeof input.old_str === 'string' ? input.old_str : typeof input.old_string === 'string' ? input.old_string : '';
+        const newStr = typeof input.new_str === 'string' ? input.new_str : typeof input.new_string === 'string' ? input.new_string : '';
+        if (!rel) return { ok: false, output: 'edit_file requires a "path".' };
+        if (!oldStr) return { ok: false, output: 'edit_file requires a non-empty "old_str".' };
+        const abs = resolveInWorkspace(workspace, rel);
+        if (!abs) return { ok: false, output: `Refusing to edit outside the workspace: ${rel}` };
+        try {
+          if (!existsSync(abs)) return { ok: false, output: `No such file: ${rel} (use write_file to create a new file)` };
+          const current = readFileSync(abs, 'utf8');
+          const first = current.indexOf(oldStr);
+          if (first === -1) return { ok: false, output: `old_str not found in ${rel}. Read the file and copy the exact text.` };
+          if (current.indexOf(oldStr, first + oldStr.length) !== -1) return { ok: false, output: `old_str is not unique in ${rel}; include more surrounding context.` };
+          const updated = current.slice(0, first) + newStr + current.slice(first + oldStr.length);
+          writeFileSync(abs, updated);
+          const count = (s: string) => (s.match(/\n/g)?.length ?? 0) + (s.endsWith('\n') ? 0 : 1);
+          const removed = count(oldStr);
+          const added = count(newStr);
+          return { ok: true, output: `Edited ${rel}: -${removed} line(s), +${added} line(s).` };
+        } catch (err) {
+          return { ok: false, output: `Edit failed: ${err instanceof Error ? err.message : String(err)}` };
         }
       },
     });

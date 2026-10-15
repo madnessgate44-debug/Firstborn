@@ -88,8 +88,20 @@ Forge is the lead agent; the company is the org of roles it can run.
   - Verifiers receive the same file excerpts the lenses used and must judge only
     against them — a verifier may not invent versions or facts to dispute a
     finding (fixed in #90).
+- **Delivery** (`src/company/deliver.ts`): the company *acts* on an audit. Given a
+  target and a goal, `deliverChange` clones the target pinned at the audited commit,
+  runs the implementation team inside the clone, runs the target's own `test`/`lint`,
+  and opens a pull request on an isolated `forge/` branch. It refuses to push when
+  there is no diff, when the target declares no checks, or when any check fails; it
+  never merges and never writes to the base branch. Entry point:
+  `npm run deliver -- owner/repo "goal"` (add `--scripted` for a deterministic run
+  with no model keys). CI: `.github/workflows/company-deliver.yml`, which needs a
+  `FORGE_DELIVER_TOKEN` secret (a PAT with `repo` scope — the built-in token cannot
+  push across repositories).
 - **Entry points**: `npm run audit -- <owner/repo>` (read-only company audit),
-  `npm run company` (coding company), `scripts/audit.ts`, `scripts/company.ts`.
+  `npm run company` (coding company), `npm run deliver -- owner/repo "goal"`
+  (audit → verified PR), `scripts/audit.ts`, `scripts/company.ts`,
+  `scripts/deliver.ts`.
 - **CI**: `.github/workflows/company-audit.yml` dispatches a read-only company
   audit of any `owner/repo` using the repository's Groq/Gemini secrets.
 
