@@ -137,7 +137,7 @@ export function renderAuditMarkdown(input: {
   employees: { id: string; title: string; provider: string; model: string; success: boolean; note: string }[];
   findings: AuditFinding[];
   synthesis?: { summary: string; architecture: string };
-  verification?: { role: string; verdict: 'CONFIRM' | 'OBJECT'; reason: string }[];
+  verification?: { role: string; verdict: 'CONFIRM' | 'OBJECT' | 'UNVERIFIED'; reason: string }[];
   /** Version-claim corrections/drops made by grounding, for transparency. */
   groundingNotes?: string[];
 }): string {
@@ -154,7 +154,11 @@ export function renderAuditMarkdown(input: {
     '## Audit bench (every agent)',
     ...input.employees.map((e) => `- ${e.title}: ${e.success ? `PASS via ${e.provider}/${e.model}` : `FAIL (${e.note})`}`),
     ...(input.verification?.length
-      ? ['', '## Verification panel', ...input.verification.map((v) => `- ${v.role}: ${v.verdict === 'CONFIRM' ? 'CONFIRMED' : 'OBJECTED'} — ${v.reason}`)]
+      ? ['', '## Verification panel', ...input.verification.map((v) => {
+          const label = v.verdict === 'CONFIRM' ? 'CONFIRMED' : v.verdict === 'OBJECT' ? 'OBJECTED' : 'UNVERIFIED';
+          const reason = v.reason?.trim() ? ` — ${v.reason}` : v.verdict === 'UNVERIFIED' ? '' : ' — (no reason given)';
+          return `- ${v.role}: ${label}${reason}`;
+        })]
       : []),
     ...(input.groundingNotes?.length
       ? ['', '## Version grounding (npm registry)', ...input.groundingNotes.map((n) => `- ${n}`)]

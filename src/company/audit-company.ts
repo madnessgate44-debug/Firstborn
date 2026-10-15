@@ -186,8 +186,13 @@ Return compact JSON only: {"verdict":"CONFIRM"|"OBJECT","reason":"..."}`;
         prompt
       );
       recorder.note(result);
-      const verdict = String(value?.verdict ?? '').toUpperCase() === 'OBJECT' ? 'OBJECT' : 'CONFIRM';
-      const reason = String(value?.reason ?? value?.note ?? '').slice(0, 300);
+      const reason = String(value?.reason ?? value?.note ?? '').trim().slice(0, 300);
+      // A panel member that did not answer usefully is recorded as unverified, never
+      // as a confident CONFIRM — an empty verdict must not read as endorsement.
+      if (!value || (!reason && String(value?.verdict ?? '').toUpperCase() !== 'OBJECT')) {
+        return finish(`${name} verification`, { verdict: 'UNVERIFIED', reason: 'panel member returned no usable verdict' });
+      }
+      const verdict = String(value.verdict ?? '').toUpperCase() === 'OBJECT' ? 'OBJECT' : 'CONFIRM';
       return finish(`${name} verification`, { verdict, reason });
     },
   };
@@ -222,7 +227,7 @@ export interface CompanyAuditResult {
   employees: { id: string; title: string; provider: string; model: string; success: boolean; note: string }[];
   findings: AuditFinding[];
   synthesis: { summary: string; architecture: string };
-  verification: { role: string; verdict: 'CONFIRM' | 'OBJECT'; reason: string }[];
+  verification: { role: string; verdict: 'CONFIRM' | 'OBJECT' | 'UNVERIFIED'; reason: string }[];
   groundingNotes: string[];
   winners: string[];
   status: 'COMPLETED' | 'BLOCKED';
@@ -344,7 +349,11 @@ export async function runCompanyAudit(options: {
   const verification = phase2.bus
     .forScope('verify#1')
     .filter((a) => a.kind === 'note')
-    .map((a) => ({ role: a.author, verdict: (a.data?.verdict === 'OBJECT' ? 'OBJECT' : 'CONFIRM') as 'CONFIRM' | 'OBJECT', reason: String(a.data?.reason ?? a.data?.note ?? '') }));
+    .map((a) => {
+      const raw = String(a.data?.verdict ?? '').toUpperCase();
+      const verdict: 'CONFIRM' | 'OBJECT' | 'UNVERIFIED' = raw === 'OBJECT' ? 'OBJECT' : raw === 'CONFIRM' ? 'CONFIRM' : 'UNVERIFIED';
+      return { role: a.author, verdict, reason: String(a.data?.reason ?? a.data?.note ?? '') };
+    });
 
   const status: CompanyAuditResult['status'] = findings.length ? 'COMPLETED' : 'BLOCKED';
   const markdown = renderAuditMarkdown({

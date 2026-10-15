@@ -178,12 +178,32 @@ export class ModelService {
   async completeJson<T>(messages: ChatMessage[], fullPrompt: string): Promise<{ value: T | null; result: ModelResult }> {
     const result = await this.complete(messages, fullPrompt);
     if (!result.success || !result.text.trim()) return { value: null, result };
-    const cleaned = result.text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-    try {
-      return { value: JSON.parse(cleaned) as T, result };
-    } catch {
-      return { value: null, result };
+    const value = extractJson<T>(result.text);
+    return { value, result };
+  }
+}
+
+/**
+ * Parse a JSON object out of model text that may wrap it in fences or prose.
+ * Returns null when nothing parseable is present, so callers can tell "no answer"
+ * apart from a real answer instead of silently defaulting.
+ */
+export function extractJson<T>(text: string): T | null {
+  const cleaned = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    // Fall back to the first balanced {...} block (handles leading/trailing prose).
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1)) as T;
+      } catch {
+        return null;
+      }
     }
+    return null;
   }
 }
 

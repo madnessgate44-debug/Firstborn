@@ -168,3 +168,19 @@ test('company audit: the rubric makes citations mandatory and the plan is one it
   assert.ok(mandatory.includes('completed'));
   assert.equal(auditPlan()(ctx.target).length, DEFAULT_AUDIT_BENCH.length);
 });
+
+test('company audit: a panel member that returns nothing usable is UNVERIFIED, never a silent CONFIRM', async () => {
+  const model = fakeModel({
+    '[role:lens:arch]': { summary: 'a', findings: [{ severity: 'LOW', title: 'God module', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'split' }] },
+    '[role:lens:sec]': { summary: 's', findings: [{ severity: 'HIGH', title: 'Client key', paths: ['src/App.tsx'], basis: 'inferred', evidence: 'e', recommendation: 'proxy' }] },
+    '[role:lens:quality]': { summary: 'q', findings: [{ severity: 'LOW', title: 'Real q', paths: ['package.json'], basis: 'observed', evidence: 'e', recommendation: 'x' }] },
+    '[role:lens:config]': { summary: 'c', findings: [{ severity: 'INFO', title: 'Real c', paths: ['package.json'], basis: 'observed', evidence: 'e', recommendation: 'x' }] },
+    '[role:forge-lead]': { summary: 's', architecture: 'a' },
+    // The Reviewer answers with an empty object — the old code read that as CONFIRM.
+    '[role:verify:Reviewer]': {},
+  });
+  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry });
+  const reviewer = result.verification.find((v) => v.role === 'Reviewer')!;
+  assert.equal(reviewer.verdict, 'UNVERIFIED');
+  assert.doesNotMatch(result.markdown, /Reviewer: CONFIRMED/);
+});
