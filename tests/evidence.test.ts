@@ -9,6 +9,8 @@ import {
   isLockfileClaim,
   isApiKeyStatusClaim,
   isLegacyPeerDepsClaim,
+  isUndefinedIdentifierClaim,
+  findUndefinedIdentifiers,
   verifyFinding,
   type EvidenceOutcome,
 } from '../src/company/evidence.ts';
@@ -126,6 +128,57 @@ test('evidence: claim detectors fire on the right words', () => {
   assert.ok(!isLockfileClaim('business logic in the entrypoint'));
   assert.ok(isApiKeyStatusClaim('Exposed API Key Status in Health Check hasApiKey'));
   assert.ok(isLegacyPeerDepsClaim('CI uses --legacy-peer-deps'));
+  assert.ok(isUndefinedIdentifierClaim('calls an undefined identifier'));
+  assert.ok(isUndefinedIdentifierClaim('throws a ReferenceError at runtime'));
+  assert.ok(!isUndefinedIdentifierClaim('business logic in the entrypoint'));
+});
+
+test('evidence: an undefined-identifier scan finds a call to a name declared nowhere', () => {
+  const hits = findUndefinedIdentifiers({
+    'src/x.tsx': "import { useState } from 'react';\nexport function X() {\n  const [n] = useState(0);\n  return <b onClick={() => setActiveStageLessonId('a')}>{n}</b>;\n}\n",
+  });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].name, 'setActiveStageLessonId');
+  assert.equal(hits[0].line, 4);
+});
+
+test('evidence: the scan ignores comments, strings, JSX text, globals, and definitions', () => {
+  const hits = findUndefinedIdentifiers({
+    'src/y.tsx': [
+      "import React from 'react';",
+      "// Vocab (1) is a comment, not a call",
+      "const msg = 'All Subjects (5) and Vocab (2)';",
+      "export class S {",
+      "  public startListening(a: string): void {}",
+      "}",
+      "export function ok() { console.log(msg, new Date()); }",
+    ].join('\n'),
+  });
+  assert.deepEqual(hits, []);
+});
+
+test('evidence: an undefined-identifier claim is CONFIRMED against a real bad call', () => {
+  const corpus = parseTarGz(tarGz({
+    'src/bad.tsx': "export const b = () => setActiveStageLessonId('lesson-1');\n",
+  }));
+  const out = verifyFinding(
+    { title: 'Undefined identifier crashes the lesson handoff', evidence: 'calls setActiveStageLessonId which is not defined in this file', recommendation: 'define or import it', paths: ['src/bad.tsx'] },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
+  assert.match(out.checks.find((c) => c.claim.includes('never declared'))!.result, /setActiveStageLessonId\(/);
+});
+
+test('evidence: an undefined-identifier claim is CONTRADICTED when every call resolves', () => {
+  const corpus = parseTarGz(tarGz(FILES));
+  const out = verifyFinding(
+    { title: 'Undefined identifier in the app', evidence: 'an undefined identifier is called', recommendation: '', paths: ['src/App.tsx'] },
+    corpus,
+    3
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks.find((c) => c.claim.includes('never declared'))!.result, /0 suspect calls/);
 });
 
 test('evidence: a missing-lockfile claim is CONFIRMED when no lockfile exists', () => {
