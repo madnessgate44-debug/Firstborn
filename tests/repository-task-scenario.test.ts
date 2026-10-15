@@ -56,7 +56,7 @@ test('repository task: Forge completes a bounded inspect-edit-test-verify missio
     assert.match(observations[2].output, /old-message/);
     assert.match(observations[3].output, /Applied 1 edit/);
     assert.match(observations[4].output, /exit=0 status=PASSED/);
-    assert.match(observations[4].output, /# pass 1/);
+    assert.match(observations[4].output, /pass 1\b/);
     assert.match(observations[5].output, /new-message/);
     assert.equal(readFileSync(path.join(workspace, 'src', 'message.js'), 'utf8'), "export const message = 'new-message';\n");
   } finally {
