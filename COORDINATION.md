@@ -968,3 +968,64 @@ No secrets, tokens, or credentials appear in this entry.
   the query layer is deliberately model-free and works regardless.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-COMPANY-UNIFY-20261015-01`
+- **Timestamp (UTC)**: 2026-10-15T08:05:00Z
+- **Author**: OPENHANDS
+- **Directed To**: CHATGPT / GEMINI / Ahmed
+- **Type**: REPORT
+- **Subject**: Forge and the software company are now ONE thing on `main`; the whole company audits Amina.
+
+#### What changed
+- **Merged the company into `main` (PR #89, `daf0df0`).** Forge and the company
+  were two trees — the agent on `main`, the company on an orphan `company/main`
+  branch. The company now lives beside Forge: `src/kernel/` (hardened loop) and
+  `src/company/` (roles, teams, competition, judge, bus, role-tools, audit),
+  plus `scripts/company.ts`, `scripts/audit.ts`. The company's tests were renamed
+  (`tests/company*.test.ts`) so they do not collide with Forge's.
+- **The audit is a real company run, not a side script.** `runCompanyAudit`
+  (`src/company/audit-company.ts`) runs two phases through the company engine:
+  - Phase 1 — four audit lenses (Architecture, Security, Quality, Configuration)
+    compete as work items. The judge has a **mandatory** rule: every finding must
+    cite a path that exists in the repository, so an attempt that invents a path
+    cannot win.
+  - Phase 2 — Forge (the lead) synthesizes the integrated findings, then the
+    verification panel (Reviewer, QA, Security, Release) independently checks the
+    report and raises objections, which the report keeps.
+- **Grounding fix (PR #90, `6358956`).** The first live run exposed a real bug:
+  the verification panel *fabricated evidence* — it objected that Amina's
+  `package.json` "shows typescript 5.x, not 7.0.2", but Amina genuinely declares
+  `typescript@^7.0.2`. The verifiers had only the finding JSON and a file list.
+  Now Forge's synthesis and every verifier receive the same file excerpts the
+  lenses used, clearly delimited as untrusted data, with explicit rules (judge
+  only against the excerpts; never invent versions or facts; do not call a finding
+  wrong unless the excerpts disprove it). The verdict is an explicit
+  `CONFIRM | OBJECT` enum with a capped reason, not an ambiguous boolean.
+- **Workflow.** `.github/workflows/company-audit.yml` (on `main`) dispatches a
+  read-only company audit of any `owner/repo` using the repository's Groq/Gemini
+  secrets. Read-only: no target writes, no target code executed.
+
+#### Evidence
+- `npm test`: **187 passed / 0 failed** (Forge's 142 + the company's 45).
+  `npm run lint` (`tsc --noEmit`) and `npm run build`: clean.
+- **Live company audit of `madnessgate44-debug/Amina`** from `main`
+  (run `38702455638`, commit `16ddf374`): all nine agents participated (4 lenses +
+  Forge + 4 verifiers). 14 validated findings, every cited path real. Realistic
+  and correct, e.g. `typescript@^7.0.2` and `vite@^8.3.0` flagged as invalid
+  versions, `GEMINI_API_KEY` handling flagged in `server.ts`, missing lockfile,
+  `/api/chat` unvalidated input. The panel split 2 OBJECT / 2 CONFIRM — the
+  objections were substantive (a test-coverage claim the inventory partly
+  contradicts; a lockfile claim grounded in inference), not invented facts.
+- Earlier runs: `38696284447` (company/main), `38699050608` (grounding fix).
+
+#### Blockers / notes
+- `GROQ_API_KEY` / `GEMINI_API_KEY` are only available in GitHub Actions secrets;
+  the live runs above are the keyed path. The local environment is keyless.
+- One PR `verify` run (`38699468302`) hung at "Run Tests" on a dead runner while
+  the identical commit's push run (`38699041312`) passed in 47s. Infra, not code.
+- Still open (separate task): the keyed *coding* path — freelm routing and an
+  edit-anchor bug — is tracked outside this entry.
+
+No secrets, tokens, or credentials appear in this entry.
