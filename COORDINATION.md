@@ -1342,3 +1342,53 @@ overclaim as the earlier "+2/-0 reported as a clean single-line change".
   Go, Maven) are not grounded.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-AUDIT-LIVE-MISSION-20261015-07`
+
+#### Context
+Ahmed authorised completing the work end-to-end. Rather than more guardrail
+tuning, this entry records a **live company mission** on a real repository and
+what it proved about the system as a whole.
+
+#### What ran
+- `company-deliver` was dispatched on `main` against `madnessgate44-debug/Firstborn`
+  with `--audit` and **real keys** (Groq/Gemini secrets present in CI). This was the
+  workflow's first-ever dispatch.
+- **Run 1** (`38735405323`, base `78115a6`): the workflow supplied a non-empty
+  default goal (`Fix the findings from the latest audit.`), which made `--audit`
+  fall through to goal-mode → BLOCKED ("no eligible attempt"). The report also
+  listed the audit findings under a `NOT audited` source. Two real defects.
+- **Fix** (PR #101, merged `d9d805a`): the workflow's `goal` input now defaults to
+  empty so `--audit` picks the top finding; when a goal *is* supplied during
+  `--audit`, the CLI drops the findings from the delivery report (they stay in
+  `company-audit.json`) so nothing is listed under a `NOT audited` label.
+- **Run 2** (`38737195510`, base `d9d805a`): audit COMPLETED, 7 findings, top HIGH
+  finding delivered, every check passed, **PR #102** opened.
+
+#### Result: PR #102 (merged `89b1da8`)
+- Audit finding: *Sensitive Environment Variable Exposure* — `/api/health` returned
+  `hasGeminiKey`, letting an attacker confirm a credential exists. Files: `server.ts`.
+- Delivered diff: **exactly one line removed** from `server.ts`:
+  `- hasGeminiKey: !!process.env.GEMINI_API_KEY && ...`
+- Checks: install, baseline:test, baseline:lint, shrink-guard, `expect`
+  (`touchedAny=[server.ts]` MET), test, lint — all PASSED.
+- The report was honest: *"Source: an audit of this target"*, and the PR named the
+  finding it fixed and touched the file the finding named.
+
+This is the first run where an audit finding became a correct, verified, merged
+change with no overclaiming.
+
+#### Verification
+- `npm run lint` (`tsc --noEmit`): 0. `npm test`: **231/231**. `npm run build`: 0.
+- CI on PR #101 and PR #102: `sentinel` + `verify` (x2) all success.
+
+#### Blockers / notes
+- Cross-repo delivery (e.g. `madnessgate44-debug/Amina`) still needs a
+  `FORGE_DELIVER_TOKEN` PAT; the built-in token only reaches this repository. The
+  same-owner run above is the honest proof that works today without new secrets.
+- The keyless local path remains slow (~5 min) and non-deterministic; the CI path
+  with real keys is the reliable one.
+
+No secrets, tokens, or credentials appear in this entry.
