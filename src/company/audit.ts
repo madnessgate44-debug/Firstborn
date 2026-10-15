@@ -36,7 +36,7 @@ export interface AuditEmployee {
 export const DEFAULT_AUDIT_BENCH: AuditEmployee[] = [
   { id: 'arch', title: 'Architecture Auditor', mandate: 'Judge the structure: layering, coupling, entrypoints, and dead or duplicated modules.' },
   { id: 'sec', title: 'Security Auditor', mandate: 'Find real security risks: secret handling, untrusted input, unsafe server routes, and exposed client keys.' },
-  { id: 'quality', title: 'Quality Auditor', mandate: 'Judge tests and build health: coverage gaps, missing lockfiles, invalid dependency versions, and CI holes.' },
+  { id: 'quality', title: 'Quality Auditor', mandate: 'Judge tests and build health: coverage gaps, missing lockfiles, broken CI, and dependency ranges that do not resolve.' },
   { id: 'config', title: 'Configuration Auditor', mandate: 'Judge configuration: environment validation, TypeScript/build settings, and deployment configuration.' },
 ];
 
@@ -56,6 +56,7 @@ Rules:
 - Report only findings that fall under your mandate, most severe first.
 - Every finding MUST cite at least one "path" that appears EXACTLY in the inventory. Never invent paths.
 - Mark "basis" as "observed" when an excerpt directly supports it, or "inferred" when it is a conclusion from structure alone.
+- Do NOT judge whether a dependency version is "outdated", "latest", or "vulnerable": your knowledge of current releases is unreliable. Only report a version problem when the declared range cannot resolve against the real npm registry; the company checks that separately.
 - Return JSON: {"summary":"...","findings":[{"severity":"HIGH|MEDIUM|LOW|INFO","title":"...","paths":["existing/path"],"basis":"observed|inferred","evidence":"...","recommendation":"..."}]}
 - Return at most 6 findings. Return compact valid JSON only, no markdown.
 Repository inventory (${input.files.length} tracked files):
@@ -136,7 +137,9 @@ export function renderAuditMarkdown(input: {
   employees: { id: string; title: string; provider: string; model: string; success: boolean; note: string }[];
   findings: AuditFinding[];
   synthesis?: { summary: string; architecture: string };
-  verification?: { role: string; verdict: 'CONFIRM' | 'OBJECT'; reason: string }[];
+  verification?: { role: string; verdict: 'CONFIRM' | 'OBJECT' | 'UNVERIFIED'; reason: string }[];
+  /** Version-claim corrections/drops made by grounding, for transparency. */
+  groundingNotes?: string[];
 }): string {
   return [
     `# Company Read-only Audit: ${input.target}`,
@@ -151,7 +154,14 @@ export function renderAuditMarkdown(input: {
     '## Audit bench (every agent)',
     ...input.employees.map((e) => `- ${e.title}: ${e.success ? `PASS via ${e.provider}/${e.model}` : `FAIL (${e.note})`}`),
     ...(input.verification?.length
-      ? ['', '## Verification panel', ...input.verification.map((v) => `- ${v.role}: ${v.verdict === 'CONFIRM' ? 'CONFIRMED' : 'OBJECTED'} — ${v.reason}`)]
+      ? ['', '## Verification panel', ...input.verification.map((v) => {
+          const label = v.verdict === 'CONFIRM' ? 'CONFIRMED' : v.verdict === 'OBJECT' ? 'OBJECTED' : 'UNVERIFIED';
+          const reason = v.reason?.trim() ? ` — ${v.reason}` : v.verdict === 'UNVERIFIED' ? '' : ' — (no reason given)';
+          return `- ${v.role}: ${label}${reason}`;
+        })]
+      : []),
+    ...(input.groundingNotes?.length
+      ? ['', '## Version grounding (npm registry)', ...input.groundingNotes.map((n) => `- ${n}`)]
       : []),
     '',
     '## Findings',

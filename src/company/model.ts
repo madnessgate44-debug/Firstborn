@@ -79,17 +79,20 @@ export class ModelService {
   /**
    * Route a prompt exactly as Forge does: discover the finest free route, try the
    * strongest alias first, degrade on failure, then fall back to Gemini only when
-   * a key is present and keyless-only is off.
+   * a key is present and keyless-only is off. Anonymous keyless endpoints are used
+   * only when no provider key is configured, so the audit does not silently degrade
+   * to the weakest model when real keys are available.
    */
   async complete(messages: ChatMessage[], fullPrompt: string): Promise<ModelResult> {
     const routeErrors: string[] = [];
     let invokedProvider = 'freelm free-tier router';
     let invokedModel = 'chat';
     const timeoutMs = options_timeout(this.env, 40000);
+    const hasProviderKeys = CREDENTIAL_ENV_NAMES.some((n) => (this.env[n] ?? '').trim());
 
     try {
       const llm = FreeLLM.fromEnv({
-        keyless: true,
+        keyless: hasProviderKeys ? 'auto' : true,
         maxAttempts: 12,
         timeout: 35,
         hedge: true,
@@ -175,12 +178,32 @@ export class ModelService {
   async completeJson<T>(messages: ChatMessage[], fullPrompt: string): Promise<{ value: T | null; result: ModelResult }> {
     const result = await this.complete(messages, fullPrompt);
     if (!result.success || !result.text.trim()) return { value: null, result };
-    const cleaned = result.text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-    try {
-      return { value: JSON.parse(cleaned) as T, result };
-    } catch {
-      return { value: null, result };
+    const value = extractJson<T>(result.text);
+    return { value, result };
+  }
+}
+
+/**
+ * Parse a JSON object out of model text that may wrap it in fences or prose.
+ * Returns null when nothing parseable is present, so callers can tell "no answer"
+ * apart from a real answer instead of silently defaulting.
+ */
+export function extractJson<T>(text: string): T | null {
+  const cleaned = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    // Fall back to the first balanced {...} block (handles leading/trailing prose).
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1)) as T;
+      } catch {
+        return null;
+      }
     }
+    return null;
   }
 }
 

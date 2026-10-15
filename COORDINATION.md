@@ -1029,3 +1029,70 @@ No secrets, tokens, or credentials appear in this entry.
   edit-anchor bug — is tracked outside this entry.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-AUDIT-ACCURACY-20261015-02`
+
+#### Context
+Follow-up to `OPENHANDS-COMPANY-UNIFY-20261015-01`. The owner asked whether the
+Amina audit was a real audit or one that pretends to be one. The independent
+verdict: the *machine* is real (real repo fetch, real competition, real judge),
+but the *run* was mediocre — roughly half its findings were confidently wrong.
+
+#### Defects found (with evidence)
+- **Stale-model version hallucinations.** Six findings claimed Amina's
+  dependencies were "invalid/outdated": `typescript@^7.0.2`, `vite@^8.3.0`,
+  `dotenv@^17.2.3`. Checked against the live npm registry: `typescript` latest is
+  **7.0.2**, `vite` latest is **8.3.4**, `dotenv` latest is **18.0.8**. The model
+  believed 5.x was current. (This corrected my own earlier, overstated claim that
+  the run "fell back to the keyless model" — that string is a static label, not a
+  record of the route; see the fix below.)
+- **The one true fact was missed.** `vite@^8.3.0` resolves only to the
+  prerelease `8.3.0-beta.1`, so `npm install` cannot resolve it. The audit called
+  it "outdated" (false) instead of "does not resolve" (true).
+- **A rubber-stamp panel.** The verification panel was confirm-by-default; it
+  caught 1 of 6 bad findings, one verifier defended a false negative, two
+  confirmed everything. A later run recorded all four as CONFIRMED with *empty
+  reasons* — a JSON parse failure silently defaulting to CONFIRM.
+
+#### Fixes (branch `forge/audit-accuracy`)
+- **`src/company/registry.ts` (new).** Resolves dependency versions from the real
+  npm registry. `groundFindings` drops any finding whose version claim the
+  registry contradicts, keeps a genuinely-unresolvable range with the resolved
+  fact, and settles "missing lockfile" claims against the inventory. Pure semver
+  logic (`satisfiesRange`, `compareVersions`) plus one network call.
+- **Adversarial panel.** The verifier prompt now defaults to OBJECT unless the
+  excerpts positively support a finding. A panel member that returns no usable
+  verdict is recorded as **UNVERIFIED**, never a silent CONFIRM, and the report
+  renders the three states distinctly.
+- **Provable routing.** The report now records the real provider/model that
+  answered each agent. `freelm` only adds anonymous keyless endpoints when no
+  provider key is configured, so the audit no longer silently degrades to the
+  weakest model when keys exist.
+- **Robust JSON.** `extractJson` tolerates fenced/prose-wrapped model output
+  instead of failing to parse and defaulting.
+
+#### Evidence (observed)
+- `npm test`: **201 passed / 0 failed** (was 187; +14 for grounding, honest
+  verdicts, and JSON extraction). `npm run lint` (`tsc --noEmit`): clean.
+- **Live rerun** `company-audit.yml` run `38711976739` on `forge/audit-accuracy`
+  (commit `16ddf374`), attempts=2. Result: 4 HIGH / 5 MEDIUM / 3 LOW / 1 INFO,
+  every cited path real, status COMPLETED.
+  - Providers actually recorded: three lenses via `Google AI Studio /
+    gemini-2.5-flash`, one via `google/gemini-3.1-flash-lite`.
+  - Version grounding dropped 2 false claims and published the real latest
+    versions. The false "outdated typescript/dotenv" findings are gone.
+  - Panel now substantive: 3 CONFIRMED with reasons, 1 **UNVERIFIED** (honest).
+- Superseded run `38710550394` (first fix, before the UNVERIFIED change) also
+  produced a clean, correct report; both artifacts retained.
+
+#### Blockers / notes
+- Registry grounding uses `registry.npmjs.org` only; other ecosystems
+  (PyPI, Go, Maven) are not yet grounded.
+- The panel remains a *language-model* check; grounding is the deterministic
+  backstop for the failure mode that actually occurred (version hallucination).
+- Still open (separate task): the keyed *coding* path — freelm routing and the
+  edit-anchor bug — tracked outside this entry.
+
+No secrets, tokens, or credentials appear in this entry.

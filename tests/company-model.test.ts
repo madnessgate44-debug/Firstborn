@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelService, isKeylessOnly, CREDENTIAL_ENV_NAMES, type ChatMessage } from '../src/company/model.ts';
+import { ModelService, isKeylessOnly, CREDENTIAL_ENV_NAMES, extractJson, type ChatMessage } from '../src/company/model.ts';
 import { guardRepeatedReadOnly, buildRolePrompt, modelBrain } from '../src/company/brains.ts';
 import type { AgentBrainState } from '../src/kernel/loop.ts';
 
@@ -74,4 +74,12 @@ test('a model brain parses a valid action and guards repeats', async () => {
 test('ChatMessage type is usable for a system+user pair', () => {
   const messages: ChatMessage[] = [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }];
   assert.equal(messages.length, 2);
+});
+
+test('extractJson parses fenced and prose-wrapped JSON, and returns null on garbage', () => {
+  assert.deepEqual(extractJson<{ a: number }>('{"a":1}'), { a: 1 });
+  assert.deepEqual(extractJson<{ a: number }>('```json\n{"a":2}\n```'), { a: 2 });
+  assert.deepEqual(extractJson<{ a: number }>('Here is my answer: {"a":3} — done.'), { a: 3 });
+  assert.equal(extractJson('no json here'), null);
+  assert.equal(extractJson(''), null);
 });
