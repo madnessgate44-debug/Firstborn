@@ -20,7 +20,10 @@ let buffer = '';
 function rpc(method: string, params: unknown = {}): Promise<any> {
   const id = nextId++;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${method}`)), 30_000);
+    // Chromium's first launch on a contended CI runner can exceed the old 30s
+    // budget (a following call took 12s). The timeout must not be the thing
+    // that fails a correct run, so give cold start generous headroom.
+    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${method}`)), 90_000);
     pending.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
   });
@@ -39,7 +42,10 @@ test.before(async () => {
   const addr = http.address();
   base = typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '';
 
-  child = spawn('npx', ['tsx', 'src/mcp/forreyra-server.ts'], { cwd: process.cwd() });
+  child = spawn('npx', ['tsx', 'src/mcp/forreyra-server.ts'], {
+    cwd: process.cwd(),
+    detached: process.platform !== 'win32',
+  });
   child.stdout.on('data', (chunk: Buffer) => {
     buffer += chunk.toString();
     let nl: number;
@@ -62,7 +68,17 @@ test.before(async () => {
 });
 
 test.after(() => {
-  child?.kill();
+  // Kill the whole process group, not just `npx`: tsx and the Chromium it
+  // launched are grandchildren. If any survives, it holds this process's stdio
+  // pipe open and the test runner never exits — the intermittent CI hang where
+  // `Run Tests` stalls forever. The group kill (as startup.test.ts does) reaps
+  // every descendant.
+  try {
+    if (process.platform !== 'win32' && child?.pid) process.kill(-child.pid, 'SIGKILL');
+    else child?.kill('SIGKILL');
+  } catch {
+    /* already exited */
+  }
   http?.close();
 });
 
