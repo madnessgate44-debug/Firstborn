@@ -136,7 +136,7 @@ export function renderAuditMarkdown(input: {
   employees: { id: string; title: string; provider: string; model: string; success: boolean; note: string }[];
   findings: AuditFinding[];
   synthesis?: { summary: string; architecture: string };
-  verification?: { role: string; ok: boolean; note: string }[];
+  verification?: { role: string; verdict: 'CONFIRM' | 'OBJECT'; reason: string }[];
 }): string {
   return [
     `# Company Read-only Audit: ${input.target}`,
@@ -151,7 +151,7 @@ export function renderAuditMarkdown(input: {
     '## Audit bench (every agent)',
     ...input.employees.map((e) => `- ${e.title}: ${e.success ? `PASS via ${e.provider}/${e.model}` : `FAIL (${e.note})`}`),
     ...(input.verification?.length
-      ? ['', '## Verification panel', ...input.verification.map((v) => `- ${v.role}: ${v.ok ? 'CONFIRMED' : 'OBJECTED'} — ${v.note}`)]
+      ? ['', '## Verification panel', ...input.verification.map((v) => `- ${v.role}: ${v.verdict === 'CONFIRM' ? 'CONFIRMED' : 'OBJECTED'} — ${v.reason}`)]
       : []),
     '',
     '## Findings',
