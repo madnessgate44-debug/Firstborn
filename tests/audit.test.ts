@@ -84,7 +84,7 @@ test('audit core: markdown renders the assessment, bench, panel, and findings', 
     employees: [{ id: 'sec', title: 'Security Auditor', provider: 'p', model: 'm', success: true, note: '' }],
     findings: [{ severity: 'HIGH', title: 'X', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'r', raisedBy: 'Security Auditor' }],
     synthesis: { summary: 'looks risky', architecture: 'a server and a client' },
-    verification: [{ role: 'Reviewer', ok: true, note: 'paths check out' }],
+    verification: [{ role: 'Reviewer', verdict: 'CONFIRM', reason: 'paths check out' }],
   });
   assert.match(md, /# Company Read-only Audit: o\/r/);
   assert.match(md, /## Assessment/);
@@ -101,10 +101,10 @@ test('company audit: the whole company runs — lenses compete, Forge synthesize
     '[role:lens:quality]': { summary: 'q', findings: [{ severity: 'LOW', title: 'No lockfile', paths: ['package.json'], basis: 'observed', evidence: 'e', recommendation: 'commit' }] },
     '[role:lens:config]': { summary: 'c', findings: [{ severity: 'INFO', title: 'No env validation', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'validate' }] },
     '[role:forge-lead]': { summary: 'Overall risky', architecture: 'A server and a client.' },
-    '[role:verify:Reviewer]': { ok: true, note: 'paths check out' },
-    '[role:verify:QA Engineer]': { ok: true, note: 'findings are concrete' },
-    '[role:verify:Security Engineer]': { ok: false, note: 'one risk understated' },
-    '[role:verify:Release Engineer]': { ok: true, note: 'fit to hand over' },
+    '[role:verify:Reviewer]': { verdict: 'CONFIRM', reason: 'paths check out' },
+    '[role:verify:QA Engineer]': { verdict: 'CONFIRM', reason: 'findings are concrete' },
+    '[role:verify:Security Engineer]': { verdict: 'OBJECT', reason: 'one risk understated' },
+    '[role:verify:Release Engineer]': { verdict: 'CONFIRM', reason: 'fit to hand over' },
   });
   const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 2 });
   assert.equal(result.status, 'COMPLETED');
@@ -113,7 +113,7 @@ test('company audit: the whole company runs — lenses compete, Forge synthesize
   assert.equal(result.synthesis.summary, 'Overall risky');
   assert.equal(result.synthesis.architecture, 'A server and a client.');
   assert.equal(result.verification.length, VERIFY_PANEL.length);
-  assert.ok(result.verification.some((v) => v.role === 'Security Engineer' && v.ok === false));
+  assert.ok(result.verification.some((v) => v.role === "Security Engineer" && v.verdict === "OBJECT"));
   assert.match(result.markdown, /## Verification panel/);
 });
 
@@ -124,7 +124,7 @@ test('company audit: an attempt that invents a path cannot win', async () => {
     '[role:lens:quality]': { summary: 'q', findings: [{ severity: 'LOW', title: 'Real q', paths: ['package.json'], basis: 'observed', evidence: 'e', recommendation: 'x' }] },
     '[role:lens:config]': { summary: 'c', findings: [{ severity: 'INFO', title: 'Real c', paths: ['package.json'], basis: 'observed', evidence: 'e', recommendation: 'x' }] },
     '[role:forge-lead]': { summary: 's', architecture: 'a' },
-    '[role:verify:Reviewer]': { ok: true, note: 'ok' },
+    '[role:verify:Reviewer]': { verdict: 'CONFIRM', reason: 'ok' },
   });
   const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1 });
   // The architecture item has no eligible attempt, so the whole run is blocked.
