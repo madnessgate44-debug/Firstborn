@@ -10,6 +10,10 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # The suite drives a real headless Chromium, which can occasionally stall.
+    # Without a bound a stalled `Run Tests` blocks every PR for up to the 6-hour
+    # default. Fail fast instead.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

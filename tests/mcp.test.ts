@@ -39,7 +39,10 @@ test.before(async () => {
   const addr = http.address();
   base = typeof addr === 'object' && addr ? `http://127.0.0.1:${addr.port}` : '';
 
-  child = spawn('npx', ['tsx', 'src/mcp/forreyra-server.ts'], { cwd: process.cwd() });
+  child = spawn('npx', ['tsx', 'src/mcp/forreyra-server.ts'], {
+    cwd: process.cwd(),
+    detached: process.platform !== 'win32',
+  });
   child.stdout.on('data', (chunk: Buffer) => {
     buffer += chunk.toString();
     let nl: number;
@@ -62,7 +65,17 @@ test.before(async () => {
 });
 
 test.after(() => {
-  child?.kill();
+  // Kill the whole process group, not just `npx`: tsx and the Chromium it
+  // launched are grandchildren. If any survives, it holds this process's stdio
+  // pipe open and the test runner never exits — the intermittent CI hang where
+  // `Run Tests` stalls forever. The group kill (as startup.test.ts does) reaps
+  // every descendant.
+  try {
+    if (process.platform !== 'win32' && child?.pid) process.kill(-child.pid, 'SIGKILL');
+    else child?.kill('SIGKILL');
+  } catch {
+    /* already exited */
+  }
   http?.close();
 });
 
