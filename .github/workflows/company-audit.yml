@@ -26,7 +26,7 @@ jobs:
       - name: Check out the company
         uses: actions/checkout@v4
         with:
-          ref: company
+          ref: company/main
           persist-credentials: false
 
       - name: Set up Node
