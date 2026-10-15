@@ -2,7 +2,8 @@ name: Forge Company Audit
 
 # The software company performs a read-only audit of a target repository.
 # Forge and the company are one thing, living together on `main`.
-# Read-only: no target writes, no target code executed.
+# Read-only by default: no target writes, no target code executed. Optional runtime
+# verification (off by default) clones the target and runs its checks in a scratch dir.
 on:
   workflow_dispatch:
     inputs:
@@ -14,6 +15,11 @@ on:
         description: 'Independent attempts per audit lens'
         required: true
         default: '2'
+      runtime_verification:
+        description: 'Also clone the target and run its lint/test/build in an isolated scratch dir (executes target code)'
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -43,7 +49,11 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORGE_AUDIT_ATTEMPTS: ${{ inputs.attempts }}
-        run: npx tsx scripts/audit.ts "${{ inputs.target_repo }}"
+          FORGE_AUDIT_RUNTIME: ${{ inputs.runtime_verification }}
+        run: |
+          FLAG=""
+          if [ "$FORGE_AUDIT_RUNTIME" = "true" ]; then FLAG="--runtime"; fi
+          npx tsx scripts/audit.ts "${{ inputs.target_repo }}" $FLAG
 
       - name: Upload the audit report
         if: always()

@@ -16,26 +16,42 @@ import { fetchRepoContext } from '../src/company/repo-context.ts';
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 async function main(): Promise<void> {
-  const target = (process.argv[2] || '').trim();
+  const argv = process.argv.slice(2);
+  const target = (argv.find((a) => !a.startsWith('--')) || '').trim();
   if (!repoPattern.test(target) || target.includes('..')) {
-    console.error('usage: npm run audit -- owner/repo');
+    console.error('usage: npm run audit -- owner/repo [--runtime] [--local-dir=PATH] [--batch-chars=N]');
     process.exitCode = 2;
     return;
   }
+  const runtimeEnabled = argv.includes('--runtime');
+  const batchArg = argv.find((a) => a.startsWith('--batch-chars='));
+  const batchChars = batchArg ? Number.parseInt(batchArg.split('=')[1], 10) : undefined;
+  const localArg = argv.find((a) => a.startsWith('--local-dir='));
+  const localDir = localArg ? localArg.split('=')[1] : undefined;
   const ctx = await fetchRepoContext(target);
   console.log(`[audit] ${ctx.target} @ ${ctx.commit.slice(0, 8)}; ${ctx.files.length} files; ${Object.keys(ctx.excerpts).length} excerpts`);
 
   const model = new ModelService();
   const info = model.getProviderInfo();
   console.log(`[audit] model: ${info.primaryProvider}; Gemini fallback configured: ${info.fallbackConfigured}`);
+  console.log(`[audit] lenses read every file in full (batched); isolated runtime verification: ${runtimeEnabled ? 'ON' : 'off'}`);
 
   const attempts = Math.max(1, Number.parseInt(process.env.FORGE_AUDIT_ATTEMPTS ?? '', 10) || 2);
-  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: attempts, providerInfo: info });
+  const result = await runCompanyAudit({
+    model,
+    ctx,
+    attemptsPerItem: attempts,
+    providerInfo: info,
+    batchChars,
+    runtime: { enabled: runtimeEnabled, localDir },
+  });
 
   console.log('\n--- COMPANY AUDIT REPORT ---');
   console.log('Status:', result.status, '|', result.reason);
+  console.log('Read in full:', result.coverage.read, 'files,', Math.round(result.coverage.bytes / 1024), 'KB');
   console.log('Winners:', result.winners.join(', ') || '(none)');
   for (const e of result.employees) console.log(`- ${e.title}: ${e.success ? `winner ${e.model}` : `FAILED (${e.note})`}`);
+  for (const r of result.runtime) console.log(`- runtime ${r.name}: exit ${r.exitCode}`);
   console.log('Integrated findings:', result.findings.length);
 
   const outDir = path.resolve(process.cwd(), '.firstborn', 'evidence');

@@ -22,7 +22,8 @@ import type { Rubric } from './judge.ts';
 import type { ChatMessage, ModelResult } from './model.ts';
 import {
   DEFAULT_AUDIT_BENCH,
-  buildAuditEmployeePrompt,
+  buildAuditLensBatchPrompt,
+  batchCorpus,
   mergeFindings,
   renderAuditMarkdown,
   type AuditEmployee,
@@ -37,7 +38,8 @@ import {
   LOCKFILES,
   type ParsedDep,
 } from './registry.ts';
-import { verifyFinding, type EvidenceOutcome } from './evidence.ts';
+import { verifyFinding, findUndefinedIdentifiers, type EvidenceOutcome } from './evidence.ts';
+import { verifyRuntime, type RuntimeCheck, type RuntimeVerificationOptions } from './runtime.ts';
 
 /** The slice of ModelService the audit needs; lets tests inject a fake. */
 export interface AuditModel {
@@ -104,8 +106,21 @@ function makeVerifyCitations(known: Set<string>) {
   };
 }
 
-/** One audit lens, as a company role. */
-function lensRole(model: AuditModel, employee: AuditEmployee, ctx: RepoContext, attempt: number, known: Set<string>, recorder: RouteRecorder): Role {
+/**
+ * One audit lens, as a company role. The lens reads the repository in batches — every
+ * file in full — and its findings are the union across batches. This is what turns the
+ * audit from a ~5% sample into a full read.
+ */
+function lensRole(
+  model: AuditModel,
+  employee: AuditEmployee,
+  ctx: RepoContext,
+  attempt: number,
+  known: Set<string>,
+  recorder: RouteRecorder,
+  corpus: Record<string, string>,
+  maxChars: number
+): Role {
   return {
     id: employee.id,
     title: `${employee.title} (attempt ${attempt})`,
@@ -114,13 +129,31 @@ function lensRole(model: AuditModel, employee: AuditEmployee, ctx: RepoContext, 
     produces: 'note',
     tools: [thinkTool],
     brain: async (): Promise<AgentAction> => {
-      const prompt = buildAuditEmployeePrompt(employee, ctx);
-      const { value, result } = await model.completeJson<{ summary?: string; findings?: unknown[] }>(
-        [{ role: 'system', content: `You are the ${employee.title} [role:lens:${employee.id}]. Return valid JSON only.` }, { role: 'user', content: prompt }],
-        prompt
-      );
-      recorder.note(result);
-      return finish(typeof value?.summary === 'string' ? value.summary : '', { findings: Array.isArray(value?.findings) ? value!.findings : [], route: recorder.actual() });
+      // Read every file in full. When no corpus is available (e.g. offline), fall back
+      // to the excerpt sample so the lens still runs.
+      const source = Object.keys(corpus).length ? corpus : ctx.excerpts;
+      const batches = batchCorpus(source, maxChars);
+      if (!batches.length) batches.push({});
+      const all: unknown[] = [];
+      const summaries: string[] = [];
+      for (let i = 0; i < batches.length; i += 1) {
+        const prompt = buildAuditLensBatchPrompt(employee, {
+          target: ctx.target,
+          commit: ctx.commit,
+          allFiles: ctx.files,
+          batch: batches[i],
+          batchIndex: i + 1,
+          batchCount: batches.length,
+        });
+        const { value, result } = await model.completeJson<{ summary?: string; findings?: unknown[] }>(
+          [{ role: 'system', content: `You are the ${employee.title} [role:lens:${employee.id}]. Return valid JSON only.` }, { role: 'user', content: prompt }],
+          prompt
+        );
+        recorder.note(result);
+        if (typeof value?.summary === 'string' && value.summary.trim()) summaries.push(value.summary.trim());
+        if (Array.isArray(value?.findings)) all.push(...value.findings);
+      }
+      return finish(summaries.join(' '), { findings: all, route: recorder.actual() });
     },
     verifyCompletion: makeVerifyCitations(known),
   };
@@ -235,6 +268,10 @@ export interface CompanyAuditResult {
   synthesis: { summary: string; architecture: string };
   verification: { role: string; verdict: 'CONFIRM' | 'OBJECT' | 'UNVERIFIED'; reason: string }[];
   groundingNotes: string[];
+  /** How much of the repository the lenses actually read, in full. */
+  coverage: { files: number; read: number; bytes: number };
+  /** Results of the isolated runtime verification (clone + lint/test/build). */
+  runtime: { name: string; command: string; exitCode: number; output: string }[];
   winners: string[];
   status: 'COMPLETED' | 'BLOCKED';
   reason: string;
@@ -265,10 +302,16 @@ export async function runCompanyAudit(options: {
   /** Registry version lookup for grounding version claims; defaults to the npm registry. */
   registryGrounder?: import('./registry.ts').VersionGrounder;
   /**
-   * The exact-commit source, for deterministic evidence checks. Defaults to
-   * downloading the tarball; inject `null` in tests to skip the network.
+   * The exact-commit source, for the deterministic checks and the lens reads.
+   * Defaults to downloading the full corpus; inject `null` in tests to skip the network.
    */
   corpus?: Record<string, string> | null;
+  /** Max characters of file content per lens read. Larger = fewer, fuller prompts. */
+  batchChars?: number;
+  /** Isolated runtime verification (clone + lint/test/build). Defaults to disabled. */
+  runtime?: RuntimeVerificationOptions;
+  /** Test seam: run the isolated verification. Defaults to the real implementation. */
+  verifyRuntime?: (ctx: RepoContext, corpus: Record<string, string> | null, opts: RuntimeVerificationOptions) => Promise<RuntimeCheck[]>;
 }): Promise<CompanyAuditResult> {
   const bench = options.bench ?? DEFAULT_AUDIT_BENCH;
   const attempts = options.attemptsPerItem ?? 2;
@@ -276,14 +319,19 @@ export async function runCompanyAudit(options: {
   const goal = `Read-only audit of ${options.ctx.target} at ${options.ctx.commit.slice(0, 8)}`;
   const provider = options.providerInfo?.primaryProvider ?? 'company model';
   const recorder = new RouteRecorder();
+  const batchChars = Math.max(20_000, options.batchChars ?? 120_000);
 
-  // ---- Phase 1: the audit lenses compete. ----
+  // The lenses read every file in full; fetch the corpus once, up front.
+  const corpus =
+    options.corpus !== undefined ? options.corpus : await fetchRepoCorpus(options.ctx.target, options.ctx.commit);
+
+  // ---- Phase 1: the audit lenses compete, each reading the whole repository. ----
   const phase1 = await runCompany({
     goal,
     plan: auditPlan(bench),
     rosterFor: (item, attempt) => {
       const employee = bench.find((e) => e.id === item.id) ?? bench[0];
-      return [lensRole(options.model, employee, options.ctx, attempt, known, recorder)];
+      return [lensRole(options.model, employee, options.ctx, attempt, known, recorder, corpus ?? {}, batchChars)];
     },
     attemptsPerItem: attempts,
     maxRoleRuns: Math.max(4, bench.length * attempts + 2),
@@ -333,15 +381,85 @@ export async function runCompanyAudit(options: {
   ];
 
   // ---- Evidence: settle what we can mechanically, and label the rest judgment. ----
-  const corpus = options.corpus !== undefined ? options.corpus : await fetchRepoCorpus(options.ctx.target, options.ctx.commit);
   const evidence: Record<string, EvidenceOutcome> = {};
   if (corpus) {
     for (const f of findings) evidence[f.title] = verifyFinding(f, corpus, Object.keys(corpus).length);
+
+    // Deterministic static check: the lenses read the files, but a call to a name
+    // defined nowhere in its file (a ReferenceError the moment that path runs) is
+    // easy to miss by eye. The scan is machine-checked, so any hit is a verified fact.
+    const crashes = findUndefinedIdentifiers(corpus);
+    if (crashes.length) {
+      const byName = new Map<string, typeof crashes>();
+      for (const h of crashes) byName.set(h.name, [...(byName.get(h.name) ?? []), h]);
+      for (const [name, hs] of byName) {
+        const paths = [...new Set(hs.map((h) => h.path))];
+        const title = `Undefined identifier "${name}" would crash at runtime`;
+        findings.push({
+          severity: 'HIGH',
+          title,
+          paths,
+          basis: 'observed',
+          evidence: `${hs.length} call(s) to ${name}() where no declaration or import of ${name} exists in the same file, e.g. ${hs[0].path}:${hs[0].line}. This throws a ReferenceError the moment that code path runs.`,
+          recommendation: `Define or import ${name} (or remove the call).`,
+          raisedBy: 'Deterministic static scan',
+        });
+        evidence[title] = {
+          verdict: 'SUPPORTED',
+          category: 'verified-fact',
+          checks: [{
+            claim: 'a call targets a name that is never declared or imported in its own file',
+            command: 'scan TS/JS sources for calls to names defined nowhere in the file',
+            result: `${hs.length} suspect call(s), e.g. ${hs[0].path}:${hs[0].line} -> ${name}(`,
+            supports: true,
+            needle: name,
+          }],
+        };
+      }
+    }
   }
+
+  // ---- Isolated runtime verification: clone at the commit and run the target's own
+  // checks. This is the only step that executes target code; it is opt-in and runs
+  // inside a scratch clone (see runtime.ts). Findings here are machine-verified. ----
+  const runtimeOpts: RuntimeVerificationOptions = options.runtime ?? { enabled: false };
+  const runtimeChecks = runtimeOpts.enabled
+    ? await (options.verifyRuntime ?? verifyRuntime)(options.ctx, corpus, runtimeOpts)
+    : [];
+  for (const check of runtimeChecks) {
+    if (check.exitCode === 0) continue;
+    const title = `Runtime check failed: ${check.name} (exit ${check.exitCode})`;
+    findings.push({
+      severity: check.severity ?? 'HIGH',
+      title,
+      paths: check.paths,
+      basis: 'observed',
+      evidence: `\`${check.command}\` exited ${check.exitCode}. ${check.output.trim().slice(0, 600) || '(no output captured)'}`,
+      recommendation: `Make \`${check.command}\` pass.`,
+      raisedBy: 'Isolated runtime verification',
+    });
+    evidence[title] = {
+      verdict: 'SUPPORTED',
+      category: 'verified-fact',
+      checks: [{
+        claim: `\`${check.command}\` exits non-zero at ${options.ctx.commit.slice(0, 8)}`,
+        command: check.command,
+        result: `exit ${check.exitCode}; ${check.output.trim().slice(0, 400) || '(no output)'}`,
+        supports: true,
+      }],
+    };
+  }
+
   const evidenceSummary = {
     verified: Object.values(evidence).filter((e) => e.verdict === 'SUPPORTED').length,
     contradicted: Object.values(evidence).filter((e) => e.verdict === 'CONTRADICTED').length,
     judgment: findings.length - Object.values(evidence).filter((e) => e.verdict !== 'UNVERIFIED').length,
+  };
+  // How much of the repository the lenses actually read, in full.
+  const coverage = {
+    files: options.ctx.files.length,
+    read: corpus ? Object.keys(corpus).length : 0,
+    bytes: corpus ? Object.values(corpus).reduce((n, c) => n + c.length, 0) : 0,
   };
 
   // ---- Phase 2: Forge synthesizes, then the panel verifies. ----
@@ -379,6 +497,7 @@ export async function runCompanyAudit(options: {
     });
 
   const status: CompanyAuditResult['status'] = findings.length ? 'COMPLETED' : 'BLOCKED';
+  const runtime = runtimeChecks.map((c) => ({ name: c.name, command: c.command, exitCode: c.exitCode, output: c.output.slice(0, 2000) }));
   const markdown = renderAuditMarkdown({
     target: options.ctx.target,
     commit: options.ctx.commit,
@@ -390,6 +509,8 @@ export async function runCompanyAudit(options: {
     synthesis,
     verification,
     groundingNotes,
+    coverage,
+    runtime,
   });
   return {
     target: options.ctx.target,
@@ -402,6 +523,8 @@ export async function runCompanyAudit(options: {
     synthesis,
     verification,
     groundingNotes,
+    coverage,
+    runtime,
     winners: phase1.winners,
     status,
     reason: status === 'COMPLETED' ? `${findings.length} finding(s) across ${employees.length} lens(es)` : 'no findings survived evidence validation',
