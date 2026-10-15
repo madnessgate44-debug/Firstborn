@@ -37,7 +37,7 @@ import {
   LOCKFILES,
   type ParsedDep,
 } from './registry.ts';
-import { verifyFinding, type EvidenceOutcome } from './evidence.ts';
+import { verifyFinding, findUndefinedIdentifiers, type EvidenceOutcome } from './evidence.ts';
 
 /** The slice of ModelService the audit needs; lets tests inject a fake. */
 export interface AuditModel {
@@ -337,6 +337,39 @@ export async function runCompanyAudit(options: {
   const evidence: Record<string, EvidenceOutcome> = {};
   if (corpus) {
     for (const f of findings) evidence[f.title] = verifyFinding(f, corpus, Object.keys(corpus).length);
+
+    // Deterministic static check: the lenses only cite paths, so a call to a name defined
+    // nowhere in its file (a ReferenceError the moment that path runs) can slip past them.
+    // The scan is machine-checked, so any hit is a verified fact, not a judgment call.
+    const crashes = findUndefinedIdentifiers(corpus);
+    if (crashes.length) {
+      const byName = new Map<string, typeof crashes>();
+      for (const h of crashes) byName.set(h.name, [...(byName.get(h.name) ?? []), h]);
+      for (const [name, hs] of byName) {
+        const paths = [...new Set(hs.map((h) => h.path))];
+        const title = `Undefined identifier "${name}" would crash at runtime`;
+        findings.push({
+          severity: 'HIGH',
+          title,
+          paths,
+          basis: 'observed',
+          evidence: `${hs.length} call(s) to ${name}() where no declaration or import of ${name} exists in the same file, e.g. ${hs[0].path}:${hs[0].line}. This throws a ReferenceError the moment that code path runs.`,
+          recommendation: `Define or import ${name} (or remove the call).`,
+          raisedBy: 'Deterministic static scan',
+        });
+        evidence[title] = {
+          verdict: 'SUPPORTED',
+          category: 'verified-fact',
+          checks: [{
+            claim: 'a call targets a name that is never declared or imported in its own file',
+            command: 'scan TS/JS sources for calls to names defined nowhere in the file',
+            result: `${hs.length} suspect call(s), e.g. ${hs[0].path}:${hs[0].line} -> ${name}(`,
+            supports: true,
+            needle: name,
+          }],
+        };
+      }
+    }
   }
   const evidenceSummary = {
     verified: Object.values(evidence).filter((e) => e.verdict === 'SUPPORTED').length,

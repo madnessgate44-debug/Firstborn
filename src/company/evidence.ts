@@ -135,6 +135,167 @@ export function isLegacyPeerDepsClaim(text: string): boolean {
   return /\blegacy[- ]peer[- ]deps\b/i.test(text);
 }
 
+export function isUndefinedIdentifierClaim(text: string): boolean {
+  return /\bundefined identifier|reference ?error|no-undef\b/i.test(text);
+}
+
+/** Files worth a syntax scan (TS/JS source only). */
+const SOURCE_RE = /\.(ts|tsx|js|jsx|mjs|cjs)$/i;
+
+/**
+ * A call to a bare name, written with no space before `(` (so prose and JSX text such
+ * as `Vocab (` are not mistaken for calls) and not preceded by `.` (so property and
+ * optional-chained calls are excluded).
+ */
+const CALL_RE = /(^|[^.\w$])([A-Za-z_$][A-Za-z0-9_$]*)(\()/g;
+
+/** Names that never need an in-file declaration: keywords and standard globals. */
+const GLOBALS = new Set([
+  'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'function', 'await', 'yield',
+  'else', 'do', 'try', 'case', 'delete', 'void', 'in', 'of', 'instanceof', 'throw', 'with', 'super',
+  'this', 'class', 'extends', 'import', 'export', 'default', 'const', 'let', 'var', 'async', 'static',
+  'get', 'set', 'as', 'satisfies', 'keyof', 'infer', 'readonly', 'namespace', 'declare', 'abstract',
+  'enum', 'implements', 'interface', 'type', 'is', 'require',
+  'Array', 'Object', 'String', 'Number', 'Boolean', 'Symbol', 'BigInt', 'Math', 'JSON', 'Date',
+  'RegExp', 'Error', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'EvalError', 'URIError',
+  'AggregateError', 'Promise', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Proxy', 'Reflect', 'Intl',
+  'Float32Array', 'Float64Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Uint8Array',
+  'Uint8ClampedArray', 'Uint16Array', 'Uint32Array', 'BigInt64Array', 'BigUint64Array',
+  'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Atomics', 'structuredClone', 'queueMicrotask',
+  'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
+  'encodeURI', 'decodeURI', 'escape', 'unescape', 'eval', 'fetch', 'setTimeout', 'setInterval',
+  'clearTimeout', 'clearInterval', 'setImmediate', 'clearImmediate', 'requestAnimationFrame',
+  'cancelAnimationFrame', 'requestIdleCallback', 'atob', 'btoa', 'alert', 'confirm', 'prompt',
+  'console', 'window', 'document', 'globalThis', 'process', 'Buffer', 'localStorage', 'sessionStorage',
+  'navigator', 'location', 'history', 'crypto', 'performance', 'URL', 'URLSearchParams', 'FormData',
+  'Blob', 'File', 'FileReader', 'Headers', 'Request', 'Response', 'AbortController', 'TextEncoder',
+  'TextDecoder', 'Image', 'Audio', 'AudioContext', 'MutationObserver', 'IntersectionObserver',
+  'ResizeObserver', 'CustomEvent', 'Event', 'HTMLElement', 'MediaRecorder', 'MediaStream', 'WebSocket', 'Worker',
+  'SpeechSynthesisUtterance', 'SpeechRecognition', 'webkitSpeechRecognition', 'Notification', 'IDBKeyRange',
+  'Partial', 'Required', 'Readonly', 'Record', 'Pick', 'Omit', 'Exclude', 'Extract', 'NonNullable',
+  'Parameters', 'ReturnType', 'InstanceType', 'Awaited', 'Uppercase', 'Lowercase', 'Capitalize', 'Uncapitalize',
+]);
+
+const IDENTIFIER_RE = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+
+/**
+ * Blank out comments and string/template literals, preserving length and newlines so
+ * reported line numbers still match the original file. A name mentioned only in a
+ * comment, a message string, or JSX text must never be mistaken for a call.
+ */
+function stripCommentsAndStrings(code: string): string {
+  const out: string[] = [];
+  const n = code.length;
+  const push = (ch: string) => out.push(ch === '\n' ? '\n' : ' ');
+  let i = 0;
+  while (i < n) {
+    const c = code[i];
+    const d = code[i + 1];
+    if (c === '/' && d === '/') {
+      while (i < n && code[i] !== '\n') push(code[i++]);
+      continue;
+    }
+    if (c === '/' && d === '*') {
+      push(code[i++]); push(code[i++]);
+      while (i < n && !(code[i] === '*' && code[i + 1] === '/')) push(code[i++]);
+      if (i < n) { push(code[i++]); push(code[i++]); }
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      const q = c;
+      push(code[i++]);
+      while (i < n) {
+        if (code[i] === '\\') { push(code[i++]); if (i < n) push(code[i++]); continue; }
+        if (code[i] === q) { push(code[i++]); break; }
+        if (q === '`' && code[i] === '$' && code[i + 1] === '{') {
+          let depth = 0;
+          do {
+            if (code[i] === '{') depth++;
+            else if (code[i] === '}') depth--;
+            push(code[i++]);
+          } while (i < n && depth > 0);
+          continue;
+        }
+        push(code[i++]);
+      }
+      continue;
+    }
+    out.push(c);
+    i++;
+  }
+  return out.join('');
+}
+
+/** Keywords that can immediately precede a name that is a definition, not a call. */
+const DEFN_KEYWORDS = new Set([
+  'function', 'class', 'interface', 'type', 'enum', 'namespace', 'module', 'declare', 'abstract',
+  'public', 'private', 'protected', 'static', 'get', 'set', 'new', 'async', 'extends', 'implements',
+  'export', 'default', 'return', 'typeof', 'void', 'delete', 'await', 'yield', 'case', 'in', 'of',
+  'instanceof', 'else', 'do', 'throw',
+]);
+
+export interface UndefinedHit extends Hit {
+  name: string;
+}
+
+/** Index of the `)` matching the `(` at `openIdx`, or -1. */
+function matchingParen(code: string, openIdx: number): number {
+  let depth = 0;
+  for (let i = openIdx; i < code.length; i++) {
+    if (code[i] === '(') depth++;
+    else if (code[i] === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Static scan for calls to names that are neither declared, imported, nor referenced
+ * anywhere else in their own file. Such a call throws a ReferenceError the moment that
+ * code path runs — a real runtime defect a pure read-only audit otherwise cannot see,
+ * because it never executes the target and its evidence checks only ask whether cited
+ * paths exist.
+ *
+ * Precision over recall, and never executing the target: comments and string literals are
+ * stripped first; a name is only reported when it is written as a call, is not a standard
+ * global, is not preceded by a definition keyword, and appears exactly once in the file
+ * (a real symbol is always declared, imported, or used more than once). This deliberately
+ * misses cases rather than inventing them.
+ */
+export function findUndefinedIdentifiers(files: Record<string, string>): UndefinedHit[] {
+  const hits: UndefinedHit[] = [];
+  for (const [path, content] of Object.entries(files)) {
+    if (!SOURCE_RE.test(path)) continue;
+    const code = stripCommentsAndStrings(content);
+    const counts = new Map<string, number>();
+    for (const m of code.matchAll(IDENTIFIER_RE)) counts.set(m[0], (counts.get(m[0]) ?? 0) + 1);
+    const lines = content.split('\n');
+    for (const m of code.matchAll(CALL_RE)) {
+      const name = m[2];
+      if (GLOBALS.has(name) || (counts.get(name) ?? 0) !== 1) continue;
+      const nameStart = m.index! + m[1].length;
+      const parenIdx = nameStart + name.length;
+      // `name(` split across lines is a signature/parameter continuation, never a call.
+      if (code.slice(nameStart, parenIdx).includes('\n')) continue;
+      const close = matchingParen(code, parenIdx);
+      if (close < 0) continue;
+      // A definition or signature — `name(...) {`, `name(...): Type`, `name(...) =>` — is
+      // not a call; a call is never immediately followed by a body, a return type, or `=>`.
+      let j = close + 1;
+      while (j < code.length && /\s/.test(code[j])) j++;
+      if (code[j] === '{' || code[j] === ':' || code.slice(j, j + 2) === '=>') continue;
+      const before = code.slice(0, nameStart);
+      const prevWord = before.match(/([A-Za-z_$][A-Za-z0-9_$]*)\s*$/)?.[1] ?? '';
+      if (DEFN_KEYWORDS.has(prevWord)) continue;
+      const line = before.split('\n').length;
+      hits.push({ path, line, text: (lines[line - 1] ?? '').trim().slice(0, 140), name });
+    }
+  }
+  return hits;
+}
+
 const LOCKFILE_NEEDLES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'bun.lock'];
 
 /**
@@ -228,6 +389,20 @@ export function verifyFinding(
       result: hits.length ? `${hits.length} match(es), e.g. ${hits[0].path}:${hits[0].line}` : '0 matches',
       supports: hits.length > 0,
       needle: 'legacy-peer-deps',
+    });
+    return settle(hits.length > 0);
+  }
+
+  if (isUndefinedIdentifierClaim(text)) {
+    const hits = findUndefinedIdentifiers(corpus);
+    checks.push({
+      claim: 'a call targets a name that is never declared or imported in its own file',
+      command: `scan TS/JS sources for calls to names defined nowhere in the file`,
+      result: hits.length
+        ? `${hits.length} suspect call(s), e.g. ${hits[0].path}:${hits[0].line} -> ${hits[0].name}(`
+        : `0 suspect calls across ${fileCount} files`,
+      supports: hits.length > 0,
+      needle: hits[0]?.name,
     });
     return settle(hits.length > 0);
   }

@@ -169,6 +169,31 @@ test('company audit: the rubric makes citations mandatory and the plan is one it
   assert.equal(auditPlan()(ctx.target).length, DEFAULT_AUDIT_BENCH.length);
 });
 
+test('company audit: a deterministic scan surfaces a crash the lenses never claimed', async () => {
+  const model = fakeModel({
+    '[role:lens:arch]': { summary: 'a', findings: [{ severity: 'LOW', title: 'God module', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'split' }] },
+    '[role:forge-lead]': { summary: 's', architecture: 'a' },
+  });
+  const crashCtx: RepoContext = {
+    target: 'o/r',
+    commit: 'abc123',
+    files: ['src/Lib.tsx'],
+    excerpts: {},
+  };
+  const result = await runCompanyAudit({
+    model,
+    ctx: crashCtx,
+    attemptsPerItem: 1,
+    registryGrounder: noRegistry,
+    corpus: { 'src/Lib.tsx': "export const go = () => setActiveStageLessonId('lesson-1');\n" },
+  });
+  const crash = result.findings.find((f) => /Undefined identifier/i.test(f.title));
+  assert.ok(crash, 'the scan must add the crash finding the lenses missed');
+  assert.equal(crash!.severity, 'HIGH');
+  assert.equal(result.evidence[crash!.title].verdict, 'SUPPORTED');
+  assert.match(result.markdown, /Verified facts[\s\S]*Undefined identifier/);
+});
+
 test('company audit: a panel member that returns nothing usable is UNVERIFIED, never a silent CONFIRM', async () => {
   const model = fakeModel({
     '[role:lens:arch]': { summary: 'a', findings: [{ severity: 'LOW', title: 'God module', paths: ['server.ts'], basis: 'observed', evidence: 'e', recommendation: 'split' }] },
