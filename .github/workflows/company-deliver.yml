@@ -1,0 +1,66 @@
+name: Forge Company Delivery
+
+# The software company audits a target repository, then *implements* the fix:
+# it clones the target at the audited commit, runs its own checks, pushes an
+# isolated `forge/` branch, and opens a pull request. It never merges and never
+# writes to the base branch.
+#
+# Cross-repo push needs a token with `repo` scope on the target, supplied as the
+# FORGE_DELIVER_TOKEN secret (the built-in GITHUB_TOKEN only reaches this repo).
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'Target repository in owner/repo format'
+        required: true
+        default: 'madnessgate44-debug/Amina'
+      goal:
+        description: 'What the company should change'
+        required: true
+        default: 'Fix the findings from the latest audit.'
+      attempts:
+        description: 'Independent attempts per work item'
+        required: true
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  company-deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out the company
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the company delivery
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Must be a PAT with `repo` scope on the target; GITHUB_TOKEN cannot
+          # push across repositories.
+          GITHUB_TOKEN: ${{ secrets.FORGE_DELIVER_TOKEN }}
+          FORGE_DELIVER_ATTEMPTS: ${{ inputs.attempts }}
+        run: npx tsx scripts/deliver.ts "${{ inputs.target_repo }}" "${{ inputs.goal }}"
+
+      - name: Upload the delivery report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: company-delivery
+          path: |
+            .firstborn/evidence/company-delivery.md
+            .firstborn/evidence/company-delivery.json
+          if-no-files-found: warn
