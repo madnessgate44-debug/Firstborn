@@ -8,6 +8,7 @@ import {
   runSweep,
   renderFullAuditMarkdown,
   runFullCoverageAudit,
+  runVerificationPanel,
   buildSweepPrompt,
   DEFAULT_MAX_CHARS_PER_SEGMENT,
   DEFAULT_MAX_CHARS_PER_CHUNK,
@@ -138,7 +139,7 @@ test('sweep: runFullCoverageAudit reports 100% coverage and renders the ledger',
     value: { findings: [{ severity: 'LOW', title: 't', paths: ['src/f0.ts'], basis: 'observed', evidence: 'e', recommendation: 'r' }] },
     result: { text: '{}', model: 'm', provider: 'p', success: true },
   }));
-  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, sweep: { maxCharsPerSegment: 1000, maxCharsPerChunk: 4000 } });
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, sweep: { maxCharsPerSegment: 1000, maxCharsPerChunk: 4000 }, verify: false });
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.coverage.percent, 100);
   assert.equal(result.coverage.examinedFiles, 20);
@@ -160,6 +161,10 @@ test('sweep: the rendered report names unexamined files instead of implying full
     commit: 'abc',
     fileCount: 2,
     findings: [],
+    evidence: {},
+    evidenceSummary: { supported: 0, contradicted: 0, judgment: 0 },
+    groundingNotes: [],
+    verification: [],
     coverage: { totalFiles: 2, examinedFiles: 1, percent: 50, totalChunks: 2, succeededChunks: 1, failedChunks: 1, partialFiles: [], notExamined: ['b.ts'] },
     chunkNotes: [],
     route: { provider: 'p', model: 'm' },
@@ -201,4 +206,28 @@ test('sweep: a file larger than one whole call is still split, never dropped', (
   assert.ok(segments.length > 1, 'a file past the call budget must be split');
   assert.equal(segments.join('\n').length > 0, true);
   assert.equal(plan.files.length, 1);
+});
+
+test('sweep: the verification panel records objections and never silently confirms an empty answer', async () => {
+  const replies = [
+    { value: { verdict: 'OBJECT', reason: 'the import is present', objections: ['missing import'] }, result: { text: '{}', model: 'm', provider: 'p', success: true } },
+    { value: null, result: { text: '', model: 'm', provider: 'p', success: false } },
+  ];
+  let call = 0;
+  const model = stubModel(() => replies[call++]);
+  const verdicts = await runVerificationPanel({
+    model,
+    findings: [{ severity: 'HIGH', title: 'missing import', paths: ['a.ts'], basis: 'observed', evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' }],
+    corpus: { 'a.ts': 'import x from "y";\n' },
+    roles: ['Reviewer', 'QA'],
+  });
+  assert.equal(verdicts[0].verdict, 'OBJECT');
+  assert.match(verdicts[0].title, /missing import/);
+  assert.equal(verdicts[1].verdict, 'UNVERIFIED');
+});
+
+test('sweep: the panel is skipped when there are no findings', async () => {
+  const model = stubModel(() => ({ value: {}, result: { text: '{}', model: 'm', provider: 'p', success: true } }));
+  const verdicts = await runVerificationPanel({ model, findings: [], corpus: {} });
+  assert.deepEqual(verdicts, []);
 });

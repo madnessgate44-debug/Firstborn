@@ -9,6 +9,9 @@ import {
   isLockfileClaim,
   isApiKeyStatusClaim,
   isLegacyPeerDepsClaim,
+  isMissingImportClaim,
+  isCrossOriginClaim,
+  isInfiniteLoopClaim,
   verifyFinding,
   type EvidenceOutcome,
 } from '../src/company/evidence.ts';
@@ -194,4 +197,83 @@ test('render: splits findings into verified / judgment / withdrawn with spot-che
   // The withdrawn finding must not appear under Verified facts.
   const verifiedSection = md.split('## Verified facts')[1].split('## Judgment calls')[0];
   assert.doesNotMatch(verifiedSection, /Stored XSS/);
+});
+
+// ---- The three real false positives from the live Amina sweep, encoded as checks ----
+
+test('evidence: a "not imported" claim is contradicted when the import is in the cited file', () => {
+  // TeachingSessionModal.tsx imports VoiceSpeakButton at the top and uses it far
+  // below; a finding raised against a truncated slice called the import missing.
+  const corpus = {
+    'src/components/TeachingSessionModal.tsx': [
+      'import { VoiceSpeakButton } from "../voice/VoiceSpeakButton";',
+      'export function TeachingSessionModal() {',
+      '  return <VoiceSpeakButton text="hi" />;',
+      '}',
+    ].join('\n'),
+  };
+  const out = verifyFinding(
+    {
+      title: 'VoiceSpeakButton is used but not imported',
+      evidence: 'The component is rendered without a corresponding import.',
+      recommendation: 'Add the import.',
+      paths: ['src/components/TeachingSessionModal.tsx'],
+    },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks[1].result, /imported: VoiceSpeakButton/);
+});
+
+test('evidence: a "cross-origin" claim is contradicted for a same-origin path', () => {
+  // StageModal.tsx calls fetch('/api/tutor-reply') — a relative path, same origin.
+  const corpus = { 'src/components/stage/StageModal.tsx': "const r = await fetch('/api/tutor-reply', { method: 'POST' });" };
+  const out = verifyFinding(
+    {
+      title: 'Unauthenticated cross-origin fetch to tutor API',
+      evidence: 'The UI sends a cross-origin request to a third-party endpoint.',
+      recommendation: 'Use a server proxy.',
+      paths: ['src/components/stage/StageModal.tsx'],
+    },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks[1].result, /0 absolute URLs/);
+});
+
+test('evidence: a "cross-origin" claim is supported when an absolute URL is present', () => {
+  const corpus = { 'a.ts': "fetch('https://api.example.com/v1/chat')" };
+  const out = verifyFinding(
+    { title: 'Cross-origin request to a third-party API', evidence: 'e', recommendation: 'r', paths: ['a.ts'] },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
+});
+
+test('evidence: an "infinite loop" claim is contradicted when the cited file has no loop', () => {
+  const corpus = { 'src/services/teaching/teachingSession.ts': 'export const x = 1;\nexport function f() { return x; }\n' };
+  const out = verifyFinding(
+    {
+      title: 'Potential infinite loop in teachingSession',
+      evidence: 'The loop never terminates.',
+      recommendation: 'Add a bound.',
+      paths: ['src/services/teaching/teachingSession.ts'],
+    },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks[1].result, /0 loop constructs/);
+});
+
+test('evidence: the new claim detectors fire on the intended wording only', () => {
+  assert.ok(isMissingImportClaim('VoiceSpeakButton is not imported'));
+  assert.ok(!isMissingImportClaim('the import list is unsorted'));
+  assert.ok(isCrossOriginClaim('Unauthenticated cross-origin fetch'));
+  assert.ok(!isCrossOriginClaim('crossing the boundary of the module'));
+  assert.ok(isInfiniteLoopClaim('Potential infinite loop detected'));
+  assert.ok(!isInfiniteLoopClaim('a loop over the items'));
 });

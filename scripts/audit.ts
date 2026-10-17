@@ -47,6 +47,7 @@ async function main(): Promise<void> {
       commit: ctx.commit,
       corpus,
       onChunk: ({ id, index, count, ok }) => console.log(`[audit:full] ${id} ${index}/${count} ${ok ? 'ok' : 'FAILED'}`),
+      onRole: ({ role, verdict }) => console.log(`[audit:full] verify ${role} ${verdict}`),
     });
     const outDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
     fs.mkdirSync(outDir, { recursive: true });
