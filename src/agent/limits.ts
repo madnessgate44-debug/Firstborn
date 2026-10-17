@@ -31,7 +31,7 @@ export function loadForgeLimits(env: NodeJS.ProcessEnv = process.env): ForgeLimi
     maxFilesPerMission: envInt(env, 'FORGE_MAX_FILES', 5, 1, 50),
     maxEditsPerMission: envInt(env, 'FORGE_MAX_EDITS', 8, 1, 200),
     maxPatchBytes: envInt(env, 'FORGE_MAX_PATCH_BYTES', 100 * 1024, 1024, 5 * 1024 * 1024),
-    maxModelCalls: envInt(env, 'FORGE_MAX_MODEL_CALLS', 6, 1, 50),
+    maxModelCalls: envInt(env, 'FORGE_MAX_MODEL_CALLS', 8, 1, 50),
     maxRepairAttempts: envInt(env, 'FORGE_MAX_REPAIRS', 2, 0, 10),
     modelAttempts: envInt(env, 'FORGE_MODEL_ATTEMPTS', 2, 1, 10),
     maxRuntimeMs: envInt(env, 'FORGE_MAX_RUNTIME_MS', 10 * 60 * 1000, 10_000, 60 * 60 * 1000),
