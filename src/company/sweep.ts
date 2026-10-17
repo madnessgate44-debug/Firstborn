@@ -54,8 +54,16 @@ export interface SweepOptions {
   maxCharsPerChunk?: number;
 }
 
-export const DEFAULT_MAX_CHARS_PER_SEGMENT = 12000;
-export const DEFAULT_MAX_CHARS_PER_CHUNK = 24000;
+/**
+ * A file is only ever split when it alone exceeds a whole call. Splitting a file
+ * that *would* fit is what produced false positives: a model handed lines 1-200
+ * of a component reported the import at line 14 as missing because the usage at
+ * line 297 sat in a different chunk. Atomic files keep a file's own evidence in
+ * one place. A whole-file call of this size is ~10k tokens, well inside every
+ * provider we route to.
+ */
+export const DEFAULT_MAX_CHARS_PER_CHUNK = 40000;
+export const DEFAULT_MAX_CHARS_PER_SEGMENT = DEFAULT_MAX_CHARS_PER_CHUNK;
 
 /**
  * Split one file into line-bounded parts of at most `maxChars`. A single line

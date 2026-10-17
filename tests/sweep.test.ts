@@ -10,6 +10,7 @@ import {
   runFullCoverageAudit,
   buildSweepPrompt,
   DEFAULT_MAX_CHARS_PER_SEGMENT,
+  DEFAULT_MAX_CHARS_PER_CHUNK,
   type SweepModel,
 } from '../src/company/sweep.ts';
 
@@ -171,4 +172,33 @@ test('sweep: the rendered report names unexamined files instead of implying full
 
 test('sweep: the default segment cap is a positive, usable number', () => {
   assert.ok(DEFAULT_MAX_CHARS_PER_SEGMENT >= 4000);
+});
+
+test('sweep: a normal source file is atomic by default, so evidence in one file stays in one call', () => {
+  // Regression: the caps used to be 12k/24k, so a 15 KB component was split.
+  // The model saw the JSX usage but not the import at the top of the same file
+  // and reported the import as missing. A file of this size must not be split.
+  const lines = ['import { VoiceSpeakButton } from "../voice/VoiceSpeakButton";'];
+  while (lines.join('\n').length < 15000) lines.push('  // padding line to grow the file');
+  lines.push('  <VoiceSpeakButton text={turn.text} />');
+  const content = lines.join('\n');
+  assert.ok(content.length > 12000 && content.length < DEFAULT_MAX_CHARS_PER_CHUNK, 'fixture must exceed the old cap but fit a whole-file call');
+
+  const plan = planSweep({ 'src/components/TeachingSessionModal.tsx': content });
+  const segments = plan.chunks.flatMap((c) => c.segments);
+  assert.equal(segments.length, 1, 'a file under the call budget must be one segment');
+  assert.equal(segments[0].parts, 1);
+  // Both the import and the usage are in the single payload the model receives.
+  assert.match(segments[0].content, /VoiceSpeakButton \} from/);
+  assert.match(segments[0].content, /<VoiceSpeakButton/);
+});
+
+test('sweep: a file larger than one whole call is still split, never dropped', () => {
+  const huge = Array.from({ length: 20000 }, (_, i) => `const line${i} = ${i};`).join('\n');
+  assert.ok(huge.length > DEFAULT_MAX_CHARS_PER_CHUNK);
+  const plan = planSweep({ 'src/monster.ts': huge });
+  const segments = plan.chunks.flatMap((c) => c.segments).filter((s) => s.path === 'src/monster.ts');
+  assert.ok(segments.length > 1, 'a file past the call budget must be split');
+  assert.equal(segments.join('\n').length > 0, true);
+  assert.equal(plan.files.length, 1);
 });
