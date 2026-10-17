@@ -31,9 +31,14 @@ export const LOCKFILES = [
   'bun.lock',
 ];
 
-/** Words that signal a finding is making a claim about dependency versions. */
+/**
+ * Words that signal a finding is making a claim about dependency versions.
+ * Bare "dependency"/"dependencies" is deliberately excluded: it matched findings
+ * about install scripts and production bundling, which assert nothing about a
+ * version, and grounding then dropped them as false version claims.
+ */
 const CLAIM_RE =
-  /\b(version|versions|outdated|unsupported|invalid|obsolete|vulnerab\w*|upgrade|update|downgrade|pin(ned)?|deprecat\w*|stale|eol|end[- ]of[- ]life|latest|semver|dependency|dependencies|devdependenc\w*)\b/i;
+  /\b(version|versions|outdated|unsupported|invalid|obsolete|vulnerab\w*|upgrade|update|downgrade|pin(ned)?|deprecat\w*|stale|eol|end[- ]of[- ]life|latest|semver|resolve[sd]?|valid)\b/i;
 
 /** Parse `dependencies` and `devDependencies` from a package.json excerpt. */
 export function parsePackageJson(text: string): ParsedDep[] {

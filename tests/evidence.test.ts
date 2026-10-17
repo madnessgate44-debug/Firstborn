@@ -125,6 +125,10 @@ test('evidence: claim detectors fire on the right words', () => {
   assert.ok(!isRenderSinkClaim('missing lockfile'));
   assert.ok(isHardcodedSecretClaim('hardcoded API key committed in source'));
   assert.ok(!isHardcodedSecretClaim('the API key is read from the environment'));
+  // Regression: a bare \btoken\b used to match. "COST_PER_INPUT_TOKEN" is
+  // arithmetic; treating it as a secret contradicted a real cost finding.
+  assert.ok(!isHardcodedSecretClaim('uses hardcoded constants COST_PER_INPUT_TOKEN and COST_PER_OUTPUT_TOKEN'));
+  assert.ok(!isHardcodedSecretClaim('hardcoded token count limits in the client'));
   assert.ok(isLockfileClaim('Missing package lockfile leads to non-deterministic installs'));
   assert.ok(!isLockfileClaim('business logic in the entrypoint'));
   assert.ok(isApiKeyStatusClaim('Exposed API Key Status in Health Check hasApiKey'));

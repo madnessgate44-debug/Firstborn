@@ -118,7 +118,10 @@ export function isRenderSinkClaim(text: string): boolean {
 }
 
 export function isHardcodedSecretClaim(text: string): boolean {
-  const aboutSecret = /\b(key|secret|token|password|credential)\b/i.test(text);
+  // A credential word must appear as part of a credential phrase, not as a bare
+  // token: "COST_PER_INPUT_TOKEN" is arithmetic, not a secret. A bare \btoken\b
+  // match labelled a real cost-estimation finding as a contradicted secret.
+  const aboutSecret = /\b(api[ _-]?key|secret[ _-]?key|access[ _-]?token|auth[ _-]?token|bearer[ _-]?token|password|passwd|private[ _-]?key|credential)\b/i.test(text);
   const hardcoded = /\b(hard[- ]?coded|committed|checked in|in the (source|code|repo|bundle))\b/i.test(text);
   return aboutSecret && hardcoded;
 }

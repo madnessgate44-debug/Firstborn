@@ -67,6 +67,22 @@ test('registry: satisfiesRange settles the real Amina claims', () => {
   assert.equal(satisfiesRange('>=16 <18', dotenv), true);
 });
 
+test('registry: keeps a finding that mentions dependencies but makes no version claim', () => {
+  // Regression: bare "dependency" used to trigger version grounding, which then
+  // dropped a real install-script finding because the dependency resolves fine.
+  const findings = [
+    { severity: 'HIGH', title: 'Dependency declares postinstall script which may execute arbitrary code on install', paths: ['package.json'], basis: 'observed' as const, evidence: 'a dependency runs a postinstall script', recommendation: 'review it' },
+  ];
+  const out = groundFindings(findings, {
+    deps,
+    registry: grounderOf({ typescript: { latest: '7.0.2', versions: ['7.0.2'] } }),
+    hasLockfile: true,
+    lockfileChecked: true,
+  });
+  assert.equal(out.findings.length, 1, 'a non-version finding must survive grounding');
+  assert.equal(out.dropped, 0);
+});
+
 test('registry: drops a false "outdated" claim the registry contradicts', () => {
   const findings = [
     { severity: 'HIGH', title: 'Invalid TypeScript version specified in devDependencies', paths: ['package.json'], basis: 'observed' as const, evidence: '"typescript": "^7.0.2" is outdated; current stable is 5.x', recommendation: 'downgrade to ^5.0.0' },
