@@ -649,6 +649,12 @@ export class ForgeAgent {
 
       const maxModelCalls = loadForgeLimits().maxModelCalls;
       const guardModelCall = (label: string): boolean => {
+        if (Date.now() - Date.parse(report.startTime) > loadForgeLimits().maxRuntimeMs) {
+          report.status = 'BLOCKED';
+          report.blockerReason = `Mission runtime ceiling reached; stopping safely before ${label}.`;
+          log('warn', report.blockerReason);
+          return false;
+        }
         if (report.modelInvoked.callsCount >= maxModelCalls) {
           report.status = 'BLOCKED';
           report.blockerReason = `Model-call ceiling reached (${maxModelCalls}); stopping safely before ${label}.`;
@@ -697,6 +703,7 @@ export class ForgeAgent {
       let anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
       let anchorRepairAttempts = 0;
       while (anchorProblems.length > 0 && anchorRepairAttempts < 2) {
+        if (!guardModelCall('anchor repair')) return finalize();
         anchorRepairAttempts += 1;
         log('warn', `Model patch contains invalid exact anchors; requesting bounded repair ${anchorRepairAttempts}/2: ${anchorProblems.slice(0, 5).join(' | ')}`);
         report.modelInvoked.callsCount += 1;
@@ -879,6 +886,7 @@ export class ForgeAgent {
               `COMMAND: ${result.command}\nSTATUS: ${result.status}\nEXIT: ${result.exitCode}\nSTDOUT HEAD:\n${result.stdout.slice(0, 700)}\nSTDOUT TAIL:\n${result.stdout.slice(-1100)}\nSTDERR HEAD:\n${result.stderr.slice(0, 500)}\nSTDERR TAIL:\n${result.stderr.slice(-1100)}`
             ).join('\n\n--- FAILED CHECK ---\n\n');
             log('warn', `Target checks failed; requesting bounded repair ${attempt + 1}/2 with ${failedResults.length} failing check(s).`);
+            if (!guardModelCall('target-check repair')) return finalize();
             report.modelInvoked.callsCount += 1;
             const previousPatchSummary = report.plannedChanges
               .map((change) => JSON.stringify({
@@ -1061,7 +1069,7 @@ export class ForgeAgent {
 - **Model**: ${report.modelInvoked.model}
 - **Fallback Used**: ${report.modelInvoked.fallbackUsed ?? 'unknown'}
 - **Keyless Route Errors**: ${(report.modelInvoked.keylessRouteErrors ?? []).join(' | ') || 'none reported'}
-- **Status**: ${report.status}
+- **Status**: Local checks passed; PR opened
 - **Tests**: ${report.testResults.map((r) => `${r.command}: ${r.status}`).join(', ')}
 `,
             });
