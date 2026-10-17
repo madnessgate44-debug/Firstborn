@@ -118,7 +118,10 @@ export function isRenderSinkClaim(text: string): boolean {
 }
 
 export function isHardcodedSecretClaim(text: string): boolean {
-  const aboutSecret = /\b(key|secret|token|password|credential)\b/i.test(text);
+  // A credential word must appear as part of a credential phrase, not as a bare
+  // token: "COST_PER_INPUT_TOKEN" is arithmetic, not a secret. A bare \btoken\b
+  // match labelled a real cost-estimation finding as a contradicted secret.
+  const aboutSecret = /\b(api[ _-]?key|secret[ _-]?key|access[ _-]?token|auth[ _-]?token|bearer[ _-]?token|password|passwd|private[ _-]?key|credential)\b/i.test(text);
   const hardcoded = /\b(hard[- ]?coded|committed|checked in|in the (source|code|repo|bundle))\b/i.test(text);
   return aboutSecret && hardcoded;
 }
@@ -133,6 +136,36 @@ export function isApiKeyStatusClaim(text: string): boolean {
 
 export function isLegacyPeerDepsClaim(text: string): boolean {
   return /\blegacy[- ]peer[- ]deps\b/i.test(text);
+}
+
+/** A claim that a symbol is used without being imported. */
+export function isMissingImportClaim(text: string): boolean {
+  return /\b(not imported|missing import|no import|isn't imported|is not imported|never imported|import is missing|missing an import|undefined (component|symbol|variable))\b/i.test(text);
+}
+
+/** A claim that a request leaves the site's own origin. */
+export function isCrossOriginClaim(text: string): boolean {
+  return /\b(cross[- ]origin|cors\b|third[- ]party (endpoint|domain|origin|api|server))\b/i.test(text);
+}
+
+/** A claim that a loop cannot terminate. */
+export function isInfiniteLoopClaim(text: string): boolean {
+  return /\b(infinite loop|unbounded loop|never terminates|loop that never (ends|terminates)|endless loop)\b/i.test(text);
+}
+
+/** Absolute URLs, i.e. requests that genuinely leave the current origin. */
+const ABSOLUTE_URL_RE = /https?:\/\/[^\s'"`)<>\]]+/g;
+
+/** Loop constructs. Their presence means an "infinite loop" claim needs real analysis. */
+const LOOP_RE = /\b(while|for)\s*\(|\bdo\s*\{/;
+
+/** Uppercase-initial identifiers, e.g. a component or class name. */
+const SYMBOL_RE = /\b([A-Z][A-Za-z0-9_]{2,})\b/g;
+
+/** Concatenate the cited files' content, so a per-file claim is judged against its file. */
+function citedText(files: Record<string, string>, paths: string[]): { text: string; found: string[] } {
+  const found = paths.filter((p) => files[p] !== undefined);
+  return { text: found.map((p) => files[p]).join('\n'), found };
 }
 
 const LOCKFILE_NEEDLES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'bun.lock'];
@@ -230,6 +263,65 @@ export function verifyFinding(
       needle: 'legacy-peer-deps',
     });
     return settle(hits.length > 0);
+  }
+
+  // A "used but not imported" claim is settled by looking for the import in the
+  // cited file itself. This is the check that catches a finding raised against a
+  // fragment of a file: the import is usually at the top, the usage far below.
+  if (isMissingImportClaim(text)) {
+    const { text: src, found } = citedText(corpus, finding.paths);
+    const symbols = [...new Set(`${finding.title} ${finding.evidence}`.match(SYMBOL_RE) ?? [])];
+    const imported = symbols.filter((s) => new RegExp(`import[^\\n]*\\b${s}\\b`).test(src));
+    checks.push({
+      claim: 'each symbol the finding names is imported in the cited file',
+      command: `grep -n "import" <cited file> | grep -E "${symbols.join('|') || '<symbol>'}"`,
+      result: found.length
+        ? imported.length
+          ? `imported: ${imported.join(', ')}`
+          : `no import found for ${symbols.join(', ') || '(no symbol named)'} in ${found.join(', ')}`
+        : 'cited file not present in the corpus',
+      supports: imported.length === 0,
+      needle: symbols[0],
+    });
+    return settle(imported.length === 0);
+  }
+
+  // A "cross-origin request" claim is settled by looking for an absolute URL. A
+  // path like '/api/x' is same-origin by definition, so the claim is refuted.
+  if (isCrossOriginClaim(text)) {
+    const { text: src, found } = citedText(corpus, finding.paths);
+    const urls = [...new Set(src.match(ABSOLUTE_URL_RE) ?? [])];
+    checks.push({
+      claim: 'an absolute URL (a request that leaves this origin) appears in the cited file',
+      command: `grep -nE "https?://" <cited file>`,
+      result: found.length
+        ? urls.length
+          ? `${urls.length} absolute URL(s), e.g. ${urls[0]}`
+          : `0 absolute URLs in ${found.join(', ')}; any request is relative to this origin`
+        : 'cited file not present in the corpus',
+      supports: urls.length > 0,
+      needle: 'https://',
+    });
+    return settle(urls.length > 0);
+  }
+
+  // An "infinite loop" claim cannot be proven from text, but it can be refuted
+  // when the cited file contains no loop construct at all.
+  if (isInfiniteLoopClaim(text)) {
+    const { text: src, found } = citedText(corpus, finding.paths);
+    const loops = (src.match(LOOP_RE) ?? []).length;
+    checks.push({
+      claim: 'the cited file contains a loop construct that could fail to terminate',
+      command: `grep -nE "while\\(|for\\(|do\\{" <cited file>`,
+      result: found.length
+        ? loops
+          ? `${loops} loop construct(s) in ${found.join(', ')}; termination needs line-level analysis`
+          : `0 loop constructs in ${found.join(', ')}`
+        : 'cited file not present in the corpus',
+      supports: loops > 0,
+      needle: 'while(',
+    });
+    return settle(loops > 0);
   }
 
   return { verdict: 'UNVERIFIED', category: 'judgment', checks };

@@ -31,9 +31,38 @@ export const LOCKFILES = [
   'bun.lock',
 ];
 
-/** Words that signal a finding is making a claim about dependency versions. */
+/**
+ * True when a version-claim word appears in the same sentence as the dependency
+ * name. Grounding used to fire on any finding that mentioned a dependency and a
+ * claim word anywhere in its text, so "Parent PIN is handled in frontend state"
+ * was dropped as a false version claim because it mentioned react.
+ */
+function claimsVersionOf(text: string, name: string): boolean {
+  const sentences = text.split(/(?<=[.!?;:])\s+|\n+/);
+  const nameRe = new RegExp(`(^|[^\\w@/-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w@/-]|$)`);
+  return sentences.some((s) => nameRe.test(s) && hasClaimWord(s));
+}
+
+/**
+ * Words that signal a finding is making a claim about dependency versions.
+ * Bare "dependency"/"dependencies" is deliberately excluded: it matched findings
+ * about install scripts and production bundling, which assert nothing about a
+ * version, and grounding then dropped them as false version claims.
+ */
 const CLAIM_RE =
-  /\b(version|versions|outdated|unsupported|invalid|obsolete|vulnerab\w*|upgrade|update|downgrade|pin(ned)?|deprecat\w*|stale|eol|end[- ]of[- ]life|latest|semver|dependency|dependencies|devdependenc\w*)\b/i;
+  /\b(version|versions|outdated|unsupported|invalid|obsolete|vulnerab\w*|upgrade|update|downgrade|deprecat\w*|stale|eol|end[- ]of[- ]life|latest|semver|resolve[sd]?|valid)\b/i;
+
+/**
+ * "pin"/"pinned" is matched case-sensitively on purpose: uppercase PIN is a
+ * personal identification number, not a version-pinning claim, and matching it
+ * dropped a real finding about frontend PIN handling.
+ */
+const PIN_RE = /\bpin(ned|ning)?\b/;
+
+/** True when a sentence makes a claim about a dependency version. */
+function hasClaimWord(sentence: string): boolean {
+  return CLAIM_RE.test(sentence) || PIN_RE.test(sentence);
+}
 
 /** Parse `dependencies` and `devDependencies` from a package.json excerpt. */
 export function parsePackageJson(text: string): ParsedDep[] {
@@ -76,6 +105,15 @@ export function isVersionClaim(text: string): boolean {
 /** True when the finding is about a lockfile rather than a package version. */
 export function isLockfileClaim(text: string): boolean {
   return /lock\s*-?\s*file|package-lock|yarn\.lock|pnpm-lock/i.test(text);
+}
+
+/**
+ * True when the finding asserts a lockfile is missing, not merely mentions one.
+ * Without this, "Deprecated dependency present in lockfile" was dropped because
+ * a lockfile exists — the claim was never that one was missing.
+ */
+export function isMissingLockfileClaim(text: string): boolean {
+  return isLockfileClaim(text) && /\b(missing|absent|no|not|without|uncommitted|lacks?|lacking|omit\w*)\b/i.test(text);
 }
 
 /** Compare two semver-ish strings, ignoring build metadata and leading zeros. */
@@ -169,7 +207,7 @@ export function groundFindings(
     const text = `${f.title} ${f.evidence} ${f.recommendation}`;
     const names = extractDepNames(text, opts.deps);
 
-    if (opts.lockfileChecked && isLockfileClaim(text) && !names.length) {
+    if (opts.lockfileChecked && isMissingLockfileClaim(text) && !names.length) {
       if (opts.hasLockfile) {
         dropped += 1;
         notes.push(`Dropped "${f.title}": a lockfile IS present in the repository.`);
@@ -184,10 +222,19 @@ export function groundFindings(
       continue;
     }
 
+    // Ground only the dependencies the finding actually makes a version claim
+    // about. A passing mention of react in a state-management finding must not
+    // make that finding droppable as a version claim.
+    const claimed = names.filter((n) => claimsVersionOf(text, n));
+    if (!claimed.length) {
+      out.push(f);
+      continue;
+    }
+
     let corrected: string | null = null;
     let falseClaim = false;
     let undetermined = false;
-    for (const name of names) {
+    for (const name of claimed) {
       const dep = opts.deps.find((d) => d.name === name)!;
       const reg = opts.registry.get(name);
       if (!reg) {
@@ -205,7 +252,7 @@ export function groundFindings(
 
     if (falseClaim) {
       dropped += 1;
-      const detail = names
+      const detail = claimed
         .map((n) => {
           const d = opts.deps.find((x) => x.name === n)!;
           const r = opts.registry.get(n);

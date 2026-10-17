@@ -105,6 +105,7 @@ Forge is the lead agent; the company is the org of roles it can run.
   audit). Cross-repo delivery needs `FORGE_DELIVER_TOKEN` (a PAT with `repo` scope);
   same-owner targets work with the built-in token.
 - **Entry points**: `npm run audit -- <owner/repo>` (read-only company audit),
+  `npm run audit -- --full <owner/repo>` (full-coverage sweep, below),
   `npm run company` (coding company), `npm run deliver -- owner/repo "goal"`
   (audit → verified PR), `scripts/audit.ts`, `scripts/company.ts`,
   `scripts/deliver.ts`.
@@ -113,6 +114,33 @@ Forge is the lead agent; the company is the org of roles it can run.
 
 The audit is read-only: it never writes to the target, creates branches, or runs
 target code, and it treats audited file content as untrusted data.
+
+### Full-coverage audit (`--full`)
+
+The sampled audit sends a fixed 22-file, 4 KB-per-file excerpt set to one model
+call, so a large repository is mostly unread (~5% by bytes). `--full` instead
+reads the **entire** corpus: `src/company/sweep.ts` (`planSweep` → `runSweep` →
+`computeCoverage`) chunks every tracked text file to fit the model context, sends
+one combined-lens call per chunk, merges the findings with `mergeFindings`, and
+prints a **coverage ledger** stating `Files examined: N/M (P%)` plus the names of
+any files a failed chunk left unread. A file counts as examined only when every
+part of it was in a chunk that returned a usable answer; a partial result is
+never rounded up to 100%.
+
+Cost is one model call per chunk (Amina: 133 files, 1.9 MB → 91 chunks), so
+`--full` is opt-in and slower; the sampled path stays the default. Enable it in
+CI with the `full` input on `company-audit.yml`.
+
+### Model routing (one policy)
+
+`src/model-routing.ts` holds the single keyless-vs-keyed decision used by both
+`src/services/model.ts` and `src/company/model.ts`, so the two engines cannot
+drift. The freelm `keyless` option is always `true`: configured keyed providers
+(Groq/Gemini) are tried first and the anonymous Kilo/OVHcloud endpoints are a
+priority-100 last resort. `FIRSTBORN_KEYLESS_ONLY=true` strips the provider keys
+and forces keyless-only. Returning `'auto'` is deliberately avoided — freelm
+reads it as "add keyless only when no keys exist", which would remove the
+fallback whenever a key was present.
 
 ## Verification Commands
 
