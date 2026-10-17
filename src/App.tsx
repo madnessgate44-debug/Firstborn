@@ -70,7 +70,7 @@ export default function App() {
       }
       const res = await fetch(`/api/github/inspect?repo=${encodeURIComponent(targetRepo)}`, { headers });
       const data = await res.json();
-      setRepoStatus(data);
+      setRepoStatus(res.ok ? data : { exists: false, errorMessage: data.error });
     } catch (err: any) {
       setRepoStatus({ exists: false, errorMessage: err.message });
     } finally {
@@ -112,8 +112,12 @@ export default function App() {
         }),
       });
 
-      const report: TaskExecutionReport = await res.json();
-      setCurrentReport(report);
+      const report = await res.json();
+      if (!res.ok || !report.status) {
+        alert(`Request rejected (HTTP ${res.status}): ${report.error || 'unknown error'}`);
+        return;
+      }
+      setCurrentReport(report as TaskExecutionReport);
     } catch (err: any) {
       alert(`Task execution failed: ${err.message}`);
     } finally {
@@ -133,10 +137,14 @@ export default function App() {
         body: JSON.stringify({
           title: '',
           description: '',
-          targetRepo: 'invalid-repo-name',
+          targetRepo: 'madnessgate44-debug/Firstborn',
         }),
       });
-      const report: TaskExecutionReport = await res.json();
+      const report: TaskExecutionReport & { error?: string } = await res.json();
+      if (!res.ok && !report.status) {
+        setNegativeTestMsg(`NEGATIVE TEST BLOCKED: HTTP ${res.status} ${report.error ?? ''}. Enter a valid GitHub PAT.`);
+        return;
+      }
       if (report.status === 'FAILED') {
         setNegativeTestMsg(`NEGATIVE TEST PASSED: Task was rejected as expected with error: "${report.errorMessage}"`);
       } else {
@@ -324,7 +332,7 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 text-[11px] mb-1">GitHub PAT (Optional)</label>
+                    <label className="block text-slate-400 text-[11px] mb-1">GitHub PAT (Required)</label>
                     <input
                       type="password"
                       placeholder="ghp_... (stored only in memory)"

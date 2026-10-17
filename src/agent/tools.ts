@@ -216,7 +216,9 @@ export function buildForgeTools(options: {
         }
         const glob = str(input, 'glob');
         const matcher = glob && !matchesAll(glob) ? globToRegExp(glob) : null;
-        const paths = (await listPaths()).filter((p) => (matcher ? matcher.test(p) : true));
+        const allPaths = (await listPaths()).filter((p) => (matcher ? matcher.test(p) : true));
+        // Without a local workspace each file is one GitHub API call; cap to protect the rate limit.
+        const paths = ws ? allPaths : allPaths.slice(0, 40);
         const matches: string[] = [];
         let scanned = 0;
         for (const rel of paths) {
@@ -311,8 +313,8 @@ export function buildForgeTools(options: {
           writeFileSync(abs, result.content);
           return { ok: true, output: `Applied ${edits.length} edit(s) to ${rel} in ${ctx.workspace}.` };
         }
-        // No workspace: the pipeline stages the change later through the PR path.
-        return { ok: true, output: `Staged ${edits.length} edit(s) to ${rel} in ${ctx.workspace}.` };
+        // No workspace: nothing can be persisted, so do not claim success.
+        return { ok: false, output: 'No workspace available; edit_file cannot save changes.' };
       },
     });
     tools.push({

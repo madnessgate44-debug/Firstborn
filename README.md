@@ -36,8 +36,10 @@ The workflow `.github/workflows/forge.yml` runs the agent. It has two triggers:
 - An issue labeled `forge-task` authored by the repository `OWNER` (`issues: [labeled]`).
 
 Both call `npx tsx src/agent/forge-runner.ts`, which reads the task from environment
-variables (`TASK_ID`, `TASK_TITLE`, `TASK_DESC`, `GITHUB_REPOSITORY`) and runs in
-strict keyless mode (`FIRSTBORN_KEYLESS_ONLY=true`).
+variables (`TASK_ID`, `TASK_TITLE`, `TASK_DESC`, `GITHUB_REPOSITORY`) and runs
+with free-tier keyed providers (`GROQ_API_KEY` and `GEMINI_API_KEY` repo secrets) plus
+keyless endpoints as a last-resort fallback. `FIRSTBORN_KEYLESS_ONLY=true` is an
+optional lock.
 
 Dispatch example:
 
@@ -107,10 +109,14 @@ profile table.
 
 ---
 
-## 3. Model policy (keyless, capability-first)
+## 3. Model policy (free-tier keyed first, keyless fallback)
 
-Requirement: Forge must operate with **no API keys**, using free public endpoints, and
-must always try the **finest free model currently available** before degrading.
+Requirement: Forge must prefer free-tier provider keys; keyless Kilo/OVHcloud endpoints
+are the last resort.
+
+> Warning: prompts and code may be sent to anonymous third-party endpoints. Do not use
+> Forge on confidential client code unless `FIRSTBORN_KEYLESS_ONLY` is off and keyed
+> providers answer.
 
 - Primary path: the `freelm` router with keyless endpoints (Kilo Gateway, OVHcloud).
   No key is required; Gemini is an optional fallback that is disabled in keyless-only mode.
@@ -232,12 +238,10 @@ npm start             # boots the HTTP API
 These are verified facts about the current environment, useful when a controller
 interprets results:
 
-- **Native in-workflow PR creation is enabled.** Forge opens its own pull requests from
-  Actions using `GITHUB_TOKEN`; PRs are authored by `github-actions[bot]` (e.g. #21, #25).
-  The repository setting "Allow GitHub Actions to create and approve pull requests" is on.
-- **`pull_request` checks run for bot branches.** Verification workflows triggered by
-  agent-created pull requests execute and pass; they are not gated behind manual approval
-  in the current configuration.
+- **PR creation from Actions needs the repo setting "Allow GitHub Actions to create and
+  approve pull requests".** If it is off, GitHub returns 403.
+- **Bot-authored PR checks can be held at `action_required` until approved.** `forge.yml`
+  tries to approve them automatically.
 - **The API token used for automation is a GitHub App installation token.** It cannot read
   or change repository Actions settings (`GET /repos/{owner}/{repo}/actions/permissions`
   returns `403`), so those settings must be managed by a repository administrator.

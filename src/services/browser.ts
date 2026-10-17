@@ -172,7 +172,7 @@ export class BrowserService {
     const snap = await this.view();
     if (!pattern) return snap.text;
     try {
-      const re = new RegExp(pattern, 'gi');
+      const re = new RegExp(pattern, 'i');
       const lines = snap.text.split(/(?<=[.!?])\s+/).filter((s) => re.test(s));
       return lines.length ? lines.join('\n') : `No text matched /${pattern}/.`;
     } catch (err) {
