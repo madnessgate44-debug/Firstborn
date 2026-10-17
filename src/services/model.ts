@@ -5,6 +5,11 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { FreeLLM } from 'freelm';
+// The routing policy is shared with the company engine so both paths make the
+// same keyless-vs-keyed decision. See src/model-routing.ts for the policy.
+import { applyRoutingPolicy, keylessOption, isKeylessOnly, CREDENTIAL_ENV_NAMES } from '../model-routing.ts';
+
+export { isKeylessOnly };
 
 export interface ModelGenerationResult {
   text: string;
@@ -93,26 +98,6 @@ Respond only with valid JSON.`;
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
 
-const KEYLESS_CREDENTIAL_ENV_NAMES = [
-  'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY',
-  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'ZAI_API_KEY', 'COHERE_API_KEY',
-  'CO_API_KEY', 'CEREBRAS_API_KEY', 'MISTRAL_API_KEY', 'NVIDIA_API_KEY', 'NIM_API_KEY',
-  'KILO_API_KEY', 'FREELM_GOOGLE_KEYS', 'FREELM_GROQ_KEYS', 'FREELM_OPENROUTER_KEYS',
-  'FREELM_CLOUDFLARE_KEYS', 'FREELM_ZAI_KEYS', 'FREELM_COHERE_KEYS',
-  'FREELM_CEREBRAS_KEYS', 'FREELM_MISTRAL_KEYS', 'FREELM_NIM_KEYS', 'FREELM_KILO_KEYS',
-];
-
-/**
- * GitHub capitalizes repository-variable names, so the flag can arrive as
- * `True`/`TRUE`, not just `true`. Normalize before comparing, otherwise the
- * keyless-only safety lock silently fails to engage.
- */
-function isKeylessOnly(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env.FIRSTBORN_KEYLESS_ONLY ?? '').trim().toLowerCase() === 'true';
-}
-
-export { isKeylessOnly };
-
 /**
  * Build the loop-brain prompt. Exported and pure so the AGENTS.md memory
  * injection can be asserted without calling a model. Repository guidance is
@@ -158,10 +143,7 @@ export class ModelService {
   private readonly geminiConfigured: boolean;
 
   constructor() {
-    if (isKeylessOnly()) {
-      for (const name of KEYLESS_CREDENTIAL_ENV_NAMES) delete process.env[name];
-      process.env.FREELM_KEYLESS = '1';
-    }
+    applyRoutingPolicy(process.env);
     const key = process.env.GEMINI_API_KEY?.trim();
     this.geminiConfigured = Boolean(key && key !== 'MY_GEMINI_API_KEY');
     this.gemini = this.geminiConfigured ? new GoogleGenAI({ apiKey: key }) : null;
@@ -280,7 +262,7 @@ Respond only with valid JSON.`;
     try {
       const llm = FreeLLM.fromEnv({
         // Always include the no-signup Kilo/OVHcloud routes as last resorts.
-        keyless: true,
+        keyless: keylessOption(),
         maxAttempts: 12,
         timeout: 35,
         hedge: true,

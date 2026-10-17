@@ -14,6 +14,10 @@ on:
         description: 'Independent attempts per audit lens'
         required: true
         default: '2'
+      full:
+        description: 'Read every file (100% coverage); slower, one model call per chunk'
+        required: true
+        default: 'false'
 
 permissions:
   contents: read
@@ -21,7 +25,9 @@ permissions:
 jobs:
   company-audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The full-coverage sweep makes one model call per chunk (~91 for a 1.9 MB
+    # repository), so the ceiling has to allow for a slow free-tier run.
+    timeout-minutes: 120
     steps:
       - name: Check out the company
         uses: actions/checkout@v4
@@ -43,7 +49,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORGE_AUDIT_ATTEMPTS: ${{ inputs.attempts }}
-        run: npx tsx scripts/audit.ts "${{ inputs.target_repo }}"
+          FORGE_AUDIT_FULL: ${{ inputs.full }}
+        run: |
+          if [ "${FORGE_AUDIT_FULL}" = "true" ]; then
+            npx tsx scripts/audit.ts --full "${{ inputs.target_repo }}"
+          else
+            npx tsx scripts/audit.ts "${{ inputs.target_repo }}"
+          fi
 
       - name: Upload the audit report
         if: always()
@@ -53,4 +65,6 @@ jobs:
           path: |
             .firstborn/evidence/company-audit.md
             .firstborn/evidence/company-audit.json
+            .firstborn/evidence/company-audit-full.md
+            .firstborn/evidence/company-audit-full.json
           if-no-files-found: warn

@@ -9,6 +9,11 @@
  */
 import { GoogleGenAI } from '@google/genai';
 import { FreeLLM } from 'freelm';
+// Shared routing policy with Forge's services engine, so both make the same
+// keyless-vs-keyed decision. See src/model-routing.ts.
+import { applyRoutingPolicy, keylessOption, isKeylessOnly, CREDENTIAL_ENV_NAMES } from '../model-routing.ts';
+
+export { isKeylessOnly, CREDENTIAL_ENV_NAMES };
 
 export interface ModelResult {
   text: string;
@@ -21,20 +26,6 @@ export interface ModelResult {
 }
 
 export type ChatMessage = { role: 'system' | 'user'; content: string };
-
-/** Provider credentials freelm reads, in the same set Forge clears in keyless-only mode. */
-export const CREDENTIAL_ENV_NAMES = [
-  'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY',
-  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'ZAI_API_KEY', 'COHERE_API_KEY',
-  'CO_API_KEY', 'CEREBRAS_API_KEY', 'MISTRAL_API_KEY', 'NVIDIA_API_KEY', 'NIM_API_KEY',
-  'KILO_API_KEY', 'FREELM_GOOGLE_KEYS', 'FREELM_GROQ_KEYS', 'FREELM_OPENROUTER_KEYS',
-  'FREELM_CLOUDFLARE_KEYS', 'FREELM_ZAI_KEYS', 'FREELM_COHERE_KEYS',
-  'FREELM_CEREBRAS_KEYS', 'FREELM_MISTRAL_KEYS', 'FREELM_NIM_KEYS', 'FREELM_KILO_KEYS',
-];
-
-export function isKeylessOnly(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env.FIRSTBORN_KEYLESS_ONLY ?? '').trim().toLowerCase() === 'true';
-}
 
 /**
  * Work tier. `easy` work — planning, prose, reviews — needs no provider key and
@@ -64,10 +55,7 @@ export class ModelService {
   constructor(options: ModelServiceOptions = {}) {
     const env = options.env ?? process.env;
     this.env = env;
-    if (isKeylessOnly(env)) {
-      for (const name of CREDENTIAL_ENV_NAMES) delete env[name];
-      env.FREELM_KEYLESS = '1';
-    }
+    applyRoutingPolicy(env);
     const key = env.GEMINI_API_KEY?.trim();
     this.geminiConfigured = Boolean(key && key !== 'MY_GEMINI_API_KEY');
     this.gemini = this.geminiConfigured ? new GoogleGenAI({ apiKey: key }) : null;
@@ -103,14 +91,16 @@ export class ModelService {
     let invokedProvider = 'freelm free-tier router';
     let invokedModel = 'chat';
     const timeoutMs = options_timeout(this.env, 40000);
-    // Easy work should not spend a provider key: it is routed keyless even when
-    // keys are configured. Hard work prefers configured keys and falls back to
-    // keyless endpoints.
-    const hasProviderKeys = tier === 'hard' && CREDENTIAL_ENV_NAMES.some((n) => (this.env[n] ?? '').trim());
+    // One routing policy for every tier (shared with Forge's services engine):
+    // configured keyed providers are tried first and the anonymous keyless
+    // endpoints are the last resort, so a keyed answer is preferred whenever one
+    // is available and the keyless path still covers a total key outage.
+    // FIRSTBORN_KEYLESS_ONLY strips the keys in the constructor, leaving keyless
+    // as the only route.
 
     try {
       const llm = FreeLLM.fromEnv({
-        keyless: hasProviderKeys ? 'auto' : true,
+        keyless: keylessOption(this.env),
         maxAttempts: 12,
         timeout: 35,
         hedge: true,
