@@ -159,7 +159,7 @@ app.post('/api/verify/check', requireGitHubToken, async (req, res) => {
 });
 
 // 6. Read COORDINATION.md contents
-app.get('/api/coordination', async (req, res) => {
+app.get('/api/coordination', requireGitHubToken, async (req, res) => {
   try {
     const content = await fs.readFile(path.resolve(process.cwd(), 'COORDINATION.md'), 'utf-8');
     res.json({ content });
