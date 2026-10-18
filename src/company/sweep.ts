@@ -241,6 +241,8 @@ export interface SweepResult {
   route: { provider: string; model: string };
   /** Every provider/model that answered at least one chunk, with its chunk count. */
   routesUsed: { provider: string; model: string; chunks: number }[];
+  /** Total model calls made, counting a chunk that was retried after a rate limit. */
+  modelCalls: number;
 }
 
 /**
@@ -252,6 +254,23 @@ export function isDegradedRoute(provider: string, model: string): boolean {
   const haystack = `${provider} ${model}`.toLowerCase();
   return haystack.includes('kilo') || haystack.includes('ovh') || haystack.includes('kepler');
 }
+
+/** True when a failure looks like a rate limit, so waiting and retrying once is worthwhile. */
+export function isRateLimit(result: ModelResult): boolean {
+  const haystack = `${result.error ?? ''} ${(result.routeErrors ?? []).join(' ')}`.toLowerCase();
+  return (
+    haystack.includes('429') ||
+    haystack.includes('rate limit') ||
+    haystack.includes('rate-limit') ||
+    haystack.includes('too many requests')
+  );
+}
+
+/** How long to wait before retrying a chunk that failed on a rate limit. */
+export const RATE_LIMIT_RETRY_WAIT_MS = 30000;
+
+/** Default pause between chunks, so a keyed route is not hammered into a rate limit. */
+export const DEFAULT_PACING_MS = 1000;
 
 /**
  * Run the sweep: one combined-lens model call per chunk, in order. A chunk that
@@ -265,6 +284,10 @@ export async function runSweep(options: {
   commit: string;
   maxFindingsPerChunk?: number;
   onChunk?: (note: { id: string; index: number; count: number; ok: boolean; provider: string; model: string }) => void;
+  /** Pause between chunks, to avoid rate limits. 0 (the library default) disables pacing. */
+  pacingMs?: number;
+  /** Sleep function, injectable so tests do not really wait. */
+  sleep?: (ms: number) => Promise<void>;
 }): Promise<SweepResult> {
   const known = new Set(options.plan.files);
   const maxFindings = Math.max(1, options.maxFindingsPerChunk ?? 8);
@@ -273,6 +296,9 @@ export async function runSweep(options: {
   const failed: string[] = [];
   const routeCounts = new Map<string, { provider: string; model: string; chunks: number }>();
   let route = { provider: 'unrecorded', model: '(no model call succeeded)' };
+  const pacingMs = Math.max(0, options.pacingMs ?? 0);
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let modelCalls = 0;
 
   for (let i = 0; i < options.plan.chunks.length; i += 1) {
     const chunk = options.plan.chunks[i];
@@ -285,10 +311,24 @@ export async function runSweep(options: {
       fileCount: options.plan.files.length,
       maxFindings,
     });
-    const { value, result } = await options.model.completeJson<{ summary?: string; findings?: unknown[] }>(
+    // Pace between calls: a keyed route answered in a tight loop is what turns a
+    // clean run into a rate-limited one. The first chunk is not delayed.
+    if (pacingMs > 0 && i > 0) await sleep(pacingMs);
+    modelCalls += 1;
+    let { value, result } = await options.model.completeJson<{ summary?: string; findings?: unknown[] }>(
       [{ role: 'system', content: 'You are the audit team [role:sweep]. Return valid JSON only.' }, { role: 'user', content: prompt }],
       prompt
     );
+    // A chunk lost to a rate limit is waited on and tried once more, so a transient
+    // 429 does not downgrade files that a moment's pause would have covered.
+    if (!result.success && isRateLimit(result)) {
+      await sleep(RATE_LIMIT_RETRY_WAIT_MS);
+      modelCalls += 1;
+      ({ value, result } = await options.model.completeJson<{ summary?: string; findings?: unknown[] }>(
+        [{ role: 'system', content: 'You are the audit team [role:sweep]. Return valid JSON only.' }, { role: 'user', content: prompt }],
+        prompt
+      ));
+    }
     const ok = Boolean(result.success) && Boolean(value);
     if (result.success) route = { provider: result.provider, model: result.model };
     if (!ok) {
@@ -315,7 +355,7 @@ export async function runSweep(options: {
   }
 
   const routesUsed = [...routeCounts.values()].sort((a, b) => b.chunks - a.chunks || a.provider.localeCompare(b.provider));
-  return { findings, coverage: computeCoverage(options.plan, failed), chunkNotes, route, routesUsed };
+  return { findings, coverage: computeCoverage(options.plan, failed), chunkNotes, route, routesUsed, modelCalls };
 }
 
 export interface VerificationVerdict {
@@ -325,12 +365,35 @@ export interface VerificationVerdict {
   reason: string;
   /** Findings this role could not judge because none of their cited files were provided. */
   unverified: string[];
+  /** Findings in the panel's scope that this role did not judge (out of the panel budget). */
+  notInScope: string[];
 }
 
 /** Largest slice of any one cited file shown to a verifier. */
 export const CITED_FILE_MAX_CHARS = 12000;
 /** Largest total of cited-file content shown to a verifier. */
 export const CITED_TOTAL_MAX_CHARS = 60000;
+
+const SEVERITY_RANK: Record<AuditFinding['severity'], number> = { HIGH: 0, MEDIUM: 1, LOW: 2, INFO: 3 };
+
+/** Most severe first, stable by title, so the panel sees the same order every run. */
+export function sortFindingsBySeverity(findings: AuditFinding[]): AuditFinding[] {
+  return [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || a.title.localeCompare(b.title));
+}
+
+/** Default panel budget: how many findings the panel judges in one call. */
+export const DEFAULT_PANEL_FINDING_BUDGET = 60;
+
+/**
+ * The findings the panel judges in one call: the most severe first, up to the
+ * budget. Everything past the budget is named as out of scope rather than dropped,
+ * so the report never implies the panel read a finding it never saw.
+ */
+export function selectPanelScope(findings: AuditFinding[], budget = DEFAULT_PANEL_FINDING_BUDGET): { inScope: AuditFinding[]; notInScope: AuditFinding[] } {
+  const sorted = sortFindingsBySeverity(findings);
+  const limit = Math.max(0, budget);
+  return { inScope: sorted.slice(0, limit), notInScope: sorted.slice(limit) };
+}
 
 /**
  * Render the cited files a verifier is allowed to judge against, most-cited first.
@@ -386,19 +449,25 @@ export async function runVerificationPanel(options: {
   findings: AuditFinding[];
   corpus: Record<string, string>;
   roles?: string[];
+  /** How many findings the panel judges in one call, most severe first. */
+  findingBudget?: number;
   onRole?: (note: { role: string; verdict: VerificationVerdict['verdict'] }) => void;
 }): Promise<VerificationVerdict[]> {
   const roles = options.roles ?? ['Reviewer', 'QA Engineer', 'Security Engineer', 'Release Manager'];
   const out: VerificationVerdict[] = [];
   if (!options.findings.length) return out;
-  const { text: files, provided, omitted } = renderCitedFiles(options.corpus, options.findings);
+  // The panel judges the most severe findings within its budget. Findings past the
+  // budget are named as out of scope, so the report never implies they were judged.
+  const { inScope, notInScope } = selectPanelScope(options.findings, options.findingBudget);
+  const outOfScopeTitles = notInScope.map((f) => f.title);
+  const { text: files, provided, omitted } = renderCitedFiles(options.corpus, inScope);
   const providedSet = new Set(provided);
-  const unjudgeable = options.findings
+  const unjudgeable = inScope
     .filter((f) => f.paths.every((p) => !providedSet.has(p)))
     .map((f) => f.title);
   const unjudgeableSet = new Set(unjudgeable);
   const list = JSON.stringify(
-    options.findings.map((f) => ({ title: f.title, severity: f.severity, paths: f.paths, evidence: f.evidence })),
+    inScope.map((f) => ({ title: f.title, severity: f.severity, paths: f.paths, evidence: f.evidence })),
     null,
     1
   );
@@ -437,7 +506,7 @@ Return compact JSON only: {"verdict":"CONFIRM"|"OBJECT","reason":"...","objectio
       verdict = 'UNVERIFIED';
       if (rawObjections.length) finalReason = `${reason || 'objection'} (dropped: cited file was not provided)`.slice(0, 300);
     }
-    out.push({ title: objections.join('; ') || role, role, verdict, reason: finalReason, unverified });
+    out.push({ title: objections.join('; ') || role, role, verdict, reason: finalReason, unverified, notInScope: outOfScopeTitles });
     options.onRole?.({ role, verdict });
   }
   return out;
@@ -460,9 +529,26 @@ export interface FullAuditResult {
   route: { provider: string; model: string };
   /** Every provider/model that answered at least one chunk, with its chunk count. */
   routesUsed: { provider: string; model: string; chunks: number }[];
+  /** Total model calls made across the sweep (and its rate-limit retries). */
+  modelCalls: number;
+  /** Wall-clock milliseconds the whole audit took. */
+  elapsedMs: number;
   status: 'COMPLETED' | 'PARTIAL' | 'BLOCKED';
   reason: string;
   markdown: string;
+}
+
+/**
+ * Human-readable wall time, so the report states the run's real cost rather than
+ * leaving the reader to guess. Sub-second runs show milliseconds.
+ */
+export function formatDuration(ms: number): string {
+  const safe = Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0;
+  if (safe < 1000) return `${safe} ms`;
+  const totalSeconds = Math.round(safe / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes} min ${seconds} s` : `${seconds} s`;
 }
 
 /**
@@ -510,6 +596,8 @@ export function renderFullAuditMarkdown(input: Omit<FullAuditResult, 'markdown'>
     ...(input.routesUsed?.length
       ? [`- Routes used: ${input.routesUsed.map((r) => `${r.provider} / ${r.model} (${r.chunks} chunk${r.chunks === 1 ? '' : 's'})`).join('; ')}`]
       : []),
+    `- Model calls: ${input.modelCalls}`,
+    `- Wall time: ${formatDuration(input.elapsedMs)}`,
     ...(degraded
       ? ['- DEGRADED ROUTE: at least one chunk was answered by an anonymous, rate-limited endpoint (Kilo/OVHcloud). Results from those chunks are less reliable and the run may have lost chunks to its request cap.']
       : []),
@@ -533,6 +621,7 @@ export function renderFullAuditMarkdown(input: Omit<FullAuditResult, 'markdown'>
           ...input.verification.flatMap((v) => [
             `- ${v.role}: ${v.verdict}${v.reason ? ` — ${v.reason}` : ''}`,
             ...(v.unverified?.length ? [`  - unverified (cited file not shown): ${v.unverified.join(', ')}`] : []),
+            ...(v.notInScope?.length ? [`  - NOT in panel scope (past the panel budget, not judged): ${v.notInScope.join(', ')}`] : []),
           ]),
         ]
       : []),
@@ -565,7 +654,14 @@ export async function runFullCoverageAudit(options: {
   verify?: boolean;
   /** Version grounder; a fake can be injected in tests. Defaults to the npm registry. */
   registryGrounder?: VersionGrounder;
+  /** Pause between chunks, to avoid rate limits. 0 disables pacing. */
+  pacingMs?: number;
+  /** Sleep function, injectable so tests do not really wait. */
+  sleep?: (ms: number) => Promise<void>;
+  /** How many findings the verification panel judges in one call. */
+  panelFindingBudget?: number;
 }): Promise<FullAuditResult> {
+  const startedAt = Date.now();
   const corpus = options.corpus;
   if (!corpus || Object.keys(corpus).length === 0) {
     const empty: FullAuditResult = {
@@ -581,6 +677,8 @@ export async function runFullCoverageAudit(options: {
       chunkNotes: [],
       route: { provider: 'unrecorded', model: '(no model call succeeded)' },
       routesUsed: [],
+      modelCalls: 0,
+      elapsedMs: Date.now() - startedAt,
       status: 'BLOCKED',
       reason: 'could not read the target corpus (no files fetched)',
       markdown: '',
@@ -596,6 +694,8 @@ export async function runFullCoverageAudit(options: {
     commit: options.commit,
     maxFindingsPerChunk: options.maxFindingsPerChunk,
     onChunk: options.onChunk,
+    pacingMs: options.pacingMs,
+    sleep: options.sleep,
   });
   const merged = mergeFindings(sweep.findings);
 
@@ -624,6 +724,7 @@ export async function runFullCoverageAudit(options: {
     model: options.model,
     findings,
     corpus,
+    findingBudget: options.panelFindingBudget,
     onRole: options.onRole,
   });
 
@@ -653,6 +754,8 @@ export async function runFullCoverageAudit(options: {
     chunkNotes: sweep.chunkNotes,
     route: sweep.route,
     routesUsed: sweep.routesUsed,
+    modelCalls: sweep.modelCalls,
+    elapsedMs: Date.now() - startedAt,
     status,
     reason,
   };

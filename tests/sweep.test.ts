@@ -12,8 +12,14 @@ import {
   renderCitedFiles,
   buildSweepPrompt,
   isDegradedRoute,
+  isRateLimit,
+  selectPanelScope,
+  sortFindingsBySeverity,
+  formatDuration,
   DEFAULT_MAX_CHARS_PER_SEGMENT,
   DEFAULT_MAX_CHARS_PER_CHUNK,
+  RATE_LIMIT_RETRY_WAIT_MS,
+  DEFAULT_PACING_MS,
   type SweepModel,
 } from '../src/company/sweep.ts';
 
@@ -171,6 +177,8 @@ test('sweep: the rendered report names unexamined files instead of implying full
     chunkNotes: [],
     route: { provider: 'p', model: 'm' },
     routesUsed: [],
+    modelCalls: 3,
+    elapsedMs: 4200,
     status: 'COMPLETED',
     reason: 'r',
   });
@@ -392,4 +400,131 @@ test('sweep: a finding whose only cited file was not provided is UNVERIFIED, not
   assert.equal(verdicts[0].verdict, 'UNVERIFIED');
   assert.deepEqual(verdicts[0].unverified, ['only hidden']);
   assert.match(verdicts[0].reason, /dropped: cited file was not provided/);
+});
+
+// ---- Pacing and rate-limit retry (Part 2.2) ----
+
+test('sweep: isRateLimit recognizes a 429 but not an ordinary failure', () => {
+  assert.equal(isRateLimit({ text: '', model: 'm', provider: 'p', success: false, error: 'HTTP 429 Too Many Requests' }), true);
+  assert.equal(isRateLimit({ text: '', model: 'm', provider: 'p', success: false, routeErrors: ['groq / x: rate limit reached'] }), true);
+  assert.equal(isRateLimit({ text: '', model: 'm', provider: 'p', success: false, error: 'model returned no parseable JSON' }), false);
+  assert.equal(isRateLimit({ text: 'ok', model: 'm', provider: 'p', success: true }), false);
+});
+
+test('sweep: pacing sleeps between chunks but not before the first', async () => {
+  const corpus: Record<string, string> = {};
+  for (let i = 0; i < 4; i += 1) corpus[`src/f${i}.ts`] = 'y'.repeat(1500);
+  const plan = planSweep(corpus, { maxCharsPerSegment: 1000, maxCharsPerChunk: 1000 });
+  const sleeps: number[] = [];
+  const model = stubModel(() => ({ value: { findings: [] }, result: { text: '{}', model: 'm', provider: 'p', success: true } }));
+  await runSweep({
+    model,
+    plan,
+    target: 'o/r',
+    commit: 'abc',
+    pacingMs: 25,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  assert.equal(sleeps.length, plan.chunks.length - 1, 'one pause between each pair of chunks, none before the first');
+  assert.ok(sleeps.every((ms) => ms === 25), 'the configured pause is used');
+});
+
+test('sweep: pacing is off by default so a run does not wait needlessly', async () => {
+  assert.equal(DEFAULT_PACING_MS > 0, true, 'the CLI has a sensible default pause');
+  const plan = planSweep({ 'a.ts': 'x'.repeat(500) });
+  const sleeps: number[] = [];
+  const model = stubModel(() => ({ value: { findings: [] }, result: { text: '{}', model: 'm', provider: 'p', success: true } }));
+  await runSweep({ model, plan, target: 'o/r', commit: 'abc', sleep: async (ms) => void sleeps.push(ms) });
+  assert.deepEqual(sleeps, [], 'the library default does not sleep');
+});
+
+test('sweep: a chunk lost to a rate limit is waited on and retried once', async () => {
+  const plan = planSweep({ 'a.ts': 'x'.repeat(500) });
+  let calls = 0;
+  const sleeps: number[] = [];
+  const model = stubModel(() => {
+    calls += 1;
+    if (calls === 1) return { value: null, result: { text: '', model: 'm', provider: 'p', success: false, error: 'HTTP 429 rate limit' } };
+    return { value: { findings: [] }, result: { text: '{}', model: 'gemini-2.5-flash', provider: 'google', success: true } };
+  });
+  const result = await runSweep({ model, plan, target: 'o/r', commit: 'abc', sleep: async (ms) => void sleeps.push(ms) });
+  assert.equal(calls, 2, 'the chunk is retried exactly once');
+  assert.equal(result.coverage.failedChunks, 0, 'the retry recovered the chunk');
+  assert.equal(result.modelCalls, 2, 'both calls are counted');
+  assert.ok(sleeps.includes(RATE_LIMIT_RETRY_WAIT_MS), 'the retry waits for the rate limit to clear');
+});
+
+test('sweep: a non-rate-limit failure is not retried', async () => {
+  const plan = planSweep({ 'a.ts': 'x'.repeat(500) });
+  let calls = 0;
+  const model = stubModel(() => {
+    calls += 1;
+    return { value: null, result: { text: '', model: 'm', provider: 'p', success: false, error: 'model returned no parseable JSON' } };
+  });
+  const result = await runSweep({ model, plan, target: 'o/r', commit: 'abc', sleep: async () => {} });
+  assert.equal(calls, 1, 'an ordinary failure is recorded once, not retried');
+  assert.equal(result.coverage.failedChunks, 1);
+  assert.equal(result.modelCalls, 1);
+});
+
+// ---- Verification panel scope (Part 2.3) ----
+
+test('sweep: the panel scope is the most severe findings first, up to the budget', () => {
+  const findings = [
+    { severity: 'INFO' as const, title: 'i', paths: ['a.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+    { severity: 'HIGH' as const, title: 'h', paths: ['a.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+    { severity: 'LOW' as const, title: 'l', paths: ['a.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+    { severity: 'MEDIUM' as const, title: 'm', paths: ['a.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+  ];
+  const { inScope, notInScope } = selectPanelScope(findings, 2);
+  assert.deepEqual(inScope.map((f) => f.title), ['h', 'm'], 'HIGH before MEDIUM');
+  assert.deepEqual(notInScope.map((f) => f.title), ['l', 'i'], 'the rest is named, not dropped');
+  assert.deepEqual(sortFindingsBySeverity(findings).map((f) => f.title), ['h', 'm', 'l', 'i']);
+});
+
+test('sweep: findings past the panel budget are reported as out of scope, not judged', async () => {
+  const corpus: Record<string, string> = { 'a.ts': 'ok' };
+  const finding = (title: string, severity: 'HIGH' | 'LOW') => ({
+    severity,
+    title,
+    paths: ['a.ts'],
+    basis: 'observed' as const,
+    evidence: 'e',
+    recommendation: 'r',
+    raisedBy: 'Sweep',
+  });
+  const findings = [finding('low one', 'LOW'), finding('high one', 'HIGH'), finding('low two', 'LOW')];
+  let prompt = '';
+  const model: SweepModel = {
+    completeJson: async <T,>(messages: { content: string }[]) => {
+      prompt = messages.map((m) => m.content).join('\n');
+      return { value: { verdict: 'CONFIRM', reason: 'ok' } as any, result: { text: '{}', model: 'm', provider: 'p', success: true } };
+    },
+  };
+  const verdicts = await runVerificationPanel({ model, findings, corpus, roles: ['Reviewer'], findingBudget: 1 });
+  assert.match(prompt, /high one/, 'the most severe finding is in scope');
+  assert.doesNotMatch(prompt, /low one/, 'a finding past the budget is not shown to the panel');
+  assert.deepEqual(verdicts[0].notInScope, ['low one', 'low two'], 'the skipped findings are named');
+});
+
+// ---- Cost reporting (Part 2.4) ----
+
+test('sweep: formatDuration reads plainly at each scale', () => {
+  assert.equal(formatDuration(0), '0 ms');
+  assert.equal(formatDuration(450), '450 ms');
+  assert.equal(formatDuration(1500), '2 s');
+  assert.equal(formatDuration(65000), '1 min 5 s');
+  assert.equal(formatDuration(-5), '0 ms');
+});
+
+test('sweep: the report states the model calls and the wall time', async () => {
+  const corpus = { 'a.ts': 'x'.repeat(500) };
+  const model = stubModel(() => ({ value: { findings: [] }, result: { text: '{}', model: 'gemini-2.5-flash', provider: 'google', success: true } }));
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, verify: false });
+  assert.equal(result.modelCalls, 1, 'one chunk, one call');
+  assert.ok(result.elapsedMs >= 0, 'the wall time is recorded');
+  assert.match(result.markdown, /- Model calls: 1/);
+  assert.match(result.markdown, /- Wall time: \d+ (ms|s|min)/);
 });

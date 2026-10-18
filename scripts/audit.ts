@@ -19,9 +19,15 @@ import { ModelService } from '../src/company/model.ts';
 import { runCompanyAudit } from '../src/company/audit-company.ts';
 import { fetchRepoContext } from '../src/company/repo-context.ts';
 import { fetchRepoCorpus } from '../src/company/registry.ts';
-import { runFullCoverageAudit } from '../src/company/sweep.ts';
+import { runFullCoverageAudit, DEFAULT_PACING_MS } from '../src/company/sweep.ts';
 
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** Pause between chunks, overridable for a faster (or gentler) run. */
+function pacingFromEnv(): number {
+  const parsed = Number.parseInt(process.env.FORGE_AUDIT_PACING_MS ?? '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_PACING_MS;
+}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -41,11 +47,14 @@ async function main(): Promise<void> {
     console.log(`[audit:full] ${ctx.target} @ ${ctx.commit.slice(0, 8)}; ${ctx.files.length} files`);
     console.log(`[audit:full] model: ${info.primaryProvider}; Gemini fallback configured: ${info.fallbackConfigured}`);
     const corpus = await fetchRepoCorpus(target, ctx.commit);
+    const pacingMs = pacingFromEnv();
+    console.log(`[audit:full] pacing: ${pacingMs} ms between chunks`);
     const result = await runFullCoverageAudit({
       model,
       target: ctx.target,
       commit: ctx.commit,
       corpus,
+      pacingMs,
       onChunk: ({ id, index, count, ok, provider, model }) =>
         console.log(`[audit:full] ${id} ${index}/${count} ${ok ? 'ok' : 'FAILED'}${ok ? ` via ${provider}/${model}` : ''}`),
       onRole: ({ role, verdict }) => console.log(`[audit:full] verify ${role} ${verdict}`),
@@ -61,6 +70,7 @@ async function main(): Promise<void> {
         `${result.coverage.succeededChunks}/${result.coverage.totalChunks} chunks answered; ${result.coverage.failedChunks} failed`
     );
     console.log(`Routes used: ${result.routesUsed.map((r) => `${r.provider}/${r.model} (${r.chunks})`).join('; ') || '(none)'}`);
+    console.log(`Model calls: ${result.modelCalls}; wall time: ${result.elapsedMs} ms`);
     console.log('\n' + result.markdown);
     // Any status other than COMPLETED is a degraded run: fail the step so CI and a
     // reader both see it, instead of a green check over a partial read.
