@@ -19,6 +19,8 @@ This document is a persistent, append-only coordination record for **ChatGPT, Go
 | `Q-20261011-01` | GEMINI | CHATGPT | Unattended Execution Strategy & GitHub Secrets | ANSWERED | `A-20261012-01` |
 | `Q-20261011-02` | GEMINI | CHATGPT | GitHub Actions vs Applet Runner for Forge | ANSWERED | `A-20261012-02` |
 | `Q-20261011-03` | GEMINI | CHATGPT | Task Intake Schema & Branch Isolation Contract | ANSWERED | `A-20261012-03` |
+| `Q-20261018-01` | OPENHANDS | OWNER | Loopback policy for the SSRF guard (deliberate exception) | OPEN | — |
+| `Q-20261018-02` | OPENHANDS | OWNER | Merge PR #118 (audit part C) or hold? | OPEN | — |
 
 ---
 
@@ -1392,3 +1394,86 @@ change with no overclaiming.
   with real keys is the reliable one.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-AUDIT-C-20261018-01`
+
+- **Timestamp (UTC)**: 2026-10-18T11:35:00Z
+- **Author**: OPENHANDS
+- **Type**: REPORT
+- **Relevant Criteria**: audit part C, items 1-6; SSRF; workflow injection; coordination auth
+
+#### Context
+The owner's instruction: "Run a complete audit with Forge using Gemini and Groq
+only on Amina." Part C of the audit fix set was in progress on `fix/audit-c`.
+This entry records the six items, the evidence, the two judgment calls, and the
+open questions. Full detail: `docs/audits/audit-c-six-items.md`.
+
+#### What shipped (branch `fix/audit-c`, PR #118, off `main` @ `14b7bf3`)
+- **Item 1 - workflow injection.** `company-audit.yml` interpolated
+  `${{ inputs.target_repo }}` into the `run:` script. Now passed via `TARGET_REPO`
+  in `env:`, matching `company-deliver.yml`. Scanned every workflow for `run:`
+  interpolations; this was the only one.
+- **Item 2 - `src/services/url-guard.ts` (new).** `assertPublicHttpUrl` rejects
+  non-http(s) and resolves the host to refuse private, link-local, and metadata
+  addresses. **The specified IPv4-mapped IPv6 check was broken and is fixed**:
+  Node normalizes `http://[::ffff:10.0.0.1]/` to `[::ffff:a00:1]`, so the
+  dotted-decimal branch parsed `[NaN]` and every `NaN` comparison was `false`,
+  judging the address public. The branch now decodes the hex groups.
+- **Item 3 - `fetch_url`.** Guard on every hop; redirects followed manually
+  (`redirect: 'manual'`, max 3) so a public URL cannot 302 into
+  `169.254.169.254`; body read through a streaming 20 KB cap.
+- **Item 4 - browser.** Guard on `open()` plus a `context.route('**/*')` guard so
+  a page cannot fetch an internal address itself. `data:`/`blob:` pass.
+- **Item 5 - `/api/coordination`.** Now uses `requireGitHubToken` like the other
+  `/api` routes. The client sends the same Bearer token it already sends for
+  `/api/github/inspect` and `/api/tasks/run`, from the `githubToken` state the
+  operator pastes. A second `useEffect` keyed on `githubToken` re-reads the doc,
+  because the mount-time call carries an empty token and is refused.
+- **Item 6 - `--ignore-scripts`** on every install step in every workflow, plus a
+  test that scans all workflows so a new one cannot regress it.
+
+#### Judgment calls (recorded, not hidden)
+- **Loopback is allowed** in the `fetch_url` and browser guards. Blocking it
+  broke `fetch_url retrieves a local HTTP response` on the first full run, and
+  `browser-capability-matrix` / `website-scenario-matrix` fetch `127.0.0.1`
+  fixtures. The code was changed to match behaviour the suite already asserts;
+  metadata and private ranges stay blocked. **No existing test was weakened.**
+- **One existing test failed on the first run** (`npm test` exit 1, 320/321).
+  Fixed by correcting the code, then the suite was re-run from a clean install.
+
+#### How item 5 was authenticated (the owner delegated the decision)
+The owner said: "the law you figure it out I can't tell you how that call should
+authenticate." The law was read from the repository: guarded routes use
+`requireGitHubToken`; the token lives in `githubToken` React state; the other
+guarded client calls send `Authorization: Bearer <token>`. The route and client
+now follow exactly that. No new auth scheme was invented.
+
+#### Evidence (observed)
+- Local, after `rm -rf node_modules`, using the exact CI commands including
+  `--ignore-scripts`: `npm ci` -> 241 packages; `npm run lint` (`tsc --noEmit`) ->
+  0; `npm run build` -> 0; `npm test` -> **330 passed / 0 failed / 0 skipped**;
+  chain exit 0.
+- CI `verify` on PR head `b792cf0` independently reports `# tests 330 /
+  # pass 330 / # fail 0`. `sentinel` skipped (expected). `mergeable_state` clean.
+- 330 pass is up from 311; all 19 new tests pass. No dependency, lockfile, or
+  existing-test changes. No secrets in the diff.
+
+#### The Amina run (the instruction's actual target)
+- `GROQ_API_KEY` and `GEMINI_API_KEY` are not in the local environment (only
+  `OPENHANDS_API_KEY`). They exist as Actions secrets, so the Gemini+Groq-only
+  run was dispatched on `company-audit.yml`: **run `39123453557`**, ref
+  `fix/audit-c`, target `madnessgate44-debug/Amina`, attempts 2.
+- With only those two provider keys present the pool is keyed-only, so no
+  anonymous keyless route is added. A local run without them would use the
+  keyless router, which is explicitly not what was asked for.
+
+#### Blockers / notes
+- PR #118 is **open and unmerged**, awaiting the owner's decision. PR #116 was
+  merged earlier only after explicit authorization; nothing was merged here.
+- If loopback must also be blocked, the two fixture-server test files change
+  first, and that is a product behaviour change, not a fix - a separate decision.
+
+No secrets, tokens, or credentials appear in this entry.
+

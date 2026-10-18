@@ -144,10 +144,36 @@ priority-100 last resort. `FIRSTBORN_KEYLESS_ONLY=true` strips the provider keys
 and forces keyless-only. `src/services/model.ts` calls `keylessOption()` with no
 tier and keeps its `true` behaviour.
 
+## SSRF guard
+
+`src/services/url-guard.ts` (`assertPublicHttpUrl`, `isPrivateAddress`) resolves a
+host and rejects non-http(s) schemes and private, link-local, and metadata
+addresses. It is used by `fetch_url` (`src/agent/tools.ts`) on **every redirect
+hop** and by `BrowserService` (`src/services/browser.ts`) both for `open()` and
+for a `context.route('**/*')` request guard. Loopback is allowed in both
+(`{ allowLoopback: true }`) because the browser capability-matrix and
+website-scenario tests fetch `127.0.0.1` fixture servers and Forge verifies its
+own local dev server; metadata and private ranges stay blocked.
+
+Node's WHATWG `URL` normalizes IPv4-mapped IPv6 (`[::ffff:10.0.0.1]` becomes
+`[::ffff:a00:1]`), so any dotted-decimal check must also decode the hex groups or
+`NaN` comparisons silently judge the address public.
+
 ## Verification Commands
 
 - `npm run lint` — `tsc --noEmit`; expect exit 0.
-- `npm test` — full suite on real Chromium; expect all pass, 0 skipped (231 tests).
+- `npm test` — full suite on real Chromium; expect all pass, 0 skipped (330 tests).
 - `npm run build` — Vite build; expect exit 0.
 - `npm run audit -- <owner/repo>` — read-only company audit; needs Groq/Gemini
-  keys for the keyed path (otherwise it uses the keyless free router).
+  keys for the keyed path (otherwise it uses the keyless free router). CI passes
+  only `GROQ_API_KEY`/`GEMINI_API_KEY`, so a dispatched run is keyed-only with no
+  keyless fallback; the local environment has neither key.
+- Workflow install steps use `npm ci --ignore-scripts`; `tests/workflow-install.test.ts`
+  fails if any workflow install step omits it.
+
+## Repo records
+
+- `docs/audits/` — read-only audit artifacts and their index (`README.md`).
+- `COORDINATION.md` — append-only multi-party record; new entries go at the end,
+  each with an ID, UTC timestamp, author, and type. Open questions are tracked in
+  the section 2 table.
