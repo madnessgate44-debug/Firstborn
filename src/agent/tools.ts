@@ -297,12 +297,14 @@ export function buildForgeTools(options: {
         const timer = setTimeout(() => controller.abort(), 15_000);
         try {
           let current = url;
+          // Loopback is blocked by default and only opened by an explicit opt-in, so a
+          // page cannot be steered at Forge's own local services. Read per call, not at
+          // module load, so the setting can be toggled around a request.
+          const allowLoopback = process.env.FORGE_FETCH_ALLOW_LOOPBACK === 'true';
           // Follow redirects by hand so every hop is re-checked: a public URL that
-          // 302s to 169.254.169.254 must be refused, not followed. Loopback stays
-          // allowed (matching the browser guard) so Forge can fetch its own local
-          // dev server; metadata and private ranges are still blocked.
+          // 302s to 169.254.169.254 or to 127.0.0.1 must be refused, not followed.
           for (let hop = 0; ; hop += 1) {
-            await assertPublicHttpUrl(current, { allowLoopback: true });
+            await assertPublicHttpUrl(current, { allowLoopback });
             const res = await fetch(current, {
               signal: controller.signal,
               redirect: 'manual',

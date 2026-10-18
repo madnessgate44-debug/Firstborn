@@ -150,10 +150,19 @@ tier and keeps its `true` behaviour.
 host and rejects non-http(s) schemes and private, link-local, and metadata
 addresses. It is used by `fetch_url` (`src/agent/tools.ts`) on **every redirect
 hop** and by `BrowserService` (`src/services/browser.ts`) both for `open()` and
-for a `context.route('**/*')` request guard. Loopback is allowed in both
-(`{ allowLoopback: true }`) because the browser capability-matrix and
-website-scenario tests fetch `127.0.0.1` fixture servers and Forge verifies its
-own local dev server; metadata and private ranges stay blocked.
+for a `context.route('**/*')` request guard.
+
+Loopback policy differs by caller:
+
+- **`fetch_url` blocks loopback by default.** It is allowed only when
+  `FORGE_FETCH_ALLOW_LOOPBACK === 'true'` (read per call, so it can be set around a
+  request). Tests that drive a `127.0.0.1` fixture opt in for that call and restore
+  the variable afterwards.
+- **The browser allows loopback.** Its `browser-capability-matrix` and
+  website-scenario tests fetch `127.0.0.1` fixture servers, and Forge verifies its
+  own local dev server.
+
+Metadata and private ranges stay blocked in both.
 
 Node's WHATWG `URL` normalizes IPv4-mapped IPv6 (`[::ffff:10.0.0.1]` becomes
 `[::ffff:a00:1]`), so any dotted-decimal check must also decode the hex groups or

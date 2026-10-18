@@ -78,14 +78,21 @@ which fails against the original code.
 ## 4. Item 3 — `fetch_url`
 
 - The guard runs on **every hop**, not only the first URL.
-- Redirects are followed by hand (`redirect: 'manual'`, maximum 3). A public URL
-  that returns `302` to `169.254.169.254` is refused, not followed.
+- **Loopback is blocked by default.** It is allowed only when
+  `FORGE_FETCH_ALLOW_LOOPBACK === 'true'`, read per call. A direct `127.0.0.1`
+  URL, and a name that resolves to `127.0.0.1`, are refused with the opt-in unset.
+- Redirects are followed by hand (`redirect: 'manual'`, maximum 3). A URL that
+  returns `302` to `169.254.169.254` or to `127.0.0.1` is refused, not followed,
+  because each hop is re-checked against the same policy.
 - The body is read through a streaming cap (`readCappedBody`, 20 KB), so an
   endless body cannot be buffered into memory.
 
-`tests/fetch-guard.test.ts` proves all four behaviours against a real local
-fixture: blocked scheme, blocked metadata address, redirect into metadata,
-redirect limit, and the size cap.
+`tests/fetch-guard.test.ts` proves these behaviours against a real local fixture:
+blocked scheme, blocked metadata address, a direct loopback URL blocked with the
+opt-in unset, a loopback name blocked with the opt-in unset, the redirect target
+re-checked, redirect into metadata, the redirect limit, and the size cap. Only the
+cases that drive the fixture set `FORGE_FETCH_ALLOW_LOOPBACK`, and each restores
+it afterwards.
 
 ---
 
@@ -138,14 +145,17 @@ omits it, so a new workflow cannot regress this.
 
 ## 8. Two judgment calls
 
-**Loopback is allowed** in both the `fetch_url` guard and the browser guard.
-This was not free choice. `tests/browser-capability-matrix.test.ts` and the
-website-scenario matrix fetch `127.0.0.1` fixture servers, and the repository's
-own documentation describes Forge verifying its local dev server. Blocking
-loopback broke `fetch_url retrieves a local HTTP response` on the first full run.
-The response was to change the code to match behaviour the suite already asserts —
-metadata and private ranges stay blocked — **not** to weaken the test. No existing
-test was modified.
+**Loopback policy now differs by caller.** In the first cut both guards allowed
+loopback, because `tests/browser-capability-matrix.test.ts` and the
+website-scenario matrix fetch `127.0.0.1` fixture servers and Forge verifies its
+own local dev server; blocking it broke `fetch_url retrieves a local HTTP
+response`. That was revisited: `fetch_url` now blocks loopback by default and
+allows it only under `FORGE_FETCH_ALLOW_LOOPBACK === 'true'`, while the browser
+keeps allowing it. The two `fetch_url` cases that drive the loopback fixture set
+the opt-in for that call and restore it; the browser guard and the
+website-scenario matrix are unchanged. Metadata and private ranges stay blocked
+in both. No assertion was weakened — the capability-matrix case still asserts a
+successful `HTTP 200`, it just opts in for the loopback fixture it uses.
 
 **One existing test failed on the first run** (`npm test`, exit 1, 320/321). It
 was fixed by correcting the code, and the whole suite was re-run from a clean
@@ -210,10 +220,11 @@ stored at `docs/audits/amina-gemini-groq-39123453557.md`.
 
 ## 11. Open questions and notes
 
-1. **Loopback is a deliberate exception.** If loopback must be blocked as well,
-   the two fixture-server test files have to change first, and that is a
-   behavioural change to the product, not a fix - it should be a separate,
-   explicit decision.
+1. **Loopback policy (resolved).** `fetch_url` now blocks loopback by default and
+   allows it only under `FORGE_FETCH_ALLOW_LOOPBACK === 'true'`; the browser still
+   allows it. The two `fetch_url` cases that drive the loopback fixture opt in for
+   that call and restore the variable. The browser guard and the website-scenario
+   matrix are unchanged.
 
 2. **`requireGitHubToken` validates against GitHub and an allowlist.** The client
    token is the operator's own GitHub token. If a non-GitHub auth scheme is
