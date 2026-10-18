@@ -82,25 +82,25 @@ export class ModelService {
   /**
    * Route a prompt exactly as Forge does: discover the finest free route, try the
    * strongest alias first, degrade on failure, then fall back to Gemini only when
-   * a key is present and keyless-only is off. Anonymous keyless endpoints are used
-   * only when no provider key is configured, so the audit does not silently degrade
-   * to the weakest model when real keys are available.
+   * a key is present and keyless-only is off. Hard work with a configured key uses
+   * the keyed providers only, so the audit does not silently degrade to the weakest
+   * model when real keys are available.
    */
   async complete(messages: ChatMessage[], fullPrompt: string, tier: TaskTier = 'hard'): Promise<ModelResult> {
     const routeErrors: string[] = [];
     let invokedProvider = 'freelm free-tier router';
     let invokedModel = 'chat';
     const timeoutMs = options_timeout(this.env, 40000);
-    // One routing policy for every tier (shared with Forge's services engine):
-    // configured keyed providers are tried first and the anonymous keyless
-    // endpoints are the last resort, so a keyed answer is preferred whenever one
-    // is available and the keyless path still covers a total key outage.
+    // Tiered routing policy (shared with Forge's services engine): hard work with
+    // a configured key routes to the keyed providers only, so a large sweep cannot
+    // land on the anonymous Kilo endpoint and its ~3-requests-per-minute cap. Easy
+    // work, and the no-key case, keep the keyless endpoints as a last resort.
     // FIRSTBORN_KEYLESS_ONLY strips the keys in the constructor, leaving keyless
     // as the only route.
 
     try {
       const llm = FreeLLM.fromEnv({
-        keyless: keylessOption(this.env),
+        keyless: keylessOption(this.env, tier),
         maxAttempts: 12,
         timeout: 35,
         hedge: true,

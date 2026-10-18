@@ -46,7 +46,8 @@ async function main(): Promise<void> {
       target: ctx.target,
       commit: ctx.commit,
       corpus,
-      onChunk: ({ id, index, count, ok }) => console.log(`[audit:full] ${id} ${index}/${count} ${ok ? 'ok' : 'FAILED'}`),
+      onChunk: ({ id, index, count, ok, provider, model }) =>
+        console.log(`[audit:full] ${id} ${index}/${count} ${ok ? 'ok' : 'FAILED'}${ok ? ` via ${provider}/${model}` : ''}`),
       onRole: ({ role, verdict }) => console.log(`[audit:full] verify ${role} ${verdict}`),
     });
     const outDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
@@ -55,7 +56,14 @@ async function main(): Promise<void> {
     fs.writeFileSync(path.join(outDir, 'company-audit-full.md'), result.markdown + '\n');
     console.log('\n--- FULL-COVERAGE AUDIT REPORT ---');
     console.log('Status:', result.status, '|', result.reason);
+    console.log(
+      `Coverage: ${result.coverage.examinedFiles}/${result.coverage.totalFiles} files (${result.coverage.percent}%); ` +
+        `${result.coverage.succeededChunks}/${result.coverage.totalChunks} chunks answered; ${result.coverage.failedChunks} failed`
+    );
+    console.log(`Routes used: ${result.routesUsed.map((r) => `${r.provider}/${r.model} (${r.chunks})`).join('; ') || '(none)'}`);
     console.log('\n' + result.markdown);
+    // Any status other than COMPLETED is a degraded run: fail the step so CI and a
+    // reader both see it, instead of a green check over a partial read.
     if (result.status !== 'COMPLETED') process.exitCode = 1;
     return;
   }

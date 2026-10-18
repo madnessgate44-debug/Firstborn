@@ -135,12 +135,14 @@ CI with the `full` input on `company-audit.yml`.
 
 `src/model-routing.ts` holds the single keyless-vs-keyed decision used by both
 `src/services/model.ts` and `src/company/model.ts`, so the two engines cannot
-drift. The freelm `keyless` option is always `true`: configured keyed providers
-(Groq/Gemini) are tried first and the anonymous Kilo/OVHcloud endpoints are a
+drift. The decision is tiered: **hard work with a configured key uses `'auto'`**,
+which makes freelm build a keyed-only pool — the anonymous Kilo/OVHcloud
+endpoints are left out entirely, because Kilo allows only ~3 requests per minute
+and a long sweep would otherwise land on it and fail. **Easy work, and the
+no-key case, use `true`**, so the keyless endpoints stay available as a
 priority-100 last resort. `FIRSTBORN_KEYLESS_ONLY=true` strips the provider keys
-and forces keyless-only. Returning `'auto'` is deliberately avoided — freelm
-reads it as "add keyless only when no keys exist", which would remove the
-fallback whenever a key was present.
+and forces keyless-only. `src/services/model.ts` calls `keylessOption()` with no
+tier and keeps its `true` behaviour.
 
 ## Verification Commands
 

@@ -9,7 +9,9 @@ import {
   renderFullAuditMarkdown,
   runFullCoverageAudit,
   runVerificationPanel,
+  renderCitedFiles,
   buildSweepPrompt,
+  isDegradedRoute,
   DEFAULT_MAX_CHARS_PER_SEGMENT,
   DEFAULT_MAX_CHARS_PER_CHUNK,
   type SweepModel,
@@ -168,6 +170,7 @@ test('sweep: the rendered report names unexamined files instead of implying full
     coverage: { totalFiles: 2, examinedFiles: 1, percent: 50, totalChunks: 2, succeededChunks: 1, failedChunks: 1, partialFiles: [], notExamined: ['b.ts'] },
     chunkNotes: [],
     route: { provider: 'p', model: 'm' },
+    routesUsed: [],
     status: 'COMPLETED',
     reason: 'r',
   });
@@ -230,4 +233,163 @@ test('sweep: the panel is skipped when there are no findings', async () => {
   const model = stubModel(() => ({ value: {}, result: { text: '{}', model: 'm', provider: 'p', success: true } }));
   const verdicts = await runVerificationPanel({ model, findings: [], corpus: {} });
   assert.deepEqual(verdicts, []);
+});
+
+// ---- Status: COMPLETED only on a genuinely complete read (Part 1.2) ----
+
+test('sweep: status is COMPLETED only when every chunk answered and every file was examined', async () => {
+  const corpus: Record<string, string> = {};
+  for (let i = 0; i < 12; i += 1) corpus[`src/f${i}.ts`] = 'y'.repeat(1500);
+  const model = stubModel(() => ({
+    value: { findings: [{ severity: 'LOW', title: 't', paths: ['src/f0.ts'], basis: 'observed', evidence: 'e', recommendation: 'r' }] },
+    result: { text: '{}', model: 'gemini-2.5-flash', provider: 'google', success: true },
+  }));
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, sweep: { maxCharsPerSegment: 1000, maxCharsPerChunk: 3000 }, verify: false });
+  assert.equal(result.status, 'COMPLETED');
+  assert.equal(result.coverage.failedChunks, 0);
+  assert.equal(result.coverage.examinedFiles, result.coverage.totalFiles);
+  assert.match(result.markdown, /- Status: COMPLETED/);
+});
+
+test('sweep: status is PARTIAL when some files were read but a chunk failed', async () => {
+  const corpus: Record<string, string> = {};
+  for (let i = 0; i < 8; i += 1) corpus[`src/f${i}.ts`] = 'y'.repeat(1500);
+  let calls = 0;
+  const model = stubModel(() => {
+    calls += 1;
+    if (calls === 1) return { value: null, result: { text: '', model: 'm', provider: 'p', success: false, error: 'boom' } };
+    return { value: { findings: [] }, result: { text: '{}', model: 'gemini-2.5-flash', provider: 'google', success: true } };
+  });
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, sweep: { maxCharsPerSegment: 1000, maxCharsPerChunk: 3000 }, verify: false });
+  assert.equal(result.status, 'PARTIAL');
+  assert.ok(result.coverage.examinedFiles > 0, 'some files were read');
+  assert.ok(result.coverage.examinedFiles < result.coverage.totalFiles, 'not all files were read');
+  assert.match(result.reason, /partial read/);
+  assert.match(result.markdown, /- Status: PARTIAL/);
+});
+
+test('sweep: status is BLOCKED when no file could be read', async () => {
+  const corpus: Record<string, string> = { 'a.ts': 'x'.repeat(500), 'b.ts': 'y'.repeat(500) };
+  const model = stubModel(() => ({ value: null, result: { text: '', model: 'm', provider: 'p', success: false, error: 'no route' } }));
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, sweep: { maxCharsPerSegment: 1000, maxCharsPerChunk: 1000 }, verify: false });
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.coverage.examinedFiles, 0);
+  assert.match(result.markdown, /- Status: BLOCKED/);
+});
+
+test('sweep: the CLI exits non-zero for anything but COMPLETED', async () => {
+  // Mirrors the guard in scripts/audit.ts: only a COMPLETED run is a green step.
+  const exitCode = (status: 'COMPLETED' | 'PARTIAL' | 'BLOCKED') => (status !== 'COMPLETED' ? 1 : 0);
+  assert.equal(exitCode('COMPLETED'), 0);
+  assert.equal(exitCode('PARTIAL'), 1);
+  assert.equal(exitCode('BLOCKED'), 1);
+});
+
+// ---- Route visibility (Part 1.3) ----
+
+test('sweep: the routes that answered are counted per provider/model', async () => {
+  const corpus: Record<string, string> = {};
+  for (let i = 0; i < 6; i += 1) corpus[`src/f${i}.ts`] = 'y'.repeat(1500);
+  let calls = 0;
+  const model = stubModel(() => {
+    calls += 1;
+    // First two chunks answered by google, the rest by kilo.
+    const route = calls <= 2 ? { provider: 'google', model: 'gemini-2.5-flash' } : { provider: 'kilo', model: 'nvidia/nemotron-3-super:free' };
+    return { value: { findings: [] }, result: { text: '{}', success: true, ...route } };
+  });
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, sweep: { maxCharsPerSegment: 1000, maxCharsPerChunk: 2000 }, verify: false });
+  const google = result.routesUsed.find((r) => r.provider === 'google');
+  const kilo = result.routesUsed.find((r) => r.provider === 'kilo');
+  assert.ok(google && google.chunks >= 1, 'google chunks counted');
+  assert.ok(kilo && kilo.chunks >= 1, 'kilo chunks counted');
+  assert.match(result.markdown, /Routes used: .*google \/ gemini-2\.5-flash/);
+});
+
+test('sweep: a keyless answer is flagged DEGRADED ROUTE in the report', async () => {
+  const corpus = { 'a.ts': 'x'.repeat(500) };
+  const model = stubModel(() => ({ value: { findings: [] }, result: { text: '{}', success: true, provider: 'kilo', model: 'nvidia/nemotron-3-super-120b-a12b:free' } }));
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, verify: false });
+  assert.match(result.markdown, /DEGRADED ROUTE/);
+  assert.ok(isDegradedRoute('kilo', 'nvidia/nemotron-3-super-120b-a12b:free'));
+  assert.ok(isDegradedRoute('OVHcloud', 'anything'));
+  assert.ok(!isDegradedRoute('google', 'gemini-2.5-flash'));
+});
+
+test('sweep: a failed chunk note carries the last route errors when the service has them', async () => {
+  const corpus = { 'a.ts': 'x'.repeat(500) };
+  const model = stubModel(() => ({
+    value: null,
+    result: {
+      text: '', model: 'm', provider: 'p', success: false,
+      error: 'model returned no parseable JSON',
+      routeErrors: ['e1', 'e2', 'e3', 'e4'],
+    },
+  }));
+  const result = await runFullCoverageAudit({ model, target: 'o/r', commit: 'abc', corpus, verify: false });
+  const note = result.chunkNotes.find((n) => !n.ok)!;
+  assert.match(note.note, /recent route errors/);
+  assert.match(note.note, /e2 ; e3 ; e4/, 'the last three errors, not all four');
+  assert.doesNotMatch(note.note, /e1 ;/);
+});
+
+// ---- Verification panel budget (Part 1.4) ----
+
+test('sweep: a 50 KB first cited file does not stop later cited files from being provided', () => {
+  const corpus: Record<string, string> = {
+    'huge.ts': 'H'.repeat(50000),
+    'small.ts': 'S'.repeat(200),
+    'other.ts': 'O'.repeat(200),
+  };
+  const findings = [
+    { severity: 'HIGH' as const, title: 'f1', paths: ['huge.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+    { severity: 'HIGH' as const, title: 'f2', paths: ['small.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+    { severity: 'HIGH' as const, title: 'f3', paths: ['other.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+  ];
+  const { text, provided, omitted } = renderCitedFiles(corpus, findings);
+  // The huge file is capped at 12000, so the later small files still fit and are included.
+  assert.ok(provided.includes('small.ts'), 'a later cited file must still be provided');
+  assert.ok(provided.includes('other.ts'), 'a later cited file must still be provided');
+  assert.match(text, /--- FILE: small\.ts ---/);
+  assert.ok(text.length <= 60000, 'total stays within the cap');
+  assert.ok(!omitted.includes('small.ts'));
+});
+
+test('sweep: the panel is told which cited files were not provided, and may not object because of that', async () => {
+  const corpus: Record<string, string> = { 'shown.ts': 'ok' };
+  const findings = [
+    { severity: 'HIGH' as const, title: 'shown finding', paths: ['shown.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+    { severity: 'HIGH' as const, title: 'hidden finding', paths: ['missing.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+  ];
+  let prompt = '';
+  const model: SweepModel = {
+    completeJson: async <T,>(messages: { content: string }[]) => {
+      prompt = messages.map((m) => m.content).join('\n');
+      // The model objects to the hidden finding; the panel must drop that objection.
+      return { value: { verdict: 'OBJECT', reason: 'file not shown', objections: ['hidden finding'] } as any, result: { text: '{}', model: 'm', provider: 'p', success: true } };
+    },
+  };
+  const verdicts = await runVerificationPanel({ model, findings, corpus, roles: ['Reviewer'] });
+  assert.match(prompt, /missing\.ts/, 'the panel is told which files were not provided');
+  assert.match(prompt, /Never object to a finding merely because its file was not provided/i);
+  // The only objection was to an unprovided file, so it is dropped. With no valid
+  // objection left the panel cannot claim OBJECT, and it has not positively
+  // confirmed either, so the honest verdict is UNVERIFIED.
+  assert.equal(verdicts[0].verdict, 'UNVERIFIED');
+  assert.match(verdicts[0].reason, /dropped: cited file was not provided/);
+  assert.deepEqual(verdicts[0].unverified, ['hidden finding']);
+});
+
+test('sweep: a finding whose only cited file was not provided is UNVERIFIED, not objected to', async () => {
+  const corpus: Record<string, string> = { 'shown.ts': 'ok' };
+  const findings = [
+    { severity: 'HIGH' as const, title: 'only hidden', paths: ['missing.ts'], basis: 'observed' as const, evidence: 'e', recommendation: 'r', raisedBy: 'Sweep' },
+  ];
+  const model = stubModel(() => ({
+    value: { verdict: 'OBJECT', reason: 'cannot see it', objections: ['only hidden'] },
+    result: { text: '{}', model: 'm', provider: 'p', success: true },
+  }));
+  const verdicts = await runVerificationPanel({ model, findings, corpus, roles: ['Reviewer'] });
+  assert.equal(verdicts[0].verdict, 'UNVERIFIED');
+  assert.deepEqual(verdicts[0].unverified, ['only hidden']);
+  assert.match(verdicts[0].reason, /dropped: cited file was not provided/);
 });

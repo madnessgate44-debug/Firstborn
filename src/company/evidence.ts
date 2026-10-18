@@ -26,6 +26,17 @@ export const RENDER_SINKS = [
   'new Function(',
 ];
 
+/**
+ * Paths whose contents are test fixtures or prose, not shipped source. A fake key
+ * in a test file is not a committed credential, and documentation about key
+ * scanning is not a leak. Excluded by path only — never by value, so a real
+ * literal credential anywhere else is still caught.
+ */
+const NON_SOURCE_PATH_RE = /(^|\/)(tests?|__tests__|__mocks__|docs?|examples?|fixtures?)\//i;
+export function isNonSourcePath(path: string): boolean {
+  return NON_SOURCE_PATH_RE.test(path) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(path);
+}
+
 /** Literal credentials. If none exist, a "hardcoded secret" claim is false. */
 export const SECRET_LITERAL_RE =
   /(AIza[0-9A-Za-z_\-]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{30,})/;
@@ -123,7 +134,13 @@ export function isHardcodedSecretClaim(text: string): boolean {
   // match labelled a real cost-estimation finding as a contradicted secret.
   const aboutSecret = /\b(api[ _-]?key|secret[ _-]?key|access[ _-]?token|auth[ _-]?token|bearer[ _-]?token|password|passwd|private[ _-]?key|credential)\b/i.test(text);
   const hardcoded = /\b(hard[- ]?coded|committed|checked in|in the (source|code|repo|bundle))\b/i.test(text);
-  return aboutSecret && hardcoded;
+  if (!aboutSecret || !hardcoded) return false;
+  // A sentence that says the secret is NOT hardcoded is a clean bill of health, not
+  // a claim of a leak. "verify keys are not committed to the repository" is advice,
+  // and treating it as a hardcoded-secret claim contradicted a real finding.
+  const negated = /\b(not|never|isn't|aren't|is not|are not|no longer|without|non-?)\s+(\w+\s+){0,3}?(hard[- ]?coded|committed|checked in|in the (source|code|repo|bundle))\b/i.test(text)
+    || /\b(hard[- ]?coded|committed|checked in)\s+(nowhere|anywhere)\b/i.test(text);
+  return !negated;
 }
 
 export function isLockfileClaim(text: string): boolean {
@@ -216,12 +233,13 @@ export function verifyFinding(
 
   if (isHardcodedSecretClaim(text)) {
     const literal = Object.entries(corpus).flatMap(([path, content]) => {
+      if (isNonSourcePath(path)) return [];
       const m = content.match(SECRET_LITERAL_RE);
       return m ? [{ path }] : [];
     });
     checks.push({
-      claim: 'a literal credential is present in the source',
-      command: `grep -rEn "${SECRET_LITERAL_RE.source.slice(0, 40)}…" <repo>`,
+      claim: 'a literal credential is present in shipped source',
+      command: `grep -rEn "${SECRET_LITERAL_RE.source.slice(0, 40)}…" <repo> --exclude-dir={tests,docs,fixtures}`,
       result: literal.length ? `${literal.length} literal(s), e.g. ${literal[0].path}` : `0 literals across ${fileCount} files`,
       supports: literal.length > 0,
       needle: 'process.env',

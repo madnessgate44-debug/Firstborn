@@ -281,3 +281,57 @@ test('evidence: the new claim detectors fire on the intended wording only', () =
   assert.ok(isInfiniteLoopClaim('Potential infinite loop detected'));
   assert.ok(!isInfiniteLoopClaim('a loop over the items'));
 });
+
+// ---- Negation guard and path filtering (Part 1.5) ----
+
+test('evidence: a claim that a key is NOT committed is not a hardcoded-secret claim', () => {
+  // Regression: the live Amina sweep reported this as a hardcoded secret and then
+  // contradicted it, turning a security recommendation into a false "contradicted".
+  const text = 'metadata.json lists a capability; verify keys are not committed to the repository';
+  assert.equal(isHardcodedSecretClaim(text), false);
+  assert.equal(isHardcodedSecretClaim('ensure the API key is never hardcoded'), false);
+  assert.equal(isHardcodedSecretClaim('the secret is not checked in'), false);
+  // A positive claim still fires.
+  assert.equal(isHardcodedSecretClaim('a hardcoded API key is committed in the source'), true);
+});
+
+test('evidence: that wording does not come back SUPPORTED', () => {
+  const corpus = parseTarGz(tarGz({ 'src/metadata.json': '{"capability":"x"}' }));
+  const out = verifyFinding(
+    {
+      title: 'Capability metadata',
+      evidence: 'metadata.json lists a capability; verify keys are not committed to the repository',
+      recommendation: 'keep secrets out of the repo',
+      paths: ['src/metadata.json'],
+    },
+    corpus,
+    1
+  );
+  assert.notEqual(out.verdict, 'SUPPORTED');
+});
+
+test('evidence: a fake key in a test file does not make a hardcoded-secret claim SUPPORTED', () => {
+  const corpus = parseTarGz(
+    tarGz({
+      'tests/evidence.test.ts': "const k = 'AIzaSyA1234567890abcdefghijklmnopqrs';",
+      'docs/notes.md': 'example key AIzaSyA1234567890abcdefghijklmnopqrs',
+    })
+  );
+  const out = verifyFinding(
+    { title: 'Hardcoded key', evidence: 'a hardcoded credential is committed', recommendation: '', paths: ['tests/evidence.test.ts'] },
+    corpus,
+    2
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks.find((c) => c.claim.includes('literal credential'))!.result, /0 literals/);
+});
+
+test('evidence: a real literal in shipped source is still SUPPORTED (filter is by path, not value)', () => {
+  const corpus = parseTarGz(tarGz({ 'src/k.ts': "const k = 'AIzaSyA1234567890abcdefghijklmnopqrs';" }));
+  const out = verifyFinding(
+    { title: 'Hardcoded key', evidence: 'hardcoded credential committed', recommendation: '', paths: ['src/k.ts'] },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
+});

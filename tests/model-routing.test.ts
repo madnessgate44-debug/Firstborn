@@ -29,15 +29,38 @@ test('routing: hasProviderKeys is true when any credential is present', () => {
   assert.equal(hasProviderKeys({}), false);
 });
 
-test('routing: the keyless option is always true, so keyless stays a genuine last resort', () => {
-  // With keys, without keys, and under the lock: the anonymous endpoints are
-  // added at priority 100 (tried last). Returning 'auto' would drop them whenever
-  // a key exists — the exact bug this policy removes.
-  assert.equal(resolveKeylessMode({ GROQ_API_KEY: 'g' }), 'always');
-  assert.equal(resolveKeylessMode({}), 'always');
-  assert.equal(resolveKeylessMode({ FIRSTBORN_KEYLESS_ONLY: 'true', GROQ_API_KEY: 'g' }), 'always');
+test('routing: hard work with a key uses the keyed providers only', () => {
+  // 'auto' tells freelm to add the anonymous Kilo/OVHcloud endpoints only when no
+  // key exists. With a key present the pool stays keyed-only, which is what keeps a
+  // long sweep off Kilo's ~3-requests-per-minute cap.
+  assert.equal(resolveKeylessMode({ GROQ_API_KEY: 'g' }, 'hard'), 'auto');
+  assert.equal(resolveKeylessMode({ GEMINI_API_KEY: 'k' }, 'hard'), 'auto');
+  assert.equal(keylessOption({ GROQ_API_KEY: 'g' }, 'hard'), 'auto');
+});
+
+test('routing: hard work without a key falls back to keyless', () => {
+  // There is nothing else to route to, so the anonymous endpoints are the only route.
+  assert.equal(resolveKeylessMode({}, 'hard'), 'always');
+  assert.equal(resolveKeylessMode({ GROQ_API_KEY: '   ' }, 'hard'), 'always');
+  assert.equal(keylessOption({}, 'hard'), true);
+});
+
+test('routing: easy work keeps keyless as a last resort even when a key is present', () => {
+  assert.equal(resolveKeylessMode({ GROQ_API_KEY: 'g' }, 'easy'), 'always');
+  assert.equal(keylessOption({ GROQ_API_KEY: 'g' }, 'easy'), true);
+});
+
+test('routing: the strict lock is keyless even for hard work with a key', () => {
+  const env = { FIRSTBORN_KEYLESS_ONLY: 'true', GROQ_API_KEY: 'g' };
+  assert.equal(resolveKeylessMode(env, 'hard'), 'always');
+  assert.equal(keylessOption(env, 'hard'), true);
+});
+
+test('routing: the no-argument form stays keyless-tolerant for the services engine', () => {
+  // src/services/model.ts calls keylessOption() with no tier and must not change.
   assert.equal(keylessOption({ GROQ_API_KEY: 'g' }), true);
   assert.equal(keylessOption({}), true);
+  assert.equal(resolveKeylessMode({ GROQ_API_KEY: 'g' }), 'always');
 });
 
 test('routing: keylessAllowed reflects the lock', () => {

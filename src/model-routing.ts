@@ -9,16 +9,19 @@
  *     resolves to "use the keyed providers and nothing else" — so when a key was
  *     present the keyless endpoints were never a fallback at all.
  *
- * This module states the policy once, as a pure function of the environment, so
- * both engines integrate the same way and the behaviour is unit-testable without
- * a network call.
+ * This module states the policy once, as a pure function of the environment and
+ * the work tier, so both engines integrate the same way and the behaviour is
+ * unit-testable without a network call.
  *
  * Policy:
- *   - FIRSTBORN_KEYLESS_ONLY=true  -> keyless only (provider keys are ignored).
- *   - a provider key is present    -> `true`: keyed first, keyless as last resort.
- *   - no provider key              -> `true`: keyless (there is nothing else).
- * `true` is the right value for the last two cases because freelm gives keyless
- * endpoints priority 100 — they are tried only after every keyed provider.
+ *   - FIRSTBORN_KEYLESS_ONLY=true  -> `true`: keyless only (provider keys are
+ *     stripped, so there is nothing else to route to).
+ *   - hard work with a key         -> `'auto'`: keyed providers only. freelm
+ *     reads 'auto' as "add keyless only when no keys exist", so a present key
+ *     keeps the anonymous Kilo/OVHcloud endpoints out of the pool entirely. A
+ *     large sweep must not land on a 3-requests-per-minute keyless endpoint.
+ *   - easy work, or no provider key -> `true`: keyed first, then the anonymous
+ *     endpoints as a last resort (freelm gives them priority 100, tried last).
  */
 
 /** Provider credentials freelm reads. Shared so both engines strip the same set. */
@@ -43,27 +46,38 @@ export function hasProviderKeys(env: NodeJS.ProcessEnv = process.env): boolean {
 
 export type KeylessMode = 'always' | 'auto';
 
+/** Work tier. `easy` work needs no key; `hard` work should prefer configured keys. */
+export type RoutingTier = 'easy' | 'hard';
+
 /**
- * The single routing decision, as a freelm `keyless` value.
- *
- * Always `true` ("always"), in every mode. freelm assigns the anonymous
- * Kilo/OVHcloud endpoints priority 100, so they are only reached after every
- * configured keyed provider has been tried — a genuine last resort, never a
- * first choice. The strict keyless lock does not change this option; it is
- * enforced by stripping the provider keys (see `applyRoutingPolicy`), which
- * leaves the keyless endpoints as the only ones available.
- *
- * Returning `'auto'` here would be a bug: freelm reads "auto" as "add keyless
- * only when no keys exist", so a present key would remove the fallback entirely
- * — the exact divergence this module exists to remove.
+ * True when hard work may use configured keys first and keep the anonymous
+ * keyless endpoints out of the pool. False for easy work, when no key is
+ * configured, or under the strict keyless lock.
  */
-export function resolveKeylessMode(_env: NodeJS.ProcessEnv = process.env): KeylessMode {
-  return 'always';
+function prefersKeyedOnly(env: NodeJS.ProcessEnv, tier: RoutingTier): boolean {
+  return tier === 'hard' && hasProviderKeys(env) && !isKeylessOnly(env);
 }
 
-/** The freelm `keyless` option for the environment (a boolean, as freelm expects). */
-export function keylessOption(_env: NodeJS.ProcessEnv = process.env): boolean {
-  return true;
+/**
+ * The single routing decision, as a freelm `keyless` mode.
+ *
+ * `'auto'` for hard work when a key is present: freelm then builds a keyed-only
+ * pool, which is what keeps a 29-chunk sweep off the anonymous Kilo endpoint and
+ * its ~3-requests-per-minute cap. Every other case is `'always'`, so the keyless
+ * endpoints remain available as a genuine last resort (priority 100, tried last).
+ */
+export function resolveKeylessMode(env: NodeJS.ProcessEnv = process.env, tier: RoutingTier = 'easy'): KeylessMode {
+  return prefersKeyedOnly(env, tier) ? 'auto' : 'always';
+}
+
+/**
+ * The freelm `keyless` option for the environment and tier.
+ *
+ * Defaults to the keyless-tolerant value when no tier is given, so Forge's
+ * services engine (`keylessOption()`) keeps its long-standing `true` behaviour.
+ */
+export function keylessOption(env: NodeJS.ProcessEnv = process.env, tier: RoutingTier = 'easy'): boolean | 'auto' {
+  return resolveKeylessMode(env, tier) === 'auto' ? 'auto' : true;
 }
 
 /** True when the keyless endpoints may be used at all (not a strict keyless lock). */
@@ -77,7 +91,7 @@ export function keylessAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
  * passed env (not `process.env`) keeps this testable and side-effect-free for the
  * caller's real environment.
  */
-export function applyRoutingPolicy(env: NodeJS.ProcessEnv): { keyless: boolean } {
+export function applyRoutingPolicy(env: NodeJS.ProcessEnv): { keyless: boolean | 'auto' } {
   if (isKeylessOnly(env)) {
     for (const name of CREDENTIAL_ENV_NAMES) delete env[name];
     env.FREELM_KEYLESS = '1';
