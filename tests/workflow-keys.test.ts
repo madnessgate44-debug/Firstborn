@@ -30,3 +30,11 @@ test('the audit job still runs with the keyed providers', () => {
   assert.match(env, /GROQ_API_KEY:/);
   assert.match(env, /GEMINI_API_KEY:/);
 });
+
+test('the company audit workflow exposes the full-coverage switch and uploads its report', () => {
+  const audit = readFileSync(new URL('../.github/workflows/company-audit.yml', import.meta.url), 'utf8');
+  assert.match(audit, /full:/, 'workflow must expose a full input');
+  assert.match(audit, /FORGE_AUDIT_FULL:/, 'workflow must pass the full flag');
+  assert.match(audit, /scripts\/audit\.ts --full/, 'workflow must run the full sweep when asked');
+  assert.match(audit, /company-audit-full\.md/, 'workflow must upload the full report');
+});

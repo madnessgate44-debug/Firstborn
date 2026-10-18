@@ -67,6 +67,83 @@ test('registry: satisfiesRange settles the real Amina claims', () => {
   assert.equal(satisfiesRange('>=16 <18', dotenv), true);
 });
 
+test('registry: keeps a finding that merely mentions a dependency name', () => {
+  // Regression: this was dropped as a false version claim because it mentions
+  // react and "PIN" was matched case-insensitively against the word "pin".
+  const findings = [
+    {
+      severity: 'HIGH',
+      title: 'Parent PIN is handled entirely in frontend component state',
+      paths: ['src/App.tsx'],
+      basis: 'observed' as const,
+      evidence: 'The PIN is stored in react state; there is no server-side check.',
+      recommendation: 'Move the check to the backend.',
+    },
+  ];
+  const out = groundFindings(findings, {
+    deps,
+    registry: grounderOf({ react: { latest: '19.3.1', versions: ['19.0.1', '19.3.1'] } }),
+    hasLockfile: true,
+    lockfileChecked: true,
+  });
+  assert.equal(out.findings.length, 1, 'a passing dependency mention must not trigger grounding');
+  assert.equal(out.dropped, 0);
+});
+
+test('registry: still grounds a finding that claims a version of a named dependency', () => {
+  const findings = [
+    {
+      severity: 'HIGH',
+      title: 'Peer dependency version range mismatch for vite',
+      paths: ['package.json'],
+      basis: 'observed' as const,
+      evidence: '"@tailwindcss/vite": "^4.3.3" does not match "vite": "^8.3.0".',
+      recommendation: 'Align the vite versions.',
+    },
+  ];
+  const out = groundFindings(findings, {
+    deps,
+    registry: grounderOf({ vite: { latest: '8.3.4', versions: ['8.3.0', '8.3.4'] } }),
+    hasLockfile: true,
+    lockfileChecked: true,
+  });
+  assert.equal(out.findings.length, 0);
+  assert.equal(out.dropped, 1);
+  assert.match(out.notes[0], /registry contradicts/i);
+});
+
+test('registry: keeps a finding that mentions a lockfile without claiming it is missing', () => {
+  // Regression: "Deprecated dependency present in lockfile" was dropped because a
+  // lockfile exists, though the finding never claimed one was missing.
+  const findings = [
+    { severity: 'MEDIUM', title: 'Deprecated dependency present in lockfile', paths: ['package-lock.json'], basis: 'observed' as const, evidence: 'a dependency is deprecated', recommendation: 'update it' },
+  ];
+  const out = groundFindings(findings, {
+    deps,
+    registry: grounderOf({}),
+    hasLockfile: true,
+    lockfileChecked: true,
+  });
+  assert.equal(out.findings.length, 1, 'mentioning a lockfile is not a missing-lockfile claim');
+  assert.equal(out.dropped, 0);
+});
+
+test('registry: keeps a finding that mentions dependencies but makes no version claim', () => {
+  // Regression: bare "dependency" used to trigger version grounding, which then
+  // dropped a real install-script finding because the dependency resolves fine.
+  const findings = [
+    { severity: 'HIGH', title: 'Dependency declares postinstall script which may execute arbitrary code on install', paths: ['package.json'], basis: 'observed' as const, evidence: 'a dependency runs a postinstall script', recommendation: 'review it' },
+  ];
+  const out = groundFindings(findings, {
+    deps,
+    registry: grounderOf({ typescript: { latest: '7.0.2', versions: ['7.0.2'] } }),
+    hasLockfile: true,
+    lockfileChecked: true,
+  });
+  assert.equal(out.findings.length, 1, 'a non-version finding must survive grounding');
+  assert.equal(out.dropped, 0);
+});
+
 test('registry: drops a false "outdated" claim the registry contradicts', () => {
   const findings = [
     { severity: 'HIGH', title: 'Invalid TypeScript version specified in devDependencies', paths: ['package.json'], basis: 'observed' as const, evidence: '"typescript": "^7.0.2" is outdated; current stable is 5.x', recommendation: 'downgrade to ^5.0.0' },

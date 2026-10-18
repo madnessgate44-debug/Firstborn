@@ -9,6 +9,9 @@ import {
   isLockfileClaim,
   isApiKeyStatusClaim,
   isLegacyPeerDepsClaim,
+  isMissingImportClaim,
+  isCrossOriginClaim,
+  isInfiniteLoopClaim,
   verifyFinding,
   type EvidenceOutcome,
 } from '../src/company/evidence.ts';
@@ -122,6 +125,10 @@ test('evidence: claim detectors fire on the right words', () => {
   assert.ok(!isRenderSinkClaim('missing lockfile'));
   assert.ok(isHardcodedSecretClaim('hardcoded API key committed in source'));
   assert.ok(!isHardcodedSecretClaim('the API key is read from the environment'));
+  // Regression: a bare \btoken\b used to match. "COST_PER_INPUT_TOKEN" is
+  // arithmetic; treating it as a secret contradicted a real cost finding.
+  assert.ok(!isHardcodedSecretClaim('uses hardcoded constants COST_PER_INPUT_TOKEN and COST_PER_OUTPUT_TOKEN'));
+  assert.ok(!isHardcodedSecretClaim('hardcoded token count limits in the client'));
   assert.ok(isLockfileClaim('Missing package lockfile leads to non-deterministic installs'));
   assert.ok(!isLockfileClaim('business logic in the entrypoint'));
   assert.ok(isApiKeyStatusClaim('Exposed API Key Status in Health Check hasApiKey'));
@@ -194,4 +201,137 @@ test('render: splits findings into verified / judgment / withdrawn with spot-che
   // The withdrawn finding must not appear under Verified facts.
   const verifiedSection = md.split('## Verified facts')[1].split('## Judgment calls')[0];
   assert.doesNotMatch(verifiedSection, /Stored XSS/);
+});
+
+// ---- The three real false positives from the live Amina sweep, encoded as checks ----
+
+test('evidence: a "not imported" claim is contradicted when the import is in the cited file', () => {
+  // TeachingSessionModal.tsx imports VoiceSpeakButton at the top and uses it far
+  // below; a finding raised against a truncated slice called the import missing.
+  const corpus = {
+    'src/components/TeachingSessionModal.tsx': [
+      'import { VoiceSpeakButton } from "../voice/VoiceSpeakButton";',
+      'export function TeachingSessionModal() {',
+      '  return <VoiceSpeakButton text="hi" />;',
+      '}',
+    ].join('\n'),
+  };
+  const out = verifyFinding(
+    {
+      title: 'VoiceSpeakButton is used but not imported',
+      evidence: 'The component is rendered without a corresponding import.',
+      recommendation: 'Add the import.',
+      paths: ['src/components/TeachingSessionModal.tsx'],
+    },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks[1].result, /imported: VoiceSpeakButton/);
+});
+
+test('evidence: a "cross-origin" claim is contradicted for a same-origin path', () => {
+  // StageModal.tsx calls fetch('/api/tutor-reply') — a relative path, same origin.
+  const corpus = { 'src/components/stage/StageModal.tsx': "const r = await fetch('/api/tutor-reply', { method: 'POST' });" };
+  const out = verifyFinding(
+    {
+      title: 'Unauthenticated cross-origin fetch to tutor API',
+      evidence: 'The UI sends a cross-origin request to a third-party endpoint.',
+      recommendation: 'Use a server proxy.',
+      paths: ['src/components/stage/StageModal.tsx'],
+    },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks[1].result, /0 absolute URLs/);
+});
+
+test('evidence: a "cross-origin" claim is supported when an absolute URL is present', () => {
+  const corpus = { 'a.ts': "fetch('https://api.example.com/v1/chat')" };
+  const out = verifyFinding(
+    { title: 'Cross-origin request to a third-party API', evidence: 'e', recommendation: 'r', paths: ['a.ts'] },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
+});
+
+test('evidence: an "infinite loop" claim is contradicted when the cited file has no loop', () => {
+  const corpus = { 'src/services/teaching/teachingSession.ts': 'export const x = 1;\nexport function f() { return x; }\n' };
+  const out = verifyFinding(
+    {
+      title: 'Potential infinite loop in teachingSession',
+      evidence: 'The loop never terminates.',
+      recommendation: 'Add a bound.',
+      paths: ['src/services/teaching/teachingSession.ts'],
+    },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks[1].result, /0 loop constructs/);
+});
+
+test('evidence: the new claim detectors fire on the intended wording only', () => {
+  assert.ok(isMissingImportClaim('VoiceSpeakButton is not imported'));
+  assert.ok(!isMissingImportClaim('the import list is unsorted'));
+  assert.ok(isCrossOriginClaim('Unauthenticated cross-origin fetch'));
+  assert.ok(!isCrossOriginClaim('crossing the boundary of the module'));
+  assert.ok(isInfiniteLoopClaim('Potential infinite loop detected'));
+  assert.ok(!isInfiniteLoopClaim('a loop over the items'));
+});
+
+// ---- Negation guard and path filtering (Part 1.5) ----
+
+test('evidence: a claim that a key is NOT committed is not a hardcoded-secret claim', () => {
+  // Regression: the live Amina sweep reported this as a hardcoded secret and then
+  // contradicted it, turning a security recommendation into a false "contradicted".
+  const text = 'metadata.json lists a capability; verify keys are not committed to the repository';
+  assert.equal(isHardcodedSecretClaim(text), false);
+  assert.equal(isHardcodedSecretClaim('ensure the API key is never hardcoded'), false);
+  assert.equal(isHardcodedSecretClaim('the secret is not checked in'), false);
+  // A positive claim still fires.
+  assert.equal(isHardcodedSecretClaim('a hardcoded API key is committed in the source'), true);
+});
+
+test('evidence: that wording does not come back SUPPORTED', () => {
+  const corpus = parseTarGz(tarGz({ 'src/metadata.json': '{"capability":"x"}' }));
+  const out = verifyFinding(
+    {
+      title: 'Capability metadata',
+      evidence: 'metadata.json lists a capability; verify keys are not committed to the repository',
+      recommendation: 'keep secrets out of the repo',
+      paths: ['src/metadata.json'],
+    },
+    corpus,
+    1
+  );
+  assert.notEqual(out.verdict, 'SUPPORTED');
+});
+
+test('evidence: a fake key in a test file does not make a hardcoded-secret claim SUPPORTED', () => {
+  const corpus = parseTarGz(
+    tarGz({
+      'tests/evidence.test.ts': "const k = 'AIzaSyA1234567890abcdefghijklmnopqrs';",
+      'docs/notes.md': 'example key AIzaSyA1234567890abcdefghijklmnopqrs',
+    })
+  );
+  const out = verifyFinding(
+    { title: 'Hardcoded key', evidence: 'a hardcoded credential is committed', recommendation: '', paths: ['tests/evidence.test.ts'] },
+    corpus,
+    2
+  );
+  assert.equal(out.verdict, 'CONTRADICTED');
+  assert.match(out.checks.find((c) => c.claim.includes('literal credential'))!.result, /0 literals/);
+});
+
+test('evidence: a real literal in shipped source is still SUPPORTED (filter is by path, not value)', () => {
+  const corpus = parseTarGz(tarGz({ 'src/k.ts': "const k = 'AIzaSyA1234567890abcdefghijklmnopqrs';" }));
+  const out = verifyFinding(
+    { title: 'Hardcoded key', evidence: 'hardcoded credential committed', recommendation: '', paths: ['src/k.ts'] },
+    corpus,
+    1
+  );
+  assert.equal(out.verdict, 'SUPPORTED');
 });
