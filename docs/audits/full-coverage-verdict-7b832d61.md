@@ -211,22 +211,21 @@ they need to be pasted in, because they are not retrievable from here.
 
 ---
 
-## 8. Related item — "PR C" is Phase C of the Amina work order
+## 8. Related item — "PR C" is ambiguous
 
-"PR C" is not a pull request. It is **Phase C — verify and report** in
-`Amina/docs/AMINA_PROJECT_MEMORY_AND_FORGE_ORDERS.md` (items 13–17):
+"PR C" is **ambiguous**, and neither reading should be asserted as fact:
 
-- 13: run lint, type checks, build, existing tests, and new targeted tests.
-- 14: add scenario tests for the real student journey (FEED swipe → Nour; curriculum lesson →
-  Nour; Library → lesson → Nour; HOME schedule/review from evidence; interrupted-session resume).
-- 15: report each requirement as PASS / PARTIAL / FAIL / BLOCKED / NOT VERIFIED, with evidence,
-  distinguishing static tests from browser/runtime verification.
-- 16: list changed files and why, unresolved risks, owner decisions, the PR link, and the exact
-  verification status.
-- 17: do not mark the product "sellable" merely because the build passes.
+- **In the owner's Claude session**, "PR C" means the **security-hardening task**: injection-safe
+  workflow inputs, a private-IP guard for `fetch_url` and browser open, and authentication on
+  `/api/coordination`. **It has not been run.**
+- **In the Amina work order** (`Amina/docs/AMINA_PROJECT_MEMORY_AND_FORGE_ORDERS.md`), **Phase C
+  — verify and report** is items 13–17: run lint/type checks/build/tests; add student-journey
+  scenario tests; report each requirement as PASS / PARTIAL / FAIL / BLOCKED / NOT VERIFIED with
+  evidence; list changed files, risks, and the PR link; and do not mark the product "sellable"
+  merely because the build passes.
 
-It correctly waits on the outcome of this audit. Verified present in the Amina repository at the
-audited commit; the file and the five items exist as described.
+Both readings are recorded. Which one is meant is the owner's call, not something this review
+can settle from the repository: no `fix/audit-c` branch exists, and no PR is titled "PR C".
 
 ---
 
@@ -282,11 +281,56 @@ Only #116 is the active work. None are merged, and nothing was merged by this re
 
 `fix/audit-c` does not exist. Remote branches are `fix/audit-a`, `fix/audit-b`,
 `fix/audit-followup`, `fix/audit-hardening`; there is no `fix/audit-c`, and no PR titled
-"PR C". As recorded in section 8, "PR C" is **Phase C** of the Amina work order.
+"PR C". The name is ambiguous — see section 8 for both readings.
 
 ---
 
-## 10. Guarantees for this review
+## 10. Triage of the 47 findings
+
+The 47 findings in `firstborn-full-7b832d61.md` were checked one by one against the code at
+their cited paths. The distinction that matters is **false** (the finding is wrong) versus
+**true** (the finding holds).
+
+### False — the finding does not hold
+
+- **`/api/verify/check` is unauthenticated.** False. `server.ts:151` reads
+  `app.post('/api/verify/check', requireGitHubToken, async (req, res) => {` — it is guarded.
+- **`/api/tasks/run` is unauthenticated.** False, and it was already fixed: `server.ts:102` reads
+  `app.post('/api/tasks/run', requireGitHubToken, async (req, res) => {`.
+- **The token is sent as `***`.** False. `requireGitHubToken` reads the `Authorization` header,
+  strips `^Bearer\s+`, and re-sends the token as `Authorization: Bearer <token>` to
+  `https://api.github.com/user` (`server.ts:23–45`). It is a Bearer token, not `***`.
+- **The single SUPPORTED credential finding.** False. The "literal credential is present in the
+  source" check matched the fake key `AIzaSyA1234567890abcdefghijklmnopqrs` in
+  `tests/evidence.test.ts` — a test fixture, not a shipped secret. Fixed in #116:
+  `isNonSourcePath` (`src/company/evidence.ts:36`) now skips `tests/`, `*.test.ts`, `*.spec.ts`,
+  and `docs/` by path only, never by value, so a fixture can no longer manufacture a "hardcoded
+  secret" claim.
+
+### True — the finding holds
+
+- **`/api/coordination` is unauthenticated.** True. `server.ts:162` reads
+  `app.get('/api/coordination', async (req, res) => {` — no guard, unlike its neighbours. This is
+  exactly what the "PR C" security-hardening task is meant to add.
+- **`reportsStore` is unbounded.** True. `server.ts:21` declares
+  `const reportsStore = new Map<string, any>()`, written at `:122` and read at `:143`. There is no
+  `delete` or `clear` anywhere in `server.ts`, so the map grows for the life of the process.
+- **`ModelService` deletes environment variables.** True on `main`, and **removed in #116**. On
+  `main`, `src/services/model.ts:162` runs
+  `for (const name of KEYLESS_CREDENTIAL_ENV_NAMES) delete process.env[name];`, mutating the
+  process environment globally. On `feat/full-coverage-audit` that deletion is gone from both
+  `src/services/model.ts` and `src/company/model.ts`; the keyless lock is now applied by
+  filtering the client's credentials, not by editing `process.env`.
+
+### Honest limit
+
+This triage covers the findings whose claims can be settled by reading the cited file. The
+remaining findings are `judgment` — model reasoning with a cited path — and are neither
+confirmed nor dismissed here.
+
+---
+
+## 11. Guarantees for this review
 
 - No target-repository writes, branches, commits, pull requests, or merges.
 - No target-repository code or build scripts executed.
