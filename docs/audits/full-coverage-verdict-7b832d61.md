@@ -230,7 +230,63 @@ audited commit; the file and the five items exist as described.
 
 ---
 
-## 9. Guarantees for this review
+## 9. Triage — the four live questions
+
+### "Make Amina deployable / can you see the link"
+
+Amina is **not** a static site, so a Vercel/Netlify link is the wrong shape for it. Verified
+from the Amina repository at the audited commit:
+
+- It is a long-running Node server: `server.ts` (40 KB Express app), `start` =
+  `NODE_ENV=production tsx server.ts`, and `/api/health` as the health check.
+- It ships **both** a `Dockerfile` and a `render.yaml` Render blueprint (service `amina`,
+  region `frankfurt`, `healthCheckPath: /api/health`,
+  `buildCommand: npm ci --legacy-peer-deps --include=dev && npm run build`).
+- There is **no `vercel.json`, no `netlify.toml`, and no `api/` serverless directory**, and
+  `dist/` is a Vite build output that is not committed.
+
+A static host would serve the built SPA but **not** `/api/*`, so the app's routes would 404.
+That is exactly what happened when probing candidate Render URLs: every guess returned 404 on
+`/api/health`, which is inconclusive (the real hostname is not in the repository).
+
+**The link cannot be produced from here, and this is not a missing step.** The blueprint
+already exists and is correct. Deployment is blocked on two things only the owner holds:
+
+1. A Render account, with "New → Blueprint" pointed at the repository (the `render.yaml` says
+   so explicitly).
+2. `GEMINI_API_KEY` set in the Render dashboard. `render.yaml` declares it with `sync: false`,
+   which means "not in the repo, set it in the dashboard" — deliberately. Without it the app
+   still runs but the AI routes return degraded fallbacks.
+
+Render's default hostname is `<service-name>-<hash>.onrender.com`; the service is named
+`amina`, so the live URL ends in `.onrender.com`. If a link was shared in a chat, it is not
+visible here and would need to be pasted in.
+
+Separately: the one live URL that does resolve, `https://amina.vercel.app`, is **not this app**.
+It serves a static "Amina Bouymajjane : Portfolio" page — a different site. Recorded so it is
+not mistaken for the school app.
+
+### Every open PR in Firstborn is a draft
+
+| PR | Branch | State |
+|----|--------|-------|
+| #116 | `feat/full-coverage-audit` | **draft**, open, mergeable |
+| #117 | `forge/full-coverage-audit-verdict` | open, docs only |
+| #111 | `feat/audit-full-read-runtime` | draft |
+| #110 | `docs/coordination-amina-audit` | draft |
+| #109 | `feat/audit-static-crash-scan` | draft |
+
+Only #116 is the active work. None are merged, and nothing was merged by this review.
+
+### "PR C"
+
+`fix/audit-c` does not exist. Remote branches are `fix/audit-a`, `fix/audit-b`,
+`fix/audit-followup`, `fix/audit-hardening`; there is no `fix/audit-c`, and no PR titled
+"PR C". As recorded in section 8, "PR C" is **Phase C** of the Amina work order.
+
+---
+
+## 10. Guarantees for this review
 
 - No target-repository writes, branches, commits, pull requests, or merges.
 - No target-repository code or build scripts executed.
