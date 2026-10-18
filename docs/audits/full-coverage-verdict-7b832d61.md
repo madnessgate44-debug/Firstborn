@@ -150,22 +150,37 @@ the 72% run legible at all — the feature works, and it is what caught this.
   This is the single most important requirement of the work order and it is satisfied.
 - **Whole-file chunking works.** No file was silently truncated; the failure is the model's
   answer, not the input.
-- **The verification panel works.** All four verifiers objected to findings that cited
-  `COORDINATION.md` instead of the file a claim was about — correct behaviour, and it
-  demonstrates the panel is not a rubber stamp.
+- **The verification panel's four OBJECT verdicts were not evidence the findings were wrong.**
+  They were caused by the cited files not being shown to the panel at all: `renderCitedFiles`
+  used `break` when a file did not fit the budget, so one large first file stopped every later
+  cited file from reaching the prompt. The panel was asked to judge findings against files it
+  had never been given. That budget bug is fixed in #116 (skip instead of break, per-file cap
+  12000, total 60000, most-cited file first, and the prompt now lists the files that were not
+  provided so the panel reports them UNVERIFIED instead of objecting).
 
-The defect is confined to the routing line. The sweep itself is sound.
+The defect was confined to the routing line and the panel budget. The sweep itself is sound.
 
 ---
 
 ## 6. Recommended minimal fix
 
+**Status: implemented on `feat/full-coverage-audit` (PR #116).**
+
 1. Restore tiered routing: `'auto'` for hard work, keeping the shared policy module from
-   `src/model-routing.ts` as the single source of truth.
-2. Keep the sweep, the coverage ledger, and the whole-file chunking unchanged.
+   `src/model-routing.ts` as the single source of truth. **Done** — `keylessOption(env, tier)`
+   returns `'auto'` only when `tier === 'hard'` and a provider key is present and the keyless
+   lock is off. `src/services/model.ts` calls it with no tier and keeps `true`, so Forge's
+   primary engine is unchanged.
+2. Keep the sweep, the coverage ledger, and the whole-file chunking unchanged. **Done** — the
+   sweep, ledger, and chunking are untouched; the status is now COMPLETED | PARTIAL | BLOCKED,
+   with COMPLETED requiring zero failed chunks and every file examined.
 3. Surface `routeErrors` in the audit CLI output, so a degraded route is visible rather than
-   recorded and discarded.
+   recorded and discarded. **Done** — the report carries a "Routes used" line with per-route
+   chunk counts, a "DEGRADED ROUTE" warning when any answering route is Kilo/OVHcloud, and a
+   failed chunk's note now carries the last three route errors.
 4. Re-run the full sweep. Merge only on `Files examined: N/N (100%)` with every chunk answered.
+   **Pending** — the CLI exits non-zero for any status other than COMPLETED, so the re-run
+   cannot be read as green unless it is genuinely complete.
 
 Caution: the routing line also governs `src/services/model.ts`, so changing it is a
 behavioural change to Forge's primary engine, not only the audit path. It should be made
@@ -173,10 +188,14 @@ deliberately and reviewed as such.
 
 ---
 
-## 7. Open item — "globe" comments
+## 7. "globe" comments — most likely "Claude"
 
-A request was made to "check globe comments on the changes that we made". No such comments
-exist. Verified across both repositories:
+A request was made to "check globe comments on the changes that we made". "globe" most likely
+means **Claude**: those comments are chat messages in the owner's Claude session, not GitHub
+comments. They are not visible to, or stored by, this repository, and nothing here can read
+them.
+
+What is verifiable is the GitHub side, and it is empty:
 
 - **PR #116: zero comments, zero reviews, zero review threads** — checked via the REST
   reviews and comments endpoints, GraphQL `reviewThreads`, and commit-level comments.
@@ -187,18 +206,27 @@ exist. Verified across both repositories:
   **globe icon** in the Codespaces UI beside the forwarded port. That is a UI element, not
   review feedback.
 
-Most likely "globe" was a voice-transcription of "global", meaning the overall comments. That
-set is empty. Recorded here so it is not mistaken for unaddressed feedback.
+So: **no such comments exist on GitHub.** If Claude raised specific points in that session,
+they need to be pasted in, because they are not retrievable from here.
 
 ---
 
-## 8. Related item — "PR C"
+## 8. Related item — "PR C" is Phase C of the Amina work order
 
 "PR C" is not a pull request. It is **Phase C — verify and report** in
-`Amina/docs/AMINA_PROJECT_MEMORY_AND_FORGE_ORDERS.md` (items 13–17): run lint, type checks,
-build and tests; add scenario tests for the real student journey; report every requirement as
-PASS / PARTIAL / FAIL / BLOCKED with evidence; and do not mark the product sellable merely
-because the build passes. It correctly waits on the outcome of this audit.
+`Amina/docs/AMINA_PROJECT_MEMORY_AND_FORGE_ORDERS.md` (items 13–17):
+
+- 13: run lint, type checks, build, existing tests, and new targeted tests.
+- 14: add scenario tests for the real student journey (FEED swipe → Nour; curriculum lesson →
+  Nour; Library → lesson → Nour; HOME schedule/review from evidence; interrupted-session resume).
+- 15: report each requirement as PASS / PARTIAL / FAIL / BLOCKED / NOT VERIFIED, with evidence,
+  distinguishing static tests from browser/runtime verification.
+- 16: list changed files and why, unresolved risks, owner decisions, the PR link, and the exact
+  verification status.
+- 17: do not mark the product "sellable" merely because the build passes.
+
+It correctly waits on the outcome of this audit. Verified present in the Amina repository at the
+audited commit; the file and the five items exist as described.
 
 ---
 
