@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelService, isKeylessOnly, CREDENTIAL_ENV_NAMES, extractJson, routeAliasesFor, type ChatMessage } from '../src/company/model.ts';
+import { ModelService, isKeylessOnly, CREDENTIAL_ENV_NAMES, extractJson, routeAliasesFor, reasoningEffortFor, isReasoningEffortRejection, chatWithReasoningFallback, type ChatMessage } from '../src/company/model.ts';
 import { guardRepeatedReadOnly, buildRolePrompt, modelBrain } from '../src/company/brains.ts';
 import type { AgentBrainState } from '../src/kernel/loop.ts';
 
@@ -94,4 +94,79 @@ test('extractJson parses fenced and prose-wrapped JSON, and returns null on garb
   assert.deepEqual(extractJson<{ a: number }>('Here is my answer: {"a":3} — done.'), { a: 3 });
   assert.equal(extractJson('no json here'), null);
   assert.equal(extractJson(''), null);
+});
+
+// ---- reasoning_effort must never be sent to Groq (Part 2.1) ----
+
+test('reasoning_effort is sent to every provider except Groq', () => {
+  assert.equal(reasoningEffortFor('google', 'gemini-2.5-flash'), 'none');
+  assert.equal(reasoningEffortFor('Google AI Studio / Gemini', 'gemini-3.5-flash'), 'none');
+  assert.equal(reasoningEffortFor('kilo', 'nvidia/nemotron-3-super:free'), 'none');
+  // Groq rejects the field outright, so it is never sent there.
+  assert.equal(reasoningEffortFor('groq', 'qwen/qwen3.8-27b'), undefined);
+  assert.equal(reasoningEffortFor('Groq', 'openai/gpt-oss-120b'), undefined);
+});
+
+test('a reasoning_effort rejection is recognized in a provider error message', () => {
+  assert.equal(isReasoningEffortRejection('`reasoning_effort` must be one of `low`, `medium`, or `high`'), true);
+  assert.equal(isReasoningEffortRejection('[groq] 400 bad request'), false);
+  assert.equal(isReasoningEffortRejection('429 rate limited'), false);
+});
+
+test('a call to a non-Groq provider sends reasoning_effort', async () => {
+  const seen: Record<string, unknown>[] = [];
+  const llm = {
+    chat: async (_m: ChatMessage[], opts: Record<string, unknown>) => {
+      seen.push(opts);
+      return { text: 'ok', provider: 'google', model: 'gemini-2.5-flash' };
+    },
+  };
+  await chatWithReasoningFallback(llm, [{ role: 'user', content: 'p' }], 'chat:large', 1000, 'google', []);
+  assert.equal(seen.length, 1, 'no retry is needed when the provider accepts the field');
+  assert.equal(seen[0].reasoning_effort, 'none');
+});
+
+test('once Groq is the last provider, reasoning_effort is not sent at all', async () => {
+  const seen: Record<string, unknown>[] = [];
+  const llm = {
+    chat: async (_m: ChatMessage[], opts: Record<string, unknown>) => {
+      seen.push(opts);
+      return { text: 'ok', provider: 'groq', model: 'qwen/qwen3.8-27b' };
+    },
+  };
+  await chatWithReasoningFallback(llm, [{ role: 'user', content: 'p' }], 'chat:large', 1000, 'groq', []);
+  assert.equal(seen.length, 1);
+  assert.equal('reasoning_effort' in seen[0], false, 'Groq must never receive reasoning_effort');
+});
+
+test('a 400 that names reasoning_effort is retried once without it', async () => {
+  const seen: Record<string, unknown>[] = [];
+  const routeErrors: string[] = [];
+  const llm = {
+    chat: async (_m: ChatMessage[], opts: Record<string, unknown>) => {
+      seen.push(opts);
+      if ('reasoning_effort' in opts) throw new Error('400 `reasoning_effort` must be one of `low`, `medium`, or `high`');
+      return { text: 'recovered', provider: 'somewhere', model: 'x' };
+    },
+  };
+  const response = await chatWithReasoningFallback(llm, [{ role: 'user', content: 'p' }], 'chat:large', 1000, '', routeErrors);
+  assert.equal(response.text, 'recovered');
+  assert.equal(seen.length, 2, 'the call is retried exactly once');
+  assert.equal('reasoning_effort' in seen[1], false, 'the retry omits the field');
+  assert.match(routeErrors.join(' '), /rejected reasoning_effort/);
+});
+
+test('a 400 that does not name reasoning_effort is not retried', async () => {
+  const seen: Record<string, unknown>[] = [];
+  const llm = {
+    chat: async (_m: ChatMessage[], opts: Record<string, unknown>) => {
+      seen.push(opts);
+      throw new Error('[groq] 400 invalid model');
+    },
+  };
+  await assert.rejects(
+    () => chatWithReasoningFallback(llm, [{ role: 'user', content: 'p' }], 'chat:large', 1000, '', []),
+    /invalid model/
+  );
+  assert.equal(seen.length, 1, 'an unrelated 400 must not trigger a retry');
 });

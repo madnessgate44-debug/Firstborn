@@ -47,10 +47,72 @@ export interface ModelServiceOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Whether to send `reasoning_effort: 'none'` for a provider.
+ *
+ * Some routes are reasoning models (the keyless Kilo nemotron route, for example)
+ * that spend the whole output budget on hidden reasoning and return empty text, so
+ * asking for no reasoning is the fix. But Groq rejects the field outright with a
+ * 400 ("`reasoning_effort` must be one of `low`, `medium`, or `high`"), so it is
+ * never sent to Groq. Anything else gets it, and a 400 that names the field is
+ * retried once without it — see `isReasoningEffortRejection`.
+ */
+export function reasoningEffortFor(provider: string, model: string): 'none' | undefined {
+  const haystack = `${provider} ${model}`.toLowerCase();
+  return haystack.includes('groq') ? undefined : 'none';
+}
+
+/** True when a provider error is the `reasoning_effort` rejection, so a retry without it is worth one attempt. */
+export function isReasoningEffortRejection(message: string): boolean {
+  return /reasoning_effort/i.test(message);
+}
+
+/** The slice of freelm's client this helper needs, so a fake can stand in for it in tests. */
+export interface ChatClient {
+  chat(messages: ChatMessage[], opts: Record<string, unknown>): Promise<{ text: string; provider?: string | null; model?: string | null }>;
+}
+
+/**
+ * One chat call, with the `reasoning_effort` guard.
+ *
+ * `reasoning_effort` is sent unless the provider is Groq (by name, or by the last
+ * provider that answered), which rejects the field with a 400. If a provider we have
+ * not special-cased rejects it anyway, the call is retried once without it, so this
+ * field alone can never fail a chunk.
+ */
+export async function chatWithReasoningFallback(
+  llm: ChatClient,
+  messages: ChatMessage[],
+  alias: string,
+  timeoutMs: number,
+  lastProvider: string,
+  routeErrors: string[]
+): Promise<{ text: string; provider?: string | null; model?: string | null }> {
+  const base: Record<string, unknown> = { model: alias, temperature: 0.1, max_tokens: 1024, signal: AbortSignal.timeout(timeoutMs) };
+  if (reasoningEffortFor(lastProvider, alias) === undefined) {
+    return await llm.chat(messages, base);
+  }
+  try {
+    return await llm.chat(messages, { ...base, reasoning_effort: 'none' });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isReasoningEffortRejection(message)) throw err;
+    routeErrors.push(`${alias}: provider rejected reasoning_effort, retrying without it`);
+    return await llm.chat(messages, base);
+  }
+}
+
 export class ModelService {
   private readonly gemini: GoogleGenAI | null;
   private readonly geminiConfigured: boolean;
   private readonly env: NodeJS.ProcessEnv;
+  /**
+   * The provider that answered the most recent call, used as a hint for the next
+   * one. freelm picks the provider internally and only reports it after a call, so
+   * once Groq has answered we stop sending `reasoning_effort` at all rather than
+   * sending a field it will reject.
+   */
+  private lastProvider = '';
 
   constructor(options: ModelServiceOptions = {}) {
     const env = options.env ?? process.env;
@@ -128,16 +190,11 @@ export class ModelService {
         for (const alias of routeAliasesFor(tier)) {
           if (Date.now() > deadline) break;
           try {
-            const response = await llm.chat(messages, {
-              model: alias,
-              temperature: 0.1,
-              max_tokens: 1024,
-              reasoning_effort: 'none',
-              signal: AbortSignal.timeout(timeoutMs),
-            });
+            const response = await chatWithReasoningFallback(llm, messages, alias, timeoutMs, this.lastProvider, routeErrors);
             const content = response.text.trim();
             invokedProvider = response.provider || invokedProvider;
             invokedModel = response.model || invokedModel;
+            if (response.provider) this.lastProvider = response.provider;
             if (!content) {
               availabilityFailure = false;
               routeErrors.push(`${alias} via ${invokedProvider}/${invokedModel}: response contained no usable text`);
