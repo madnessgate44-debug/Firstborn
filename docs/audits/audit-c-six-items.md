@@ -180,26 +180,47 @@ No dependency, lockfile, or existing-test changes. No secrets in the diff.
 
 ---
 
-## 10. Open questions and notes
+## 10. The Amina run (the instruction's actual target)
 
-1. **The Amina run used CI keys, not local keys.** `GROQ_API_KEY` and
-   `GEMINI_API_KEY` are not present in the local environment; only
-   `OPENHANDS_API_KEY` is. The keys exist as Actions secrets, so the
-   Gemini+Groq-only run was dispatched on `company-audit.yml`
-   (run `39123453557`) rather than run locally. A local run without those keys
-   would use the keyless router, which is explicitly not what was asked for.
+`GROQ_API_KEY` and `GEMINI_API_KEY` are not in the local environment; only
+`OPENHANDS_API_KEY` is. The keys exist as Actions secrets, so the Gemini+Groq-only
+run was dispatched on `company-audit.yml`: **run `39123453557`**, ref `fix/audit-c`,
+target `madnessgate44-debug/Amina`, attempts 2. **Result: COMPLETED, success.**
 
-2. **Loopback is a deliberate exception.** If loopback must be blocked as well,
+With only those two provider keys present the pool is keyed-only, so no anonymous
+keyless route is added. A local run without them would have used the keyless
+router, which is explicitly not what was asked for.
+
+| Evidence | Result |
+|---|---|
+| Lens providers | `gemini-3.5-flash`, `gemini-2.5-flash` x2, `gemini-flash-latest` |
+| Search for `keyless`/`kilo`/`ovhcloud`/`freelm`/`nemotron`/`openrouter` | 0 matches |
+| Target | Amina @ `86c1e73c`, 143 tracked files, 14 findings |
+| Read-only | no write access, no target code executed |
+| Evidence split | 1 verified fact, 11 judgment calls, 2 withdrawn by evidence |
+| Verification panel | Reviewer OBJECT, Security OBJECT, QA CONFIRM, Release CONFIRM |
+
+The two withdrawn findings were version claims the npm registry contradicted
+(`typescript@^7.0.2` and `express@^4.21.2` are both current). The two OBJECT
+verdicts say the XSS findings are overstated because React escapes JSX by
+default; both objections were kept in the report rather than hidden. The report is
+stored at `docs/audits/amina-gemini-groq-39123453557.md`.
+
+---
+
+## 11. Open questions and notes
+
+1. **Loopback is a deliberate exception.** If loopback must be blocked as well,
    the two fixture-server test files have to change first, and that is a
-   behavioural change to the product, not a fix — it should be a separate,
+   behavioural change to the product, not a fix - it should be a separate,
    explicit decision.
 
-3. **`requireGitHubToken` validates against GitHub and an allowlist.** The client
+2. **`requireGitHubToken` validates against GitHub and an allowlist.** The client
    token is the operator's own GitHub token. If a non-GitHub auth scheme is
    wanted for `/api/coordination`, that is a larger change than this item and was
    not assumed.
 
-4. **#118 is open and unmerged** and awaits the owner's decision, consistent with
+3. **#118 is open and unmerged** and awaits the owner's decision, consistent with
    the standing rule.
 
 No secrets, tokens, or credentials appear in this document.

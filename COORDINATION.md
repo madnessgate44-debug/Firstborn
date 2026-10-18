@@ -1464,10 +1464,24 @@ now follow exactly that. No new auth scheme was invented.
 - `GROQ_API_KEY` and `GEMINI_API_KEY` are not in the local environment (only
   `OPENHANDS_API_KEY`). They exist as Actions secrets, so the Gemini+Groq-only
   run was dispatched on `company-audit.yml`: **run `39123453557`**, ref
-  `fix/audit-c`, target `madnessgate44-debug/Amina`, attempts 2.
+  `fix/audit-c`, target `madnessgate44-debug/Amina`, attempts 2. **Result:
+  COMPLETED, success.**
 - With only those two provider keys present the pool is keyed-only, so no
   anonymous keyless route is added. A local run without them would use the
   keyless router, which is explicitly not what was asked for.
+- **Provider proof.** All four lens calls were answered by Gemini
+  (`gemini-3.5-flash`, `gemini-2.5-flash` x2, `gemini-flash-latest`). The string
+  search over the raw report for `keyless`, `kilo`, `ovhcloud`, `freelm`,
+  `nemotron`, and `openrouter` returns **zero** matches.
+- **Result.** Amina @ `86c1e73c`, 143 tracked files, 14 findings, read-only (no
+  write access, no target code executed). The evidence split is
+  **1 verified fact / 11 judgment calls / 2 withdrawn by evidence** — the
+  groundFindings step dropped two version claims that the npm registry
+  contradicted (`typescript@^7.0.2` and `express@^4.21.2` are both current).
+- **The panel was not a rubber stamp.** Reviewer and Security Engineer returned
+  OBJECT with reasons (XSS overstated: React escapes JSX by default); QA and
+  Release returned CONFIRM. Two independent objections were kept in the report.
+- Report stored at `docs/audits/amina-gemini-groq-39123453557.md`.
 
 #### Blockers / notes
 - PR #118 is **open and unmerged**, awaiting the owner's decision. PR #116 was

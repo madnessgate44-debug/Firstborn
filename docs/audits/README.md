@@ -6,6 +6,7 @@ implementation changes.
 | File | What it is |
 |------|------------|
 | `audit-c-six-items.md` | The six-item audit-C fix set (SSRF guard, workflow injection, coordination auth, `--ignore-scripts`). Item-by-item evidence, the bypass found in the specified code, the two judgment calls, and the open questions. Start here for part C. |
+| `amina-gemini-groq-39123453557.md` | Read-only company audit of `Amina` @ `86c1e73c`, run `39123453557`, dispatched with only Gemini and Groq keys. 14 findings: 1 verified fact, 11 judgment calls, 2 withdrawn by evidence. Every lens answered by Gemini; zero keyless. |
 | `full-coverage-verdict-7b832d61.md` | Review verdict on PR #116 (`--full` sweep + shared routing policy). Explains why the full run reached 72% coverage, what #116 gets right, and the triage answers. |
 | `amina-full-post-routing-fix-39083215538.md` | Full-coverage audit of `Amina` after the routing fix. Proves 46/46 answered chunks came from Gemini or Groq (zero keyless) and that the PARTIAL status guard fired. |
 | `firstborn-full-7b832d61.md` | Raw full-coverage report for `Firstborn` @ `7b832d61`, as emitted by the audit CLI. |
