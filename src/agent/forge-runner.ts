@@ -13,7 +13,12 @@ async function runCli() {
   const safeTaskId = taskId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64) || 'task';
   const taskTitle = process.env.TASK_TITLE || 'Automated Maintenance Task';
   const taskDesc = process.env.TASK_DESC || 'Run repository health check and verification';
-  const targetRepo = process.env.GITHUB_REPOSITORY || 'madnessgate44-debug/firstborn';
+  const rawTarget = process.env.TARGET_REPO || process.env.GITHUB_REPOSITORY || 'madnessgate44-debug/firstborn';
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(rawTarget)) {
+    console.error(`[Forge CLI] Invalid target repository format: ${rawTarget}`);
+    process.exit(1);
+  }
+  const targetRepo = rawTarget;
   const token = process.env.GITHUB_TOKEN;
 
   console.log(`[Forge CLI] Initiating task ${taskId}...`);
