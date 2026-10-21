@@ -14,7 +14,7 @@ on:
           - coding
           - audit
       target_repo:
-        description: 'Target repository in owner/repo format (audit mode only)'
+        description: 'Target repository in owner/repo format (coding or audit mode)'
         required: true
         default: 'madnessgate44-debug/Firstborn'
       task_id:
@@ -70,10 +70,36 @@ jobs:
             npm install
           fi
 
+      - name: Resolve coding target repository
+        id: coding-target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          INPUT_TARGET: ${{ inputs.target_repo }}
+          CURRENT_REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+          current = os.environ.get("CURRENT_REPO", "").strip()
+          body = os.environ.get("ISSUE_BODY") or ""
+          requested = os.environ.get("INPUT_TARGET", "").strip()
+          if os.environ.get("EVENT_NAME") == "issues":
+              match = re.search(r"(?im)^Target repository:\\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\s*$", body)
+              requested = match.group(1) if match else current
+          target = requested or current
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", target):
+              raise SystemExit("BLOCKED: target repository must be exactly owner/repo; URLs and extra path segments are forbidden.")
+          print(f"repo={target}")
+          PY
+
       - name: Run Forge Agent
         id: forge
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A repository-scoped GITHUB_TOKEN cannot write to other repositories.
+          # Configure FORGE_CROSS_REPO_TOKEN with least-privilege access for explicit cross-repo missions.
+          GITHUB_TOKEN: ${{ secrets.FORGE_CROSS_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ steps.coding-target.outputs.repo }}
           # Coding missions previously ran with FIRSTBORN_KEYLESS_ONLY=true, which
           # strips every provider key. The keyless route frequently returns an
           # empty plan, so coding runs failed with "Empty patch: No file changes
