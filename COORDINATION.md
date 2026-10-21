@@ -1392,3 +1392,67 @@ change with no overclaiming.
   with real keys is the reliable one.
 
 No secrets, tokens, or credentials appear in this entry.
+
+---
+
+### Entry: `OPENHANDS-AMINA-READONLY-AUDIT-20261015-08`
+
+#### Context
+Owner directive: "Investigate Amina and let the company do it, reading the ChatGPT
+handoff file first." The controller manual (`docs/CHATGPT-OPERATING-FORGE.md`) was
+read first, then this entry records a **read-only** company audit of Amina plus an
+independent verification pass. No target repository was modified by the audit.
+
+#### What ran
+- Read `docs/CHATGPT-OPERATING-FORGE.md` (controller manual: one bounded task per
+  mission; the report is the truth; coding missions are keyless, audits are keyed).
+- Dispatched the keyed `company-audit` workflow against `madnessgate44-debug/Amina`.
+  **Run `38750989696`, status COMPLETED.** Audited commit
+  `bf95762919ebe9db3a02ce8711297dc890471426`. Artifact: `company-audit.md` / `.json`.
+- Independently cloned Amina at the same commit and ran its own commands (not the
+  audit's claims): `npm install`, `npm run lint` (`tsc --noEmit`), `npm test`,
+  `npm run build`.
+
+#### Company audit result
+- 4 lens auditors (Architecture, Security, Quality, Configuration) each produced a
+  winning attempt; Forge synthesized; the verification panel ran.
+- **17 findings**: 2 machine-verified facts, 14 judgment calls, 1 withdrawn by
+  evidence (the CSP claim — correctly retracted, not asserted).
+- Verified facts: **Missing lockfile** and **Broken CI** (the workflow installs with
+  `--legacy-peer-deps`). Both confirmed by hand below.
+
+#### Independent verification (exact commands, observed results)
+- `npm install` → **FAILS** `ERESOLVE`: `vite@8` wants `esbuild@^0.27||^0.28` but the
+  root pins `esbuild@^0.25`; no lockfile is committed. Amina's own CI papers over this
+  with `--legacy-peer-deps`. (Confirms the audit's two verified facts.)
+- `npm test` → **PASS** (adaptive 39/0, teaching, integrity 57/0).
+- `npm run lint` (`tsc --noEmit`) → **FAIL**, 15 errors. The audit did **not** catch
+  this: its evidence checks only ask whether a cited path exists.
+- `npm run build` (with `GITHUB_PAGES=true`) → **PASS**.
+
+#### Defect the company audit missed, and the fix
+- `src/components/curriculum/CurriculumBrowser.tsx:471` called
+  `setActiveStageLessonId(lesson.id)` — a setter **not defined** in that component.
+  Clicking the Library "Learn with Nour" button threw a `ReferenceError`, so the
+  **locked any-lesson → Nour handoff never happened**. `tsc` flags it as `TS2552`.
+- Fixed on Amina branch `fix/nour-handoff-undefined-setter` (**PR #1**, one line:
+  `setActiveStageLessonId(lesson.id)` → `setActiveTab('companion')`; NOUR already
+  selects its lesson from `companionContext.lessonId`). After the fix: the `TS2552`
+  is gone (14 pre-existing type errors remain, unchanged), `npm test` passes,
+  `npm run build` exits 0. Not merged.
+- Root cause of the miss is fixed in Firstborn: **PR #109** adds a deterministic,
+  no-execution static scan to the audit's evidence ledger, so a call to a name
+  declared nowhere in its file is reported as a HIGH verified fact even when no lens
+  claims it. Validated at 0 false positives across Amina's 120 source files and 1 true
+  hit on the unfixed tree.
+
+#### Blockers / notes
+- The audit's evidence checks are file-existence only; they cannot see compile or
+  runtime failures. #109 narrows this for the undefined-identifier class;
+  cross-repo isolated runtime verification remains open as **#85**.
+- The `company-audit` workflow is keyed (Groq/Gemini). The local keyless route is the
+  slow, non-deterministic path, so the CI route is the reliable one for hard audits.
+- Amina's plain `npm install` failure and missing lockfile are real, reproducible, and
+  reported here; not fixed in this entry (out of the read-only audit's scope).
+
+No secrets, tokens, or credentials appear in this entry.
