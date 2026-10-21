@@ -13,4 +13,8 @@ test('explicit Amina target is preserved exactly and never falls back', () => {
 test('invalid target URLs and extra path segments are rejected', () => {
   assert.throws(() => resolveTargetRepo('https://github.com/madnessgate44-debug/Amina', 'madnessgate44-debug/Firstborn'), /BLOCKED/);
   assert.throws(() => resolveTargetRepo('madnessgate44-debug/Amina/tree/main', 'madnessgate44-debug/Firstborn'), /BLOCKED/);
+
+test('empty repository target is rejected', () => {
+  assert.throws(() => resolveTargetRepo('', ''), /BLOCKED/);
+});
 });
