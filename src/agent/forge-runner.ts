@@ -7,13 +7,14 @@ import { ForgeAgent } from './forge.ts';
 import { shouldAutoRetry } from './diagnosis.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { resolveTargetRepo } from './target-repo.ts';
 
 async function runCli() {
   const taskId = process.env.TASK_ID || `cli-${Date.now()}`;
   const safeTaskId = taskId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64) || 'task';
   const taskTitle = process.env.TASK_TITLE || 'Automated Maintenance Task';
   const taskDesc = process.env.TASK_DESC || 'Run repository health check and verification';
-  const targetRepo = process.env.GITHUB_REPOSITORY || 'madnessgate44-debug/firstborn';
+  const targetRepo = resolveTargetRepo(process.env.TARGET_REPO, process.env.GITHUB_REPOSITORY || 'madnessgate44-debug/Firstborn');
   const token = process.env.GITHUB_TOKEN;
 
   console.log(`[Forge CLI] Initiating task ${taskId}...`);

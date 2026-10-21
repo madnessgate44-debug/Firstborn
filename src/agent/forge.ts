@@ -490,6 +490,15 @@ export class ForgeAgent {
         return finalize();
       }
 
+      const workflowRepository = (process.env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
+      const targetRepository = task.targetRepo.trim().toLowerCase();
+      if (workflowRepository && targetRepository !== workflowRepository && repoInfo.permissions?.push !== true) {
+        report.status = 'BLOCKED';
+        report.blockerReason = `Cross-repository write permission is not verified for ${task.targetRepo}; no branch or PR was created.`;
+        log('warn', report.blockerReason);
+        return finalize();
+      }
+
       report.baseCommitSha = repoInfo.latestCommitSha;
       trace('INSPECT', 'PASSED', `base ${report.baseCommitSha}`);
       log('info', `Target repository verified. Base branch: ${repoInfo.defaultBranch}, Base SHA: ${report.baseCommitSha}`);

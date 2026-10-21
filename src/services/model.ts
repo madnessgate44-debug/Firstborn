@@ -7,7 +7,8 @@ import { GoogleGenAI } from '@google/genai';
 import { FreeLLM } from 'freelm';
 // The routing policy is shared with the company engine so both paths make the
 // same keyless-vs-keyed decision. See src/model-routing.ts for the policy.
-import { applyRoutingPolicy, keylessOption, isKeylessOnly, CREDENTIAL_ENV_NAMES } from '../model-routing.ts';
+import { applyRoutingPolicy, isKeylessOnly, CREDENTIAL_ENV_NAMES } from '../model-routing.ts';
+import { codingKeylessOption } from './model-routing-policy.ts';
 
 export { isKeylessOnly };
 
@@ -262,7 +263,7 @@ Respond only with valid JSON.`;
     try {
       const llm = FreeLLM.fromEnv({
         // Always include the no-signup Kilo/OVHcloud routes as last resorts.
-        keyless: keylessOption(),
+        keyless: codingKeylessOption(),
         maxAttempts: 12,
         timeout: 35,
         hedge: true,
