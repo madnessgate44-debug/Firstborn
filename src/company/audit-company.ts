@@ -19,7 +19,8 @@ import { runCompany, type WorkItem } from './company.ts';
 import { FINISH_TOOL, type AgentAction, type AgentTool } from '../kernel/loop.ts';
 import type { Role } from './roles.ts';
 import type { Rubric } from './judge.ts';
-import type { ChatMessage, ModelResult } from './model.ts';
+import type { ChatMessage, ModelResult, CompleteOptions } from './model.ts';
+import { auditModelChain, AUDIT_LARGE_MODELS } from './model.ts';
 import {
   DEFAULT_AUDIT_BENCH,
   buildAuditLensBatchPrompt,
@@ -43,20 +44,30 @@ import { verifyRuntime, type RuntimeCheck, type RuntimeVerificationOptions } fro
 
 /** The slice of ModelService the audit needs; lets tests inject a fake. */
 export interface AuditModel {
-  completeJson<T>(messages: ChatMessage[], fullPrompt: string): Promise<{ value: T | null; result: ModelResult }>;
+  completeJson<T>(messages: ChatMessage[], fullPrompt: string, opts?: CompleteOptions): Promise<{ value: T | null; result: ModelResult }>;
 }
 
 /** Records which provider/model actually answered, so the report is provable. */
 export class RouteRecorder {
   private last: ModelResult | null = null;
+  private readonly used = new Map<string, { provider: string; model: string }>();
+
   note(result: ModelResult): void {
-    if (result?.success) this.last = result;
+    if (result?.success) {
+      this.last = result;
+      const key = `${result.provider}\u0000${result.model}`;
+      if (!this.used.has(key)) this.used.set(key, { provider: result.provider, model: result.model });
+    }
   }
   /** The real provider/model of the last successful call, or an honest fallback. */
   actual(): { provider: string; model: string } {
     return this.last
       ? { provider: this.last.provider, model: this.last.model }
       : { provider: 'unrecorded', model: '(no model call succeeded)' };
+  }
+  /** Every distinct provider/model that returned usable text this run. */
+  modelsUsed(): { provider: string; model: string }[] {
+    return [...this.used.values()];
   }
 }
 
@@ -119,7 +130,9 @@ function lensRole(
   known: Set<string>,
   recorder: RouteRecorder,
   corpus: Record<string, string>,
-  maxChars: number
+  maxChars: number,
+  lensIndex: number,
+  models: string[]
 ): Role {
   return {
     id: employee.id,
@@ -129,6 +142,9 @@ function lensRole(
     produces: 'note',
     tools: [thinkTool],
     brain: async (): Promise<AgentAction> => {
+      // Each lens rides its own ordered failover chain of large models, rotated by
+      // lens index, so the panel spreads across distinct providers.
+      const chain = auditModelChain(lensIndex, models);
       // Read every file in full. When no corpus is available (e.g. offline), fall back
       // to the excerpt sample so the lens still runs.
       const source = Object.keys(corpus).length ? corpus : ctx.excerpts;
@@ -147,13 +163,14 @@ function lensRole(
         });
         const { value, result } = await model.completeJson<{ summary?: string; findings?: unknown[] }>(
           [{ role: 'system', content: `You are the ${employee.title} [role:lens:${employee.id}]. Return valid JSON only.` }, { role: 'user', content: prompt }],
-          prompt
+          prompt,
+          { models: chain }
         );
         recorder.note(result);
         if (typeof value?.summary === 'string' && value.summary.trim()) summaries.push(value.summary.trim());
         if (Array.isArray(value?.findings)) all.push(...value.findings);
       }
-      return finish(summaries.join(' '), { findings: all, route: recorder.actual() });
+      return finish(summaries.join(' '), { findings: all, route: recorder.actual(), chain });
     },
     verifyCompletion: makeVerifyCitations(known),
   };
@@ -270,6 +287,8 @@ export interface CompanyAuditResult {
   groundingNotes: string[];
   /** How much of the repository the lenses actually read, in full. */
   coverage: { files: number; read: number; bytes: number };
+  /** Every distinct provider/model that returned usable text (proves the panel breadth). */
+  modelsUsed: { provider: string; model: string }[];
   /** Results of the isolated runtime verification (clone + lint/test/build). */
   runtime: { name: string; command: string; exitCode: number; output: string }[];
   winners: string[];
@@ -308,6 +327,8 @@ export async function runCompanyAudit(options: {
   corpus?: Record<string, string> | null;
   /** Max characters of file content per lens read. Larger = fewer, fuller prompts. */
   batchChars?: number;
+  /** Large models each lens may use, rotated per lens. Defaults to AUDIT_LARGE_MODELS. */
+  auditModels?: string[];
   /** Isolated runtime verification (clone + lint/test/build). Defaults to disabled. */
   runtime?: RuntimeVerificationOptions;
   /** Test seam: run the isolated verification. Defaults to the real implementation. */
@@ -320,6 +341,7 @@ export async function runCompanyAudit(options: {
   const provider = options.providerInfo?.primaryProvider ?? 'company model';
   const recorder = new RouteRecorder();
   const batchChars = Math.max(20_000, options.batchChars ?? 120_000);
+  const auditModels = options.auditModels ?? AUDIT_LARGE_MODELS;
 
   // The lenses read every file in full; fetch the corpus once, up front.
   const corpus =
@@ -331,7 +353,8 @@ export async function runCompanyAudit(options: {
     plan: auditPlan(bench),
     rosterFor: (item, attempt) => {
       const employee = bench.find((e) => e.id === item.id) ?? bench[0];
-      return [lensRole(options.model, employee, options.ctx, attempt, known, recorder, corpus ?? {}, batchChars)];
+      const lensIndex = Math.max(0, bench.findIndex((e) => e.id === employee.id));
+      return [lensRole(options.model, employee, options.ctx, attempt, known, recorder, corpus ?? {}, batchChars, lensIndex, auditModels)];
     },
     attemptsPerItem: attempts,
     maxRoleRuns: Math.max(4, bench.length * attempts + 2),
@@ -498,6 +521,7 @@ export async function runCompanyAudit(options: {
 
   const status: CompanyAuditResult['status'] = findings.length ? 'COMPLETED' : 'BLOCKED';
   const runtime = runtimeChecks.map((c) => ({ name: c.name, command: c.command, exitCode: c.exitCode, output: c.output.slice(0, 2000) }));
+  const modelsUsed = recorder.modelsUsed();
   const markdown = renderAuditMarkdown({
     target: options.ctx.target,
     commit: options.ctx.commit,
@@ -510,6 +534,7 @@ export async function runCompanyAudit(options: {
     verification,
     groundingNotes,
     coverage,
+    modelsUsed,
     runtime,
   });
   return {
@@ -524,6 +549,7 @@ export async function runCompanyAudit(options: {
     verification,
     groundingNotes,
     coverage,
+    modelsUsed,
     runtime,
     winners: phase1.winners,
     status,

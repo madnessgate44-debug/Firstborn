@@ -51,9 +51,40 @@ export function routeAliasesFor(tier: TaskTier): string[] {
   return tier === 'easy' ? [...EASY_ALIASES] : [...HARD_ALIASES];
 }
 
+/**
+ * Large, long-context keyless models the company audit spreads its lenses across.
+ * Ordered by preference. Free model ids churn, so each lens receives the whole
+ * list as a failover chain and only the model that actually answers is recorded.
+ */
+export const AUDIT_LARGE_MODELS = [
+  'nvidia/nemotron-3.5-super-vl:free',      // Kilo, 1M ctx
+  'Meta-Llama-3_3-70B-Instruct',            // OVHcloud, 131k ctx
+  'Qwen3.5-397B-A17B',                      // OVHcloud, 262k ctx
+  'gpt-oss-120b',                           // OVHcloud, 131k ctx
+  'nvidia/nemotron-3-super-120b-a12b:free', // Kilo, 262k ctx
+];
+
+/**
+ * The ordered failover chain for one audit lens. Rotating the start point by
+ * lens index spreads the panel over distinct providers, so one provider's rate
+ * limit cannot silence the whole audit and the lenses do not all collapse onto
+ * a single model. An explicit list overrides the built-in one.
+ */
+export function auditModelChain(lensIndex: number, models: string[] = AUDIT_LARGE_MODELS): string[] {
+  if (!models.length) return [];
+  const start = ((lensIndex % models.length) + models.length) % models.length;
+  return [...models.slice(start), ...models.slice(0, start)];
+}
+
 export interface ModelServiceOptions {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+}
+
+/** Per-call routing knobs: the work tier, and an optional explicit model list. */
+export interface CompleteOptions {
+  tier?: TaskTier;
+  models?: string[];
 }
 
 export class ModelService {
@@ -98,10 +129,12 @@ export class ModelService {
    * only when no provider key is configured, so the audit does not silently degrade
    * to the weakest model when real keys are available.
    */
-  async complete(messages: ChatMessage[], fullPrompt: string, tier: TaskTier = 'hard'): Promise<ModelResult> {
+  async complete(messages: ChatMessage[], fullPrompt: string, opts: CompleteOptions = {}): Promise<ModelResult> {
+    const tier: TaskTier = opts.tier ?? 'hard';
+    const models = opts.models;
     const routeErrors: string[] = [];
     let invokedProvider = 'freelm free-tier router';
-    let invokedModel = 'chat';
+    let invokedModel = models?.[0] ?? 'chat';
     const timeoutMs = options_timeout(this.env, 40000);
     // Easy work should not spend a provider key: it is routed keyless even when
     // keys are configured. Hard work prefers configured keys and falls back to
@@ -135,7 +168,10 @@ export class ModelService {
           await new Promise((resolve) => setTimeout(resolve, waitMs));
         }
         let availabilityFailure = false;
-        for (const alias of routeAliasesFor(tier)) {
+        // Prefer an explicit model list (used to pin a distinct large model per
+        // audit lens); otherwise ride the alias chain for the tier.
+        const routeOrder = models?.length ? models : routeAliasesFor(tier);
+        for (const alias of routeOrder) {
           if (Date.now() > deadline) break;
           try {
             const response = await llm.chat(messages, {
@@ -193,8 +229,8 @@ export class ModelService {
   }
 
   /** Ask the model for a compact JSON object; returns null on any unusable output. */
-  async completeJson<T>(messages: ChatMessage[], fullPrompt: string, tier: TaskTier = 'hard'): Promise<{ value: T | null; result: ModelResult }> {
-    const result = await this.complete(messages, fullPrompt, tier);
+  async completeJson<T>(messages: ChatMessage[], fullPrompt: string, opts: CompleteOptions = {}): Promise<{ value: T | null; result: ModelResult }> {
+    const result = await this.complete(messages, fullPrompt, opts);
     if (!result.success || !result.text.trim()) return { value: null, result };
     const value = extractJson<T>(result.text);
     return { value, result };

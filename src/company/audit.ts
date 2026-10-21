@@ -205,6 +205,8 @@ export function renderAuditMarkdown(input: {
   groundingNotes?: string[];
   /** How much of the repository was read in full. */
   coverage?: { files: number; read: number; bytes: number };
+  /** Distinct provider/models that returned usable text this run. */
+  modelsUsed?: { provider: string; model: string }[];
   /** Isolated runtime verification results (clone + lint/test/build). */
   runtime?: { name: string; command: string; exitCode: number; output: string }[];
 }): string {
@@ -244,6 +246,7 @@ export function renderAuditMarkdown(input: {
     `- Audited commit: ${input.commit}`,
     `- Tracked files: ${input.fileCount}`,
     ...(input.coverage ? [`- Read in full: ${input.coverage.read} file(s), ${Math.round(input.coverage.bytes / 1024)} KB (the lenses read every file, not a sample)`] : []),
+    ...(input.modelsUsed?.length ? [`- Models that answered: ${input.modelsUsed.length} — ${input.modelsUsed.map((m) => `${m.provider}/${m.model}`).join(', ')}`] : []),
     '- Write access used: no',
     `- Target code executed: ${input.runtime?.length ? `yes — in an isolated scratch clone (${input.runtime.length} check(s))` : 'no'}`,
     '',

@@ -70,7 +70,7 @@ export function modelBrain(model: ModelService, spec: BrainSpec): AgentBrain {
       { role: 'system', content: 'You are a careful senior software engineer. Return valid JSON only.' },
       { role: 'user', content: prompt },
     ];
-    const { value } = await model.completeJson<{ tool?: string; input?: Record<string, unknown> }>(messages, prompt, spec.tier ?? 'hard');
+    const { value } = await model.completeJson<{ tool?: string; input?: Record<string, unknown> }>(messages, prompt, { tier: spec.tier ?? 'hard' });
     if (value && typeof value.tool === 'string') {
       return guardRepeatedReadOnly({ tool: value.tool, input: value.input }, state.history);
     }

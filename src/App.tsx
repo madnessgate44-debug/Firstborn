@@ -43,6 +43,11 @@ export default function App() {
   // Negative test state
   const [negativeTestMsg, setNegativeTestMsg] = useState<string | null>(null);
 
+  // Reflect the real model route (from /api/health) instead of a hardcoded name.
+  const modelLabel = healthStatus?.model?.fallbackConfigured
+    ? `Gemini ${healthStatus?.model?.fallbackModel ?? 'fallback'}`
+    : 'Keyless freelm (Kilo · OVHcloud)';
+
   useEffect(() => {
     fetchHealth();
     fetchRepoInspection();
@@ -190,9 +195,12 @@ export default function App() {
           </div>
 
           <div className="flex items-center space-x-2">
-            <div className="flex items-center space-x-1.5 text-xs bg-slate-800/80 px-2.5 py-1 rounded-md border border-slate-700/60">
+            <div
+              className="flex items-center space-x-1.5 text-xs bg-slate-800/80 px-2.5 py-1 rounded-md border border-slate-700/60"
+              title={healthStatus?.model?.primaryProvider ?? 'Checking model route…'}
+            >
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="text-slate-300 font-mono text-[11px]">Gemini 2.5 Flash</span>
+              <span className="text-slate-300 font-mono text-[11px]">{modelLabel}</span>
             </div>
           </div>
         </div>

@@ -14,6 +14,7 @@ import {
 } from '../src/company/audit.ts';
 import { runCompanyAudit, auditPlan, buildAuditRubric, VERIFY_PANEL, type AuditModel, type RepoContext } from '../src/company/audit-company.ts';
 import { verifyRuntime } from '../src/company/runtime.ts';
+import { auditModelChain, AUDIT_LARGE_MODELS } from '../src/company/model.ts';
 import type { ModelResult } from '../src/company/model.ts';
 
 const FILES = ['src/App.tsx', 'server.ts', 'package.json', 'src/services/__tests__/x.test.ts'];
@@ -31,6 +32,21 @@ function fakeModel(byRole: Record<string, unknown>): AuditModel {
     async completeJson<T>(messages: { content: string }[]) {
       const prompt = messages.map((m) => m.content).join('\n');
       const role = Object.keys(byRole).find((t) => prompt.includes(t));
+      const value = (role ? byRole[role] : { summary: '', architecture: '', findings: [], ok: true, note: 'ok' }) as T;
+      const result: ModelResult = { text: JSON.stringify(value), model: 'fake', provider: 'fake', success: true, fallbackUsed: false, routeErrors: [] };
+      return { value, result };
+    },
+  };
+}
+
+/** Records the model list each lens was offered, so distinctness is provable. */
+function recordingModel(byRole: Record<string, unknown>, seen: Array<{ lens: string; chain: string[] }>): AuditModel {
+  return {
+    async completeJson<T>(messages: { content: string }[], _prompt: string, opts?: { models?: string[] }) {
+      const prompt = messages.map((m) => m.content).join('\n');
+      const role = Object.keys(byRole).find((t) => prompt.includes(t));
+      const marker = prompt.match(/\[role:lens:([a-z]+)\]/);
+      if (marker) seen.push({ lens: marker[1], chain: opts?.models ?? [] });
       const value = (role ? byRole[role] : { summary: '', architecture: '', findings: [], ok: true, note: 'ok' }) as T;
       const result: ModelResult = { text: JSON.stringify(value), model: 'fake', provider: 'fake', success: true, fallbackUsed: false, routeErrors: [] };
       return { value, result };
@@ -337,4 +353,59 @@ test('company audit: a panel member that returns nothing usable is UNVERIFIED, n
   const reviewer = result.verification.find((v) => v.role === 'Reviewer')!;
   assert.equal(reviewer.verdict, 'UNVERIFIED');
   assert.doesNotMatch(result.markdown, /Reviewer: CONFIRMED/);
+});
+
+test('model policy: auditModelChain rotates so lenses start on distinct models', () => {
+  const chains = [0, 1, 2, 3].map((i) => auditModelChain(i));
+  assert.equal(chains[0][0], AUDIT_LARGE_MODELS[0]);
+  assert.equal(chains[1][0], AUDIT_LARGE_MODELS[1]);
+  assert.equal(chains[2][0], AUDIT_LARGE_MODELS[2]);
+  assert.equal(chains[3][0], AUDIT_LARGE_MODELS[3]);
+  // Four distinct starting models -> at least three long/large LLMs are in play.
+  assert.equal(new Set(chains.map((c) => c[0])).size, 4);
+  // Every chain still contains the full catalogue (failover preserved).
+  for (const c of chains) assert.deepEqual([...c].sort(), [...AUDIT_LARGE_MODELS].sort());
+});
+
+test('model policy: an explicit list overrides the built-in catalogue', () => {
+  assert.deepEqual(auditModelChain(1, ['a', 'b']), ['b', 'a']);
+  assert.deepEqual(auditModelChain(0, []), []);
+});
+
+test('audit core: each lens is offered a distinct rotated model chain', async () => {
+  const seen: Array<{ lens: string; chain: string[] }> = [];
+  const model = recordingModel({}, seen);
+  await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry, corpus: { 'server.ts': 'const x = 1;' } });
+  const byLens = new Map<string, string[]>();
+  for (const s of seen) if (!byLens.has(s.lens)) byLens.set(s.lens, s.chain);
+  const starts = [...byLens.values()].map((c) => c[0]);
+  // At least three lenses ran, each pinned to a different first-choice model.
+  assert.ok(starts.length >= 3, `expected >=3 lenses, saw ${starts.length}`);
+  assert.ok(new Set(starts).size >= 3, `expected >=3 distinct start models, saw ${JSON.stringify(starts)}`);
+});
+
+test('audit core: modelsUsed records every distinct model that answered', async () => {
+  const perRole: Record<string, string> = {
+    '[role:lens:arch]': 'model-a',
+    '[role:lens:sec]': 'model-b',
+    '[role:lens:quality]': 'model-c',
+    '[role:lens:config]': 'model-a',
+  };
+  const model: AuditModel = {
+    async completeJson<T>(messages: { content: string }[]) {
+      const prompt = messages.map((m) => m.content).join('\n');
+      const key = Object.keys(perRole).find((k) => prompt.includes(k));
+      const named = key ? perRole[key] : 'model-x';
+      const value = { summary: '', architecture: '', findings: [], ok: true, note: 'ok' } as T;
+      const result: ModelResult = { text: JSON.stringify(value), model: named, provider: `prov-${named}`, success: true, fallbackUsed: false, routeErrors: [] };
+      return { value, result };
+    },
+  };
+  const result = await runCompanyAudit({ model, ctx, attemptsPerItem: 1, registryGrounder: noRegistry, corpus: null });
+  const models = result.modelsUsed.map((m) => m.model);
+  // The four lenses answered on three distinct models (config reused arch's model).
+  for (const m of ['model-a', 'model-b', 'model-c']) assert.ok(models.includes(m), `missing ${m}`);
+  // Lead/verifier roles also answered, so the distinct set is larger, never smaller.
+  assert.ok(result.modelsUsed.length >= 3);
+  assert.match(result.markdown, /Models that answered: \d+/);
 });
