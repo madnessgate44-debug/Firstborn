@@ -85,7 +85,7 @@ jobs:
           body = os.environ.get("ISSUE_BODY") or ""
           requested = os.environ.get("INPUT_TARGET", "").strip()
           if os.environ.get("EVENT_NAME") == "issues":
-              match = re.search(r"(?im)^Target repository:\\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\s*$", body)
+              match = re.search(r"(?im)^Target repository:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*$", body)
               requested = match.group(1) if match else current
           target = requested or current
           if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", target):
