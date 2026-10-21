@@ -41,7 +41,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Run the company audit
         env:
@@ -50,11 +50,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORGE_AUDIT_ATTEMPTS: ${{ inputs.attempts }}
           FORGE_AUDIT_FULL: ${{ inputs.full }}
+          # Passed through env, never interpolated into the command line, so a target
+          # containing shell metacharacters cannot inject a command.
+          TARGET_REPO: ${{ inputs.target_repo }}
         run: |
           if [ "${FORGE_AUDIT_FULL}" = "true" ]; then
-            npx tsx scripts/audit.ts --full "${{ inputs.target_repo }}"
+            npx tsx scripts/audit.ts --full "$TARGET_REPO"
           else
-            npx tsx scripts/audit.ts "${{ inputs.target_repo }}"
+            npx tsx scripts/audit.ts "$TARGET_REPO"
           fi
 
       - name: Upload the audit report

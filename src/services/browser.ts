@@ -17,6 +17,7 @@
  */
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { existsSync } from 'node:fs';
+import { assertPublicHttpUrl } from './url-guard.ts';
 import { planQuery, runQuery, type PageData, type QueryResult } from './query.ts';
 
 const INTERACTIVE = 'a[href], button, input, select, textarea, [role="button"], [onclick], [contenteditable="true"]';
@@ -73,6 +74,21 @@ export class BrowserService {
       userAgent: USER_AGENT,
       viewport: { width: 1280, height: 800 },
     });
+    // Guard every request the page makes, not just the URL passed to open(): a page
+    // can fetch an internal address itself. data:/blob: are page-local and pass.
+    await this.context.route('**/*', async (route) => {
+      const requested = route.request().url();
+      if (requested.startsWith('data:') || requested.startsWith('blob:')) {
+        await route.continue();
+        return;
+      }
+      try {
+        await assertPublicHttpUrl(requested, { allowLoopback: true });
+        await route.continue();
+      } catch {
+        await route.abort('blockedbyclient');
+      }
+    });
     await this.context.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
@@ -84,6 +100,8 @@ export class BrowserService {
   async open(url: string): Promise<BrowserSnapshot> {
     const page = await this.ensurePage();
     const target = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    // Loopback stays allowed so Forge can verify its own local dev server.
+    await assertPublicHttpUrl(target, { allowLoopback: true });
     const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     const status = response?.status();
     const snap = await this.view();

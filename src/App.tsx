@@ -46,8 +46,13 @@ export default function App() {
   useEffect(() => {
     fetchHealth();
     fetchRepoInspection();
-    fetchCoordinationDoc();
   }, []);
+
+  // Re-runs when the token changes: the coordination route now requires auth, so a
+  // mount-time call with an empty token is refused and must be retried once set.
+  useEffect(() => {
+    fetchCoordinationDoc();
+  }, [githubToken]);
 
   const fetchHealth = async () => {
     try {
@@ -80,7 +85,11 @@ export default function App() {
 
   const fetchCoordinationDoc = async () => {
     try {
-      const res = await fetch('/api/coordination');
+      const headers: Record<string, string> = {};
+      if (githubToken.trim()) {
+        headers['Authorization'] = `Bearer ${githubToken.trim()}`;
+      }
+      const res = await fetch('/api/coordination', { headers });
       if (res.ok) {
         const data = await res.json();
         setCoordinationContent(data.content);

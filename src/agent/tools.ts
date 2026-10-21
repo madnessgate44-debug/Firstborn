@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { GitHubService } from '../services/github.ts';
 import { TestRunnerService, AUTHORIZED_COMMANDS } from '../services/test-runner.ts';
 import { BrowserService } from '../services/browser.ts';
+import { assertPublicHttpUrl } from '../services/url-guard.ts';
 import { renderQueryResult } from '../services/query.ts';
 import { applyExactEdits } from './stages.ts';
 import type { AgentTool, LoopContext, ToolObservation } from './loop.ts';
@@ -32,6 +33,30 @@ function str(input: Record<string, unknown>, key: string): string {
 const MAX_FILE_BYTES = 200_000;
 const MAX_SEARCH_MATCHES = 200;
 const MAX_SCAN_FILES = 2_000;
+/** Largest body fetch_url will keep, enforced while streaming, not after. */
+const MAX_FETCH_BYTES = 20_000;
+/** Most redirects fetch_url will follow before giving up. */
+const MAX_FETCH_REDIRECTS = 3;
+
+/** Read at most `maxBytes` of a response body, stopping the stream once reached. */
+async function readCappedBody(res: Response, maxBytes: number): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return '';
+  const decoder = new TextDecoder();
+  let out = '';
+  let read = 0;
+  while (read < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    read += value.byteLength;
+    out += decoder.decode(value, { stream: true });
+  }
+  await reader.cancel().catch(() => {
+    /* the rest of the body is intentionally discarded */
+  });
+  out += decoder.decode();
+  return out.slice(0, maxBytes);
+}
 
 /** Resolve a real workspace directory, or null when the loop has none. */
 function workspaceDir(ws: string | undefined): string | null {
@@ -271,9 +296,32 @@ export function buildForgeTools(options: {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 15_000);
         try {
-          const res = await fetch(url, { signal: controller.signal, headers: { 'user-agent': 'forge-agent' } });
-          const text = await res.text();
-          return { ok: res.ok, output: `HTTP ${res.status}\n${text.slice(0, 20_000)}` };
+          let current = url;
+          // Loopback is blocked by default and only opened by an explicit opt-in, so a
+          // page cannot be steered at Forge's own local services. Read per call, not at
+          // module load, so the setting can be toggled around a request.
+          const allowLoopback = process.env.FORGE_FETCH_ALLOW_LOOPBACK === 'true';
+          // Follow redirects by hand so every hop is re-checked: a public URL that
+          // 302s to 169.254.169.254 or to 127.0.0.1 must be refused, not followed.
+          for (let hop = 0; ; hop += 1) {
+            await assertPublicHttpUrl(current, { allowLoopback });
+            const res = await fetch(current, {
+              signal: controller.signal,
+              redirect: 'manual',
+              headers: { 'user-agent': 'forge-agent' },
+            });
+            if (res.status >= 300 && res.status < 400) {
+              const location = res.headers.get('location');
+              if (!location) return { ok: false, output: `HTTP ${res.status} with no Location header.` };
+              if (hop >= MAX_FETCH_REDIRECTS) {
+                return { ok: false, output: `Too many redirects (more than ${MAX_FETCH_REDIRECTS}).` };
+              }
+              current = new URL(location, current).toString();
+              continue;
+            }
+            const text = await readCappedBody(res, MAX_FETCH_BYTES);
+            return { ok: res.ok, output: `HTTP ${res.status}\n${text}` };
+          }
         } catch (error) {
           return { ok: false, output: `Fetch failed: ${error instanceof Error ? error.message : String(error)}` };
         } finally {

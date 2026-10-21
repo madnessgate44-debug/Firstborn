@@ -188,10 +188,19 @@ test('fetch_url retrieves a local HTTP response and reports its status', async (
   const tools = mapTools(buildForgeTools({ owner: 'owner', repo: 'repo' }));
   const fetchTool = tools.get('fetch_url');
   assert.ok(fetchTool, 'fetch_url must be registered in the base Forge toolset');
-  const result = await fetchTool.run({ url: base }, ctx);
-  assert.equal(result.ok, true);
-  assert.match(result.output, /HTTP 200/);
-  assert.match(result.output, /Capability test landing page/);
+  // fetch_url blocks loopback by default; this case drives the loopback fixture, so it
+  // opts in for the call only and restores the environment afterwards.
+  const previous = process.env.FORGE_FETCH_ALLOW_LOOPBACK;
+  process.env.FORGE_FETCH_ALLOW_LOOPBACK = 'true';
+  try {
+    const result = await fetchTool.run({ url: base }, ctx);
+    assert.equal(result.ok, true);
+    assert.match(result.output, /HTTP 200/);
+    assert.match(result.output, /Capability test landing page/);
+  } finally {
+    if (previous === undefined) delete process.env.FORGE_FETCH_ALLOW_LOOPBACK;
+    else process.env.FORGE_FETCH_ALLOW_LOOPBACK = previous;
+  }
 });
 
 test('run_check executes an allowlisted verification command and rejects arbitrary commands', async () => {
