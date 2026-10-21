@@ -339,12 +339,9 @@ Respond only with valid JSON.`;
             const response = await llm.chat(messages, {
               model: alias,
               temperature: 0.1,
-              max_tokens: 1024,
-              // Some top-tier keyless routes are reasoning models (e.g. the kilo
-              // nemotron route) that spend the whole 1024-token budget on hidden
-              // reasoning_content and return empty text with finish_reason=length.
-              // Disabling reasoning keeps the compact JSON answer within budget.
-              reasoning_effort: 'none',
+              max_tokens: 2048,
+              // Keep a bounded JSON response. Do not force a reasoning-effort value:
+              // several configured providers reject unsupported values at request time.
               signal: AbortSignal.timeout(40000),
             });
             const content = response.text.trim();
