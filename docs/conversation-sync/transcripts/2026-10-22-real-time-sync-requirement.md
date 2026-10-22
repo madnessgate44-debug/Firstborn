@@ -55,8 +55,10 @@ The next engineering task is to make **Firstborn / Forge** implement and test th
 
 But, for example, this current conversation should be synchronized somewhere. You know better than me where it should be synchronized, but it's on a repo on GitHub, okay? As we are speaking, whatever I say, whatever you say, it's there as we are speaking, synchronized. That's your own job for yourself. Once we can establish this as a 100% guaranteed exercise and it's successful, we'll create a prompt for all the other apps to follow the lead.
 
-## Assistant message 2 (response in progress)
+## Assistant message 2
 
-The current-thread transcript is being captured to this repository now. The file is explicitly marked **PARTIAL** because the commit proves that the visible messages were saved, but it does not prove an automatic event-driven integration or a platform-native export.
+The correct destination is the **Firstborn** repository, because Firstborn/Forge is the cross-project coordination and automation layer. I verified that the repository is accessible and that this transcript already exists at `docs/conversation-sync/transcripts/2026-10-22-real-time-sync-requirement.md`.
 
-The success criterion remains: demonstrate that every new in-scope message is reliably captured with ordering and duplicate protection, and visibly report failures. Until that integration exists, each successful commit is a manual capture—not real-time automation.
+Your requirement is now recorded here. However, I will not call the exercise 100% guaranteed yet: a successful GitHub commit proves that these messages were captured, not that every future message is automatically captured at the instant it is sent. This ChatGPT session does not expose a universal event hook that I can independently enable for every conversation.
+
+To earn the 100% claim, Firstborn must implement and pass an end-to-end sync path with stable message IDs, project-to-repository routing, ordered/idempotent writes, retries, visible failure status, and tests showing that no messages are silently skipped or duplicated. Until that is verified, I will capture accessible messages to the relevant repository when I can perform the GitHub write, and report the exact commit and any limitations. Only after the mechanism passes that test should we write the reusable prompt for the other apps.
