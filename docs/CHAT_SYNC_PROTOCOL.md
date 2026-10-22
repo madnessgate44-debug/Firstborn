@@ -47,7 +47,6 @@ Until an authorized integration is implemented and tested, synchronization can o
 - [ ] Completeness status and gaps updated.
 - [ ] Commit/PR and verification evidence reported.
 
-
 ## Batch-capture operating model (clarification, 2026-10-22)
 
 The desired behavior is **periodic chunk capture**, not a GitHub commit for every individual message. Capture a coherent batch after a meaningful exchange or at a practical interval, preserving message order and distinguishing verbatim transcript from summary/decisions.
@@ -59,3 +58,16 @@ Implementation requirements:
 - A scheduler alone is insufficient: it must have an authorized, supported way to read the conversation messages. Do not fabricate access to ChatGPT thread history or imply a scheduled task can see messages that its source does not expose.
 - ChatGPT's built-in recurring task scheduler currently supports daily, weekly, and monthly recurrence, not every few minutes. A shorter cadence would require a separately implemented scheduler (for example, a GitHub Actions cron workflow) **and** a supported conversation-data source. GitHub Actions cannot retrieve private ChatGPT conversation content merely because it runs on a schedule.
 - Until the source and scheduled end-to-end path are implemented and tested, perform batch captures of accessible conversation content through available GitHub tools and mark coverage PARTIAL.
+
+## Owner mandate: zero-action synchronization (2026-10-22)
+
+The owner explicitly requires that the AI/engineering side independently deliver the best supported solution so that complete in-scope conversation transcripts are synchronized to the correct GitHub knowledge bank **without the owner having to issue a command, export files, or remember a closeout step**. Treat this as an engineering requirement, not a request to repeat the protocol.
+
+- Investigate the actual capabilities of each source before choosing an architecture. A timer or GitHub Actions schedule without access to the source messages does not satisfy the requirement.
+- Prefer an event-driven or continuously polling source integration that can retrieve all new messages unattended, with stable IDs and coverage evidence.
+- If a source platform does not expose the necessary data through a supported interface, document the exact blocker and do not claim the requirement is met for that source.
+- Build the real integration where supported, then demonstrate it end to end. Do not substitute a prompt, a manual-export process, or documentation-only work for the requested zero-action behavior.
+- Maintain per-source coverage statuses. A complete archive for one source must not be represented as complete for all sources.
+- No claim of “100% synchronized” until live source-to-GitHub read-back, gap detection, retry/recovery, and cross-project isolation tests pass.
+
+Tracking issue: https://github.com/madnessgate44-debug/Firstborn/issues/131
