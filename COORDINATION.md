@@ -1392,3 +1392,23 @@ change with no overclaiming.
   with real keys is the reliable one.
 
 No secrets, tokens, or credentials appear in this entry.
+
+
+---
+
+### Entry: `CHAT-SYNC-CURRENT-THREAD-20261022-02`
+
+#### Requirement
+Ahmed requires the active ChatGPT conversation to be synchronized to GitHub as it happens, including both user and assistant messages. Firstborn is the coordination repository; after the mechanism is proven reliable, the protocol should be generalized for other apps.
+
+#### Current action and evidence
+- Updated transcript: `docs/conversation-sync/transcripts/2026-10-22-real-time-sync-requirement.md`.
+- Transcript commit: `592e63bcc8c89aa326d2e7c19c8509ad51cac4d5`.
+- The user's latest requirement and the assistant response are captured in that file.
+- This entry itself records the current session's sync state.
+
+#### Status: PARTIAL — NOT REAL-TIME AUTOMATION
+A successful manual GitHub write is not proof of continuous event-driven capture. This ChatGPT session does not expose a universal background event hook for every thread. Do not claim 100% synchronization until Firstborn implements and end-to-end tests stable message IDs, project routing, ordered/idempotent writes, retries, failure visibility, and no-skip/no-duplicate behavior.
+
+#### Next engineering objective
+Implement and verify the capture integration in Firstborn/Forge. Do not create a generalized prompt for other apps until the end-to-end acceptance criteria in `docs/CHAT_SYNC_PROTOCOL.md` pass with evidence.
