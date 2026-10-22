@@ -46,3 +46,16 @@ Until an authorized integration is implemented and tested, synchronization can o
 - [ ] Decisions and open questions captured separately from verbatim transcript.
 - [ ] Completeness status and gaps updated.
 - [ ] Commit/PR and verification evidence reported.
+
+
+## Batch-capture operating model (clarification, 2026-10-22)
+
+The desired behavior is **periodic chunk capture**, not a GitHub commit for every individual message. Capture a coherent batch after a meaningful exchange or at a practical interval, preserving message order and distinguishing verbatim transcript from summary/decisions.
+
+Implementation requirements:
+- Buffer/collect all new in-scope messages since the last successful checkpoint, when a supported source makes them available.
+- Commit each batch atomically where possible, with a checkpoint/cursor so retries neither lose nor duplicate messages.
+- Record batch start/end message IDs and timestamps, last successful sync, lag, and any gap/error.
+- A scheduler alone is insufficient: it must have an authorized, supported way to read the conversation messages. Do not fabricate access to ChatGPT thread history or imply a scheduled task can see messages that its source does not expose.
+- ChatGPT's built-in recurring task scheduler currently supports daily, weekly, and monthly recurrence, not every few minutes. A shorter cadence would require a separately implemented scheduler (for example, a GitHub Actions cron workflow) **and** a supported conversation-data source. GitHub Actions cannot retrieve private ChatGPT conversation content merely because it runs on a schedule.
+- Until the source and scheduled end-to-end path are implemented and tested, perform batch captures of accessible conversation content through available GitHub tools and mark coverage PARTIAL.
