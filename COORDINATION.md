@@ -1412,3 +1412,6 @@ A successful manual GitHub write is not proof of continuous event-driven capture
 
 #### Next engineering objective
 Implement and verify the capture integration in Firstborn/Forge. Do not create a generalized prompt for other apps until the end-to-end acceptance criteria in `docs/CHAT_SYNC_PROTOCOL.md` pass with evidence.
+
+
+Follow-up verification: transcript session-close note committed at `8e5070f1c185e4e38f18af493e85f602b596a324`; read-back checks confirmed the user requirement and assistant response are present. Overall status remains PARTIAL, not real-time automation.
