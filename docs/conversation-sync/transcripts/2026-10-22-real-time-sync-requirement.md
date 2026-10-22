@@ -62,3 +62,14 @@ The correct destination is the **Firstborn** repository, because Firstborn/Forge
 Your requirement is now recorded here. However, I will not call the exercise 100% guaranteed yet: a successful GitHub commit proves that these messages were captured, not that every future message is automatically captured at the instant it is sent. This ChatGPT session does not expose a universal event hook that I can independently enable for every conversation.
 
 To earn the 100% claim, Firstborn must implement and pass an end-to-end sync path with stable message IDs, project-to-repository routing, ordered/idempotent writes, retries, visible failure status, and tests showing that no messages are silently skipped or duplicated. Until that is verified, I will capture accessible messages to the relevant repository when I can perform the GitHub write, and report the exact commit and any limitations. Only after the mechanism passes that test should we write the reusable prompt for the other apps.
+
+
+## Assistant message 3 (session close)
+
+GitHub capture verification succeeded for the visible requirement and response:
+- Transcript file: https://github.com/madnessgate44-debug/Firstborn/blob/main/docs/conversation-sync/transcripts/2026-10-22-real-time-sync-requirement.md
+- Transcript update commit: https://github.com/madnessgate44-debug/Firstborn/commit/592e63bcc8c89aa326d2e7c19c8509ad51cac4d5
+- Coordination log update commit: https://github.com/madnessgate44-debug/Firstborn/commit/bf7b7e192308737b6f11568fcbbdbf1703b31177
+- Read-back checks confirmed the user requirement, assistant response, and coordination entry are present.
+
+Status remains PARTIAL: this proves successful repository capture for these messages, not automatic real-time synchronization for all future messages or other conversations.
