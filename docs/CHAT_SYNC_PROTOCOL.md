@@ -1,6 +1,20 @@
 # Cross-Project Conversation Sync Protocol
 
-Status: **Adopted as the working protocol; automatic cross-app capture is not yet implemented.**
+Status: **Implemented for the OpenHands source; the ChatGPT personal-conversation
+source is explicitly unsupported.**
+
+The unattended pipeline is live for OpenHands Cloud sessions: `src/sync/` reads the
+read-only API V1 event stream, routes each conversation to a repository by stable
+metadata, appends new messages idempotently against a per-repository checkpoint, and
+publishes a status file. See `docs/conversation-sync/SOURCE_CAPABILITY_MATRIX.md` for
+the evidence behind each source claim. Run it with `npm run sync`; CI runs it on a
+schedule in `.github/workflows/conversation-sync.yml`.
+
+There is **no** unattended source for ChatGPT personal conversations. OpenAI documents
+history export as a user-requested process, so that source is reported as unsupported
+rather than approximated by a manual export. The rest of this document is the adopted
+protocol; the sections below that describe "not yet implemented" behaviour apply only
+to sources that still lack a supported source, such as ChatGPT.
 
 ## Objective
 
