@@ -49,9 +49,11 @@ drift.
 - **Official documentation**:
   - https://help.openai.com/en/articles/7260999-how-to-export-your-chatgpt-history-and-data
   - https://help.openai.com/en/articles/8167885-how-to-export-your-data-from-the-chatgpt-android-app
-- **Verbatim from the export article**: "Under Export data, select Export." — the path
-  is an owner action in Settings, or a Privacy Portal request, after which an archive
-  is delivered later. Nothing in the article describes a background feed.
+- **Verbatim from the export article**: "ChatGPT provides two ways to request a copy of
+  your data:" … "Use ChatGPT settings to request an export from an eligible signed-in
+  account or workspace." — the path is an owner action in Settings, or a Privacy Portal
+  request, and "Exports can take up to 7 days to arrive." Nothing in the article
+  describes a background feed or per-message webhook.
 - **Decision**: this source is **excluded** from the pipeline. It is not approximated
   by a manual export, and no `zeroActionSync: true` claim is made for it. Any
   transcript of a ChatGPT conversation is captured only when its text is available in
