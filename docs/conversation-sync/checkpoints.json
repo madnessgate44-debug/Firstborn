@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "checkpoints": [
+    {
+      "source": "openhands",
+      "conversationId": "62057a7b1214489ead604dd29baf7b49",
+      "lastMessageId": "8f8984e9-f24c-42b1-8e66-b9197011d36d",
+      "lastTimestamp": "2026-10-23T16:14:17.114671",
+      "syncedCount": 1,
+      "updatedAt": "2026-10-23T16:40:08.327Z"
+    },
+    {
+      "source": "openhands",
+      "conversationId": "ab92584bdf3b4f9ba3318a7088ea9891",
+      "lastMessageId": "b32b3a36-4c03-4434-b72b-095657067314",
+      "lastTimestamp": "2026-10-23T10:53:21.126057",
+      "syncedCount": 26,
+      "updatedAt": "2026-10-23T16:40:34.585Z"
+    },
+    {
+      "source": "openhands",
+      "conversationId": "8db6375184834040bc49dabfae41e8ad",
+      "lastMessageId": "63285476-b10d-4e71-bdb8-672519ab0706",
+      "lastTimestamp": "2026-10-22T12:27:48.066682",
+      "syncedCount": 7,
+      "updatedAt": "2026-10-23T16:40:45.563Z"
+    },
+    {
+      "source": "openhands",
+      "conversationId": "296b0ce0a1f34183ac8244418ca253fd",
+      "lastMessageId": "c03e948a-7ade-408b-9f15-fd8d2bf127f4",
+      "lastTimestamp": "2026-10-22T10:04:09.236449",
+      "syncedCount": 1,
+      "updatedAt": "2026-10-23T16:40:51.932Z"
+    },
+    {
+      "source": "openhands",
+      "conversationId": "c315f0b0f03a4a0ba7751954f2ebf63a",
+      "lastMessageId": "2daf014a-abbf-4ed4-97f3-04560e2cbcb9",
+      "lastTimestamp": "2026-10-22T10:50:51.840228",
+      "syncedCount": 2,
+      "updatedAt": "2026-10-23T16:40:58.353Z"
+    }
+  ]
+}
