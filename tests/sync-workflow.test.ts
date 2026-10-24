@@ -20,6 +20,14 @@ test('sync workflow: exposes a dry-run switch and a manual trigger', () => {
   assert.match(yml, /--dry-run/);
 });
 
+test('sync workflow: reports required secret presence without exposing values', () => {
+  assert.match(yml, /Preflight secret presence/);
+  assert.match(yml, /SYNC_GITHUB_TOKEN/);
+  assert.match(yml, /value not shown/);
+  // The preflight must not echo a secret value.
+  assert.doesNotMatch(yml, /echo\s+\$\{?(OPENHANDS_API_KEY|SYNC_GITHUB_TOKEN)\}?$/m);
+});
+
 test('capability matrix: OpenHands is the only supported unattended source', () => {
   assert.equal(supportedSources().length, 1);
   assert.equal(supportedSources()[0].source, 'openhands');

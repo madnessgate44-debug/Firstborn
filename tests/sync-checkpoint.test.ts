@@ -67,8 +67,23 @@ test('checkpoint: a vanished checkpoint message raises a gap instead of guessing
 test('checkpoint: a source reporting more messages than are visible raises a gap', () => {
   const plan = planBatch(MANIFEST, emptyCheckpoint('openhands', 'c1'), { expectedCount: 5 });
   assert.ok(plan.gap);
-  assert.match(plan.gap!.reason, /only 3 are visible/);
+  assert.match(plan.gap!.reason, /declares 5 message\(s\)/);
+  assert.match(plan.gap!.reason, /2 are unread/);
   // The visible messages are still batched; the gap is reported alongside.
+  assert.deepEqual(plan.batch.map((m) => m.id), ['m1', 'm2', 'm3']);
+});
+
+test('checkpoint: a short read is detected via the observed raw count', () => {
+  // The read returned all three normalized messages, but the source declared
+  // five and the read only observed three raw events: a truncated page.
+  const plan = planBatch(MANIFEST, emptyCheckpoint('openhands', 'c1'), { expectedCount: 5, observedCount: 3 });
+  assert.ok(plan.gap);
+  assert.match(plan.gap!.reason, /this read observed only 3/);
+});
+
+test('checkpoint: a matching declared/observed count is not a gap', () => {
+  const plan = planBatch(MANIFEST, emptyCheckpoint('openhands', 'c1'), { expectedCount: 3, observedCount: 3 });
+  assert.equal(plan.gap, null);
   assert.deepEqual(plan.batch.map((m) => m.id), ['m1', 'm2', 'm3']);
 });
 

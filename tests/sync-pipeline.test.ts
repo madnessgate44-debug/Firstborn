@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runSync, parseTranscriptMessages, type RepoWriter, type SourceReader, type SourceConversation } from '../src/sync/pipeline.ts';
+import {
+  runSync,
+  parseTranscriptMessages,
+  type RepoWriter,
+  type SourceReader,
+  type SourceConversation,
+  type SourceConversationInventory,
+  type SourceReadResult,
+} from '../src/sync/pipeline.ts';
 import { RepoCheckpointStore } from '../src/sync/store.ts';
 import type { RouteRule } from '../src/sync/router.ts';
 import type { TranscriptMessage } from '../src/sync/types.ts';
@@ -37,13 +45,42 @@ class FakeWriter implements RepoWriter {
 class FakeSource implements SourceReader {
   conversations: SourceConversation[] = [];
   messages = new Map<string, TranscriptMessage[]>();
+  /** Optional completeness metadata, keyed by conversation id. */
+  declared = new Map<string, number | null>();
+  observed = new Map<string, number>();
+  paginationComplete = new Map<string, boolean>();
+  totalAvailable = 0;
+  truncated = false;
+  inventoryComplete = true;
 
   async listConversations(limit: number): Promise<SourceConversation[]> {
     return this.conversations.slice(0, limit);
   }
 
+  async listConversationsDetailed(_limit: number): Promise<SourceConversationInventory> {
+    return {
+      conversations: this.conversations,
+      totalAvailable: this.totalAvailable || this.conversations.length,
+      truncated: this.truncated,
+      inventoryComplete: this.inventoryComplete,
+    };
+  }
+
   async listMessages(conversationId: string): Promise<TranscriptMessage[]> {
     return this.messages.get(conversationId) ?? [];
+  }
+
+  async readConversation(conversationId: string): Promise<SourceReadResult> {
+    const messages = this.messages.get(conversationId) ?? [];
+    const observed = this.observed.get(conversationId) ?? messages.length;
+    return {
+      messages,
+      eventsRead: observed,
+      observedMessages: observed,
+      declaredMessages: this.declared.has(conversationId) ? this.declared.get(conversationId)! : null,
+      paginationComplete: this.paginationComplete.get(conversationId) ?? true,
+      pages: 1,
+    };
   }
 }
 
@@ -174,9 +211,9 @@ test('pipeline: a conversation that errors does not abort the others', async () 
   const source = new FakeSource();
   const writer = new FakeWriter();
   source.conversations = [conv('bad', 'owner/Amina'), conv('good', 'owner/SmartFarm')];
-  // "bad" yields no messages map entry -> returns [], fine. Simulate a read error instead.
-  const original = source.listMessages.bind(source);
-  source.listMessages = async (id: string) => {
+  // "bad" raises on read; "good" is unaffected.
+  const original = source.readConversation.bind(source);
+  source.readConversation = async (id: string) => {
     if (id === 'bad') throw new Error('source read failed');
     return original(id);
   };
@@ -214,4 +251,120 @@ test('pipeline: the status file lists the unsupported ChatGPT source', async () 
   const statusJson = JSON.parse(writer.files.get('owner/amina::docs/conversation-sync/sync-status.json')!);
   assert.equal(statusJson.unsupportedSources.length, 1);
   assert.match(statusJson.unsupportedSources[0], /ChatGPT personal conversations/);
+});
+
+test('pipeline: a source count mismatch surfaces as a GAP and an error', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('c1', 'owner/Amina')];
+  source.messages.set('c1', [m('m1', 't1'), m('m2', 't2')]);
+  // The source declares 5 message events but the read only returned 2.
+  source.declared.set('c1', 5);
+
+  const result = await runSync(base(source, writer));
+
+  assert.ok(result.errors.some((e) => /declares 5 message/.test(e)));
+  const status = result.status.conversations.find((c) => c.conversationId === 'c1')!;
+  assert.equal(status.state, 'GAP');
+  assert.match(status.note!, /3 are unread/);
+});
+
+test('pipeline: an incomplete pagination read surfaces as a GAP', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('c1', 'owner/Amina')];
+  source.messages.set('c1', [m('m1', 't1')]);
+  source.paginationComplete.set('c1', false);
+
+  const result = await runSync(base(source, writer));
+
+  assert.ok(result.errors.some((e) => /pagination did not complete/.test(e)));
+  const status = result.status.conversations.find((c) => c.conversationId === 'c1')!;
+  assert.equal(status.state, 'GAP');
+});
+
+test('pipeline: a truncated inventory is reported, not silently dropped', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('c1', 'owner/Amina')];
+  source.messages.set('c1', [m('m1', 't1')]);
+  source.totalAvailable = 9;
+  source.truncated = true;
+  source.inventoryComplete = true;
+
+  const result = await runSync(base(source, writer));
+
+  assert.equal(result.status.inventory.examined, 1);
+  assert.equal(result.status.inventory.totalAvailable, 9);
+  assert.equal(result.status.inventory.truncated, true);
+  // The status file records the truncation too.
+  const statusJson = JSON.parse(writer.files.get('owner/amina::docs/conversation-sync/sync-status.json')!);
+  assert.equal(statusJson.inventory.truncated, true);
+  assert.match(writer.files.get('owner/amina::docs/conversation-sync/sync-status.md')!, /TRUNCATED/);
+});
+
+test('pipeline: status distinguishes this run from the cumulative archive', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('a1', 'owner/Amina'), conv('a2', 'owner/Amina')];
+  source.messages.set('a1', [m('am1', 't1'), m('am2', 't2')]);
+  source.messages.set('a2', [m('bm1', 't1')]);
+  await runSync(base(source, writer));
+
+  // A later run examines only one conversation.
+  source.conversations = [conv('a1', 'owner/Amina')];
+  const result = await runSync(base(source, writer));
+
+  assert.equal(result.status.scope, 'run');
+  assert.equal(result.status.totals.conversations, 1, 'this run examined one conversation');
+  assert.equal(result.status.cumulative.conversations, 2, 'the archive still holds two');
+  assert.equal(result.status.cumulative.messages, 3, 'and all three messages');
+});
+
+test('pipeline: a partial run preserves checkpoints for unexamined conversations', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('a1', 'owner/Amina'), conv('a2', 'owner/Amina')];
+  source.messages.set('a1', [m('am1', 't1')]);
+  source.messages.set('a2', [m('bm1', 't1')]);
+  await runSync(base(source, writer));
+
+  // Second run examines only a1 and finds a new message there.
+  source.conversations = [conv('a1', 'owner/Amina')];
+  source.messages.set('a1', [m('am1', 't1'), m('am2', 't2')]);
+  await runSync(base(source, writer));
+
+  const cp = JSON.parse(writer.files.get('owner/amina::docs/conversation-sync/checkpoints.json')!);
+  const ids = cp.checkpoints.map((c: any) => c.conversationId).sort();
+  assert.deepEqual(ids, ['a1', 'a2'], 'the unexamined conversation keeps its checkpoint');
+  const a2 = cp.checkpoints.find((c: any) => c.conversationId === 'a2');
+  assert.equal(a2.syncedCount, 1, 'and its count is unchanged');
+});
+
+test('pipeline: per-conversation status reports cumulative and per-run counts', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('c1', 'owner/Amina')];
+  source.messages.set('c1', [m('m1', 't1')]);
+  await runSync(base(source, writer));
+
+  source.messages.set('c1', [m('m1', 't1'), m('m2', 't2')]);
+  const result = await runSync(base(source, writer));
+  const status = result.status.conversations[0];
+  assert.equal(status.messageCount, 2, 'cumulative messages archived');
+  assert.equal(status.addedThisRun, 1, 'messages added by this run');
+});
+
+test('pipeline: an unknown project fails closed and is written nowhere', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('u1', 'owner/SomeOtherProject')];
+  source.messages.set('u1', [m('um1', 't1')]);
+
+  // Fallback is null: the pipeline must not guess a destination.
+  const result = await runSync(base(source, writer));
+  const status = result.status.conversations[0];
+  assert.equal(status.repository, '(unrouted)');
+  assert.equal(status.state, 'ERROR');
+  assert.equal(writer.commits.length, 0);
 });

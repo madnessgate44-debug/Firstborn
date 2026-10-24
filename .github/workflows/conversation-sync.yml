@@ -9,6 +9,13 @@ name: Conversation Sync
 # The ChatGPT personal-conversation source is deliberately absent: OpenAI
 # documents history export as a user-requested process with no unattended API, so
 # the pipeline reports it as unsupported instead of approximating it.
+#
+# Required repository secrets (values are never printed):
+#   OPENHANDS_API_KEY   read-only OpenHands Cloud token (the source).
+#   SYNC_GITHUB_TOKEN   a PAT with `repo` scope, needed to write transcripts to
+#                       other repositories. The built-in GITHUB_TOKEN can only
+#                       write to this repository, so without SYNC_GITHUB_TOKEN a
+#                       cross-repository route will fail loudly (by design).
 on:
   schedule:
     # Every 30 minutes. The API is polled, so freshness is bounded by this interval.
@@ -49,6 +56,28 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Report which required secrets are present WITHOUT exposing their values.
+      # A missing source token or write token is a hard failure, so an inert
+      # schedule can never masquerade as a working one.
+      - name: Preflight secret presence
+        env:
+          OPENHANDS_API_KEY: ${{ secrets.OPENHANDS_API_KEY }}
+          SYNC_GITHUB_TOKEN: ${{ secrets.SYNC_GITHUB_TOKEN }}
+        run: |
+          missing=0
+          if [ -z "${OPENHANDS_API_KEY}" ]; then
+            echo "::error::OPENHANDS_API_KEY is not configured; the sync cannot read the source."
+            missing=1
+          else
+            echo "OPENHANDS_API_KEY is configured (value not shown)."
+          fi
+          if [ -z "${SYNC_GITHUB_TOKEN}" ]; then
+            echo "::warning::SYNC_GITHUB_TOKEN is not configured; only same-repository routes can be written. Cross-repository routes will fail loudly."
+          else
+            echo "SYNC_GITHUB_TOKEN is configured (value not shown)."
+          fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
 
       - name: Run the sync
         env:

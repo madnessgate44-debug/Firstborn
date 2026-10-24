@@ -81,18 +81,27 @@ export function renderStatus(status: SyncStatus): string {
   lines.push(`- Generated: ${status.generatedAt}`);
   lines.push(`- Source: ${status.source}`);
   lines.push(`- Last successful sync: ${status.lastSuccessfulSync ?? '(never)'}`);
+  lines.push(`- Scope: **${status.scope}** — this file lists the conversations ${scopeExplanation(status.scope)}`);
   lines.push(
-    `- Totals: ${status.totals.conversations} conversations, ${status.totals.messages} messages, ` +
+    `- Inventory: examined ${status.inventory.examined} of ${status.inventory.totalAvailable} conversation(s)` +
+      (status.inventory.truncated ? ' — **TRUNCATED**: more conversations exist than were examined' : '') +
+      (status.inventory.inventoryComplete ? '' : ' — inventory scan incomplete')
+  );
+  lines.push(
+    `- Totals (this run): ${status.totals.conversations} conversations, ${status.totals.messages} messages, ` +
       `${status.totals.gaps} gaps, ${status.totals.errors} errors`
+  );
+  lines.push(
+    `- Cumulative archive: ${status.cumulative.conversations} conversations, ${status.cumulative.messages} messages`
   );
   lines.push('');
   lines.push('## Conversations');
   lines.push('');
-  lines.push('| Conversation | Repository | Messages | Lag (s) | State | Note |');
-  lines.push('| --- | --- | --- | --- | --- | --- |');
+  lines.push('| Conversation | Repository | Messages (total) | Added this run | Lag (s) | State | Note |');
+  lines.push('| --- | --- | --- | --- | --- | --- | --- |');
   for (const c of status.conversations) {
     lines.push(
-      `| \`${c.conversationId}\` | \`${c.repository}\` | ${c.messageCount} | ` +
+      `| \`${c.conversationId}\` | \`${c.repository}\` | ${c.messageCount} | ${c.addedThisRun} | ` +
         `${c.lagSeconds ?? '—'} | ${c.state} | ${c.note ?? ''} |`
     );
   }
@@ -106,6 +115,12 @@ export function renderStatus(status: SyncStatus): string {
   }
   lines.push('');
   return lines.join('\n');
+}
+
+function scopeExplanation(scope: SyncStatus['scope']): string {
+  return scope === 'run'
+    ? 'examined by this run only; a short run is not total coverage'
+    : 'held in this repository\'s checkpoint file in total';
 }
 
 /** The machine-readable status document. */

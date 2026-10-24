@@ -92,3 +92,21 @@ export function upsertCheckpoint(checkpoints: Checkpoint[], next: Checkpoint): C
   out.sort((a, b) => a.conversationId.localeCompare(b.conversationId));
   return out;
 }
+
+/**
+ * Merge this run's checkpoints into the ones already committed.
+ *
+ * A run may examine only a subset of a repository's conversations (a `--limit`
+ * or a truncated source inventory). Overwriting the checkpoint file with just
+ * the run's subset would drop every conversation the run did not look at,
+ * erasing their checkpoints and forcing a full re-read — or, worse, making the
+ * cumulative archive appear to shrink. Merging by (source, conversationId)
+ * keeps unexamined conversations exactly as they were.
+ */
+export function mergeCheckpoints(existing: Checkpoint[], updates: Checkpoint[]): Checkpoint[] {
+  const byKey = new Map<string, Checkpoint>();
+  const keyOf = (c: Checkpoint) => `${c.source}::${c.conversationId}`;
+  for (const c of existing) byKey.set(keyOf(c), c);
+  for (const c of updates) byKey.set(keyOf(c), c);
+  return [...byKey.values()].sort((a, b) => a.conversationId.localeCompare(b.conversationId));
+}

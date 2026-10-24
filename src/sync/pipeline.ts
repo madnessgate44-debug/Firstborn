@@ -18,6 +18,19 @@
  * history. Because the plan is a pure function of (source, checkpoint), a failed
  * run simply re-plans the same batch next time.
  *
+ * Three correctness rules keep a short run from looking like a complete one:
+ *
+ *  1. **Completeness is checked against the source.** Each read reports the
+ *     source's declared message count and the count actually observed. A
+ *     mismatch — or a pagination read that did not finish — becomes a visible
+ *     GAP, never a silent COMPLETE.
+ *  2. **Checkpoints are merged, not overwritten.** A run that examines a subset
+ *     of a repository's conversations merges its updates into the committed file
+ *     so the conversations it did not look at keep their checkpoints.
+ *  3. **Status is scoped.** The status file says whether it covers this run or
+ *     the cumulative archive, reports the conversation-inventory coverage, and
+ *     carries both per-run and cumulative totals.
+ *
  * Isolation is per repository: every file a repository receives — transcripts,
  * checkpoints, status — concerns only the conversations routed to it. One
  * project can never read another project's records out of its own repository.
@@ -32,8 +45,8 @@ import { routeConversation, transcriptPath, type RouteRule } from './router.ts';
 import {
   CHECKPOINT_PATH,
   findCheckpoint,
+  mergeCheckpoints,
   serializeCheckpoints,
-  upsertCheckpoint,
   type CheckpointStore,
 } from './store.ts';
 import { unsupportedSourceNames } from './sources.ts';
@@ -41,6 +54,7 @@ import type {
   BatchPlan,
   Checkpoint,
   ConversationStatus,
+  InventoryCoverage,
   SourceKind,
   SyncRunResult,
   SyncStatus,
@@ -55,11 +69,38 @@ export interface SourceConversation {
   conversationUiUrl: string | null;
 }
 
+/** Conversation inventory with truncation metadata, when the source reports it. */
+export interface SourceConversationInventory {
+  conversations: SourceConversation[];
+  totalAvailable: number;
+  truncated: boolean;
+  inventoryComplete: boolean;
+}
+
+/** Completeness metadata for one conversation read. */
+export interface SourceReadResult {
+  messages: TranscriptMessage[];
+  /** Raw events returned by the read. */
+  eventsRead: number;
+  /** Messages after normalization/redaction. */
+  observedMessages: number;
+  /** The source's declared message count, or null when unavailable. */
+  declaredMessages: number | null;
+  /** True only when pagination reached the source's last page. */
+  paginationComplete: boolean;
+  /** Pages fetched. */
+  pages: number;
+}
+
 /** The read side of a supported source. */
 export interface SourceReader {
   listConversations(limit: number): Promise<SourceConversation[]>;
   /** All conversation messages for one conversation, in ascending source order. */
   listMessages(conversationId: string): Promise<TranscriptMessage[]>;
+  /** Optional: inventory with truncation metadata. */
+  listConversationsDetailed?(limit: number): Promise<SourceConversationInventory>;
+  /** Optional: read with completeness metadata (declared vs observed counts). */
+  readConversation?(conversationId: string): Promise<SourceReadResult>;
 }
 
 export interface RepoWriter {
@@ -79,7 +120,7 @@ export interface PipelineOptions {
   store: CheckpointStore;
   /** Routing rules, evaluated in order. */
   routes: RouteRule[];
-  /** Fallback repository when no rule matches; null routes nowhere. */
+  /** Fallback repository when no rule matches; null routes nowhere (fail closed). */
   fallbackRepository?: string | null;
   /** Max conversations to examine per run. */
   limit?: number;
@@ -113,7 +154,16 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
   const errors: string[] = [];
   const written: { repository: string; path: string; commit: string | null }[] = [];
 
-  const conversations = await options.source.listConversations(limit);
+  // --- Phase 0: read the conversation inventory, with truncation metadata. ---
+  const inventory = await readInventory(options.source, limit);
+  const conversations = inventory.conversations;
+  const coverage: InventoryCoverage = {
+    examined: conversations.length,
+    totalAvailable: inventory.totalAvailable,
+    truncated: inventory.truncated,
+    inventoryComplete: inventory.inventoryComplete,
+  };
+
   const plannedByRepo = new Map<string, Planned[]>();
   const errored: ConversationStatus[] = [];
   // Errors are tracked per repository so one project's failure never marks
@@ -124,6 +174,9 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
     list.push(message);
     repoErrors.set(repository, list);
   };
+  // The committed checkpoints for a repository, loaded once and reused, so a
+  // partial run can merge into them rather than overwrite them.
+  const existingByRepo = new Map<string, Checkpoint[]>();
 
   // --- Phase 1: plan every conversation against its repository's checkpoint. ---
   for (const conversation of conversations) {
@@ -143,6 +196,7 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
         repository: '(unrouted)',
         title: conversation.title ?? '(untitled)',
         messageCount: 0,
+        addedThisRun: 0,
         lastMessageId: null,
         lastTimestamp: null,
         lagSeconds: null,
@@ -153,11 +207,30 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
     }
 
     try {
-      const checkpoints = await options.store.load(decision.repository);
-      const messages = await options.source.listMessages(conversation.id);
+      if (!existingByRepo.has(decision.repository)) {
+        existingByRepo.set(decision.repository, await options.store.load(decision.repository));
+      }
+      const checkpoints = existingByRepo.get(decision.repository)!;
+      const read = await readConversation(options.source, conversation.id);
+      const messages = read.messages;
       const existing =
         findCheckpoint(checkpoints, sourceKind, conversation.id) ?? emptyCheckpoint(sourceKind, conversation.id);
-      const plan = planBatch(messages, existing);
+
+      // Wire the source's declared count and the observed count into the plan so
+      // a truncated page or a short read becomes a visible gap.
+      const planOptions: { expectedCount?: number; observedCount?: number } = {};
+      if (typeof read.declaredMessages === 'number') planOptions.expectedCount = read.declaredMessages;
+      planOptions.observedCount = read.observedMessages;
+      const plan = planBatch(messages, existing, planOptions);
+
+      if (!read.paginationComplete) {
+        const reason = `pagination did not complete for ${conversation.id}; the event stream may be truncated`;
+        errors.push(reason);
+        addRepoError(decision.repository, reason);
+        if (!plan.gap) {
+          plan.gap = { conversationId: conversation.id, reason, detectedAt: now() };
+        }
+      }
       if (plan.gap) {
         errors.push(`${conversation.id}: ${plan.gap.reason}`);
         addRepoError(decision.repository, `${conversation.id}: ${plan.gap.reason}`);
@@ -200,6 +273,7 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
         repository: decision.repository,
         title: conversation.title ?? '(untitled)',
         messageCount: 0,
+        addedThisRun: 0,
         lastMessageId: null,
         lastTimestamp: null,
         lagSeconds: null,
@@ -212,10 +286,16 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
   // --- Phase 2: one atomic commit per repository, then adopt its checkpoints. ---
   const outcomes = new Map<string, RepoOutcome>();
   const adopted = new Map<string, Checkpoint>();
+  // The merged checkpoint file per repository, used for both the commit and the
+  // cumulative coverage numbers.
+  const mergedByRepo = new Map<string, Checkpoint[]>();
 
   for (const [repository, items] of plannedByRepo) {
     const transcripts = items.filter((i) => i.transcript).map((i) => i.transcript!);
     const scoped = items.map((i) => i.advanced);
+    const existing = existingByRepo.get(repository) ?? [];
+    const merged = mergeCheckpoints(existing, scoped);
+    mergedByRepo.set(repository, merged);
 
     if (transcripts.length === 0) {
       // Nothing new to archive; nothing to commit and nothing to adopt.
@@ -224,7 +304,7 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
       continue;
     }
 
-    const files = [...transcripts, { path: CHECKPOINT_PATH, content: serializeCheckpoints(scoped) }];
+    const files = [...transcripts, { path: CHECKPOINT_PATH, content: serializeCheckpoints(merged) }];
     try {
       const res = await options.writer.write(
         repository,
@@ -258,6 +338,7 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
     const outcome = outcomes.get(repository)!;
     for (const item of items) {
       const durable = adopted.get(item.conversation.id) ?? item.existing;
+      const added = outcome.succeeded && !item.plan.noop ? item.plan.batch.length : 0;
       const state = !outcome.succeeded ? 'ERROR' : item.plan.gap ? 'GAP' : 'OK';
       const note = !outcome.succeeded
         ? `commit failed: ${outcome.error}`
@@ -265,12 +346,13 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
           ? item.plan.gap.reason
           : item.plan.noop
             ? 'no new messages'
-            : `${item.plan.batch.length} new message(s)`;
+            : `${added} new message(s)`;
       addStatus(repository, {
         conversationId: item.conversation.id,
         repository,
         title: item.conversation.title ?? '(untitled)',
         messageCount: durable.syncedCount,
+        addedThisRun: added,
         lastMessageId: durable.lastMessageId,
         lastTimestamp: durable.lastTimestamp,
         lagSeconds: lagSeconds(durable.lastTimestamp, now()),
@@ -291,9 +373,12 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
     );
     // A repository's own last-successful marker depends only on its own errors.
     const repoLastSuccess = (repoErrors.get(repository)?.length ?? 0) === 0 ? now() : null;
+    const cumulative = cumulativeFrom(mergedByRepo.get(repository) ?? existingByRepo.get(repository) ?? []);
     const status: SyncStatus = {
       generatedAt: now(),
       source: sourceKind,
+      scope: 'run',
+      inventory: coverage,
       conversations: statuses,
       totals: {
         conversations: statuses.length,
@@ -301,6 +386,7 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
         gaps: statuses.filter((s) => s.state === 'GAP').length,
         errors: statuses.filter((s) => s.state === 'ERROR').length,
       },
+      cumulative,
       unsupportedSources: unsupportedSourceNames(),
       lastSuccessfulSync: repoLastSuccess,
     };
@@ -327,9 +413,12 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
   const allStatuses = [...statusRepos.values(), unroutedStatuses]
     .flat()
     .sort((a, b) => a.conversationId.localeCompare(b.conversationId));
+  const aggregateCumulative = cumulativeFrom([...mergedByRepo.values()].flat());
   const aggregate: SyncStatus = {
     generatedAt: now(),
     source: sourceKind,
+    scope: 'run',
+    inventory: coverage,
     conversations: allStatuses,
     totals: {
       conversations: allStatuses.length,
@@ -337,11 +426,51 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
       gaps: allStatuses.filter((s) => s.state === 'GAP').length,
       errors: allStatuses.filter((s) => s.state === 'ERROR').length,
     },
+    cumulative: aggregateCumulative,
     unsupportedSources: unsupportedSourceNames(),
     lastSuccessfulSync,
   };
 
   return { status: aggregate, written, errors };
+}
+
+/** Read the conversation inventory, using truncation metadata when available. */
+async function readInventory(source: SourceReader, limit: number): Promise<SourceConversationInventory> {
+  if (typeof source.listConversationsDetailed === 'function') {
+    return source.listConversationsDetailed(limit);
+  }
+  const conversations = await source.listConversations(limit);
+  // Without a detailed reader the pipeline cannot see past the limit, so it
+  // reports only what it can prove: a full page means more may exist.
+  return {
+    conversations,
+    totalAvailable: conversations.length,
+    truncated: conversations.length >= limit,
+    inventoryComplete: conversations.length < limit,
+  };
+}
+
+/** Read one conversation, using completeness metadata when available. */
+async function readConversation(source: SourceReader, conversationId: string): Promise<SourceReadResult> {
+  if (typeof source.readConversation === 'function') {
+    return source.readConversation(conversationId);
+  }
+  const messages = await source.listMessages(conversationId);
+  return {
+    messages,
+    eventsRead: messages.length,
+    observedMessages: messages.length,
+    declaredMessages: null,
+    paginationComplete: true,
+    pages: 0,
+  };
+}
+
+function cumulativeFrom(checkpoints: Checkpoint[]): { conversations: number; messages: number } {
+  return {
+    conversations: checkpoints.length,
+    messages: checkpoints.reduce((n, c) => n + c.syncedCount, 0),
+  };
 }
 
 function dedupeById(messages: TranscriptMessage[]): TranscriptMessage[] {

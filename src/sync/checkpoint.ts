@@ -39,11 +39,19 @@ function resumeIndex(messages: TranscriptMessage[], checkpoint: Checkpoint): num
 
 export interface PlanOptions {
   /**
-   * Expected total event count from the source, when known. Used to detect a gap:
-   * if the source reports more messages than we can see, the archive is partial
-   * and must say so instead of reporting complete.
+   * Expected total message count from the source, when known. Used to detect a
+   * gap: if the source declares more messages than we can see, the archive is
+   * partial and must say so instead of reporting complete.
    */
   expectedCount?: number;
+  /**
+   * Observed raw count from the same read (e.g. the number of raw events, or the
+   * number of MessageEvents) that produced `messages`. When `expectedCount`
+   * exceeds this, the read itself was short — a truncated page or a dropped
+   * event — and a gap is raised. This is checked before the normalized count so
+   * a short read is not masked by normalizer filtering.
+   */
+  observedCount?: number;
 }
 
 /**
@@ -54,7 +62,9 @@ export interface PlanOptions {
  * - If the checkpoint's message id is not present in the source list, the source
  *   history has diverged (edited/deleted, or a different conversation) and a gap
  *   is raised rather than guessing.
- * - If `expectedCount` exceeds the number of visible messages, a gap is raised.
+ * - If `expectedCount` exceeds what the read observed, a gap is raised: the
+ *   source declares more messages than the read returned, so the archive is
+ *   partial and must not claim completeness.
  */
 export function planBatch(
   messages: TranscriptMessage[],
@@ -84,10 +94,21 @@ export function planBatch(
 
   const batch = messages.slice(start);
 
-  if (typeof options.expectedCount === 'number' && options.expectedCount > messages.length) {
+  // The observed count is the raw size of the read that produced `messages`;
+  // the normalized count is what survived filtering. Compare the source's
+  // declared total against the observed raw count first so a short read is
+  // detected even when filtering would hide it.
+  const observed = options.observedCount ?? messages.length;
+  if (typeof options.expectedCount === 'number' && options.expectedCount > observed) {
     gap = {
       conversationId: checkpoint.conversationId,
-      reason: `source reports ${options.expectedCount} conversation messages but only ${messages.length} are visible; ${options.expectedCount - messages.length} are unread`,
+      reason: `source declares ${options.expectedCount} message(s) but this read observed only ${observed}; ${options.expectedCount - observed} are unread`,
+      detectedAt: new Date().toISOString(),
+    };
+  } else if (typeof options.expectedCount === 'number' && options.expectedCount > messages.length) {
+    gap = {
+      conversationId: checkpoint.conversationId,
+      reason: `source declares ${options.expectedCount} message(s) but only ${messages.length} are visible after filtering; ${options.expectedCount - messages.length} are unread`,
       detectedAt: new Date().toISOString(),
     };
   }

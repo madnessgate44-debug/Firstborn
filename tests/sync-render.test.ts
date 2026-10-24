@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderTranscript, fenceFor } from '../src/sync/render.ts';
+import { renderTranscript, renderStatus, fenceFor } from '../src/sync/render.ts';
 import { parseTranscriptMessages } from '../src/sync/pipeline.ts';
-import type { TranscriptMessage } from '../src/sync/types.ts';
+import type { SyncStatus, TranscriptMessage } from '../src/sync/types.ts';
 
 // The transcript must round-trip byte for byte. This was a real bug: the first
 // parser trimmed trailing whitespace, so a live read-back found one message whose
@@ -56,4 +56,38 @@ test('render: ids, order and timestamps survive the round trip', () => {
 test('render: a hand-edited file without fences is skipped, not guessed', () => {
   const broken = '# Transcript\n\n## user — t1 — `m1`\n\nplain text with no fence\n';
   assert.deepEqual(parseTranscriptMessages(broken), []);
+});
+
+test('render: status surfaces run scope, inventory truncation and cumulative totals', () => {
+  const status: SyncStatus = {
+    generatedAt: '2026-01-01T00:00:00Z',
+    source: 'openhands',
+    scope: 'run',
+    inventory: { examined: 1, totalAvailable: 5, truncated: true, inventoryComplete: true },
+    conversations: [
+      {
+        conversationId: 'c1',
+        repository: 'o/r',
+        title: 'T',
+        messageCount: 7,
+        addedThisRun: 2,
+        lastMessageId: 'm7',
+        lastTimestamp: '2026-01-01T00:00:00Z',
+        lagSeconds: 10,
+        state: 'OK',
+        note: '2 new message(s)',
+      },
+    ],
+    totals: { conversations: 1, messages: 7, gaps: 0, errors: 0 },
+    cumulative: { conversations: 5, messages: 30 },
+    unsupportedSources: ['ChatGPT personal conversations: unsupported'],
+    lastSuccessfulSync: '2026-01-01T00:00:00Z',
+  };
+  const md = renderStatus(status);
+  assert.match(md, /Scope: \*\*run\*\*/);
+  assert.match(md, /TRUNCATED/);
+  assert.match(md, /examined 1 of 5/);
+  assert.match(md, /Cumulative archive: 5 conversations, 30 messages/);
+  assert.match(md, /Added this run/);
+  assert.match(md, /\| 7 \| 2 \|/);
 });

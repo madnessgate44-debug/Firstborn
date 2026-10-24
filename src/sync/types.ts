@@ -90,7 +90,14 @@ export interface ConversationStatus {
   conversationId: string;
   repository: string;
   title: string;
+  /**
+   * Cumulative count of messages durably archived for this conversation, from
+   * its checkpoint — not just this run's batch. Distinguishing the two is what
+   * stops a partial run from looking like the whole archive.
+   */
   messageCount: number;
+  /** Messages appended by *this* run. */
+  addedThisRun: number;
   lastMessageId: string | null;
   lastTimestamp: string | null;
   lagSeconds: number | null;
@@ -98,16 +105,52 @@ export interface ConversationStatus {
   note?: string;
 }
 
+/**
+ * Which conversations a status document covers.
+ *
+ * `run` means the conversations this run examined (a subset when the inventory
+ * was truncated or a limit was set). `cumulative` means every conversation the
+ * repository's checkpoint file holds. A `run` document must never be read as
+ * total coverage.
+ */
+export type StatusScope = 'run' | 'cumulative';
+
+/** Source-side completeness of one run, so a short run is never read as complete. */
+export interface InventoryCoverage {
+  /** Conversations returned and examined this run. */
+  examined: number;
+  /** Total conversations the source reports. */
+  totalAvailable: number;
+  /** True when the source holds more conversations than were examined. */
+  truncated: boolean;
+  /** False when the inventory scan hit the hard cap before the cursor ended. */
+  inventoryComplete: boolean;
+}
+
 /** The status dashboard, written to the repo for a human to read. */
 export interface SyncStatus {
   generatedAt: string;
   source: SourceKind;
+  /** Whether `conversations` covers this run only or the cumulative archive. */
+  scope: StatusScope;
+  /** Conversation inventory coverage for this run (source-side completeness). */
+  inventory: InventoryCoverage;
   conversations: ConversationStatus[];
+  /** Totals for the `scope` above. */
   totals: {
     conversations: number;
     messages: number;
     gaps: number;
     errors: number;
+  };
+  /**
+   * Cumulative messages archived across the repository's whole checkpoint file,
+   * independent of how many conversations this run examined. Lets a reader see
+   * "1 conversation this run, 5 archived in total" instead of a bare "1".
+   */
+  cumulative: {
+    conversations: number;
+    messages: number;
   };
   unsupportedSources: string[];
   lastSuccessfulSync: string | null;
