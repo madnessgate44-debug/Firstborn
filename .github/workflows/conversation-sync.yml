@@ -1,0 +1,102 @@
+name: Conversation Sync
+
+# Unattended, source-faithful conversation sync.
+#
+# Reads OpenHands Cloud sessions through the read-only API V1 event stream and
+# archives new messages to the correct repository. It never touches `main`: the
+# pipeline commits to an isolated `conversation-sync` branch for human review.
+#
+# The ChatGPT personal-conversation source is deliberately absent: OpenAI
+# documents history export as a user-requested process with no unattended API, so
+# the pipeline reports it as unsupported instead of approximating it.
+#
+# Required repository secrets (values are never printed):
+#   OPENHANDS_API_KEY   read-only OpenHands Cloud token (the source).
+#   SYNC_GITHUB_TOKEN   a PAT with `repo` scope, needed to write transcripts to
+#                       other repositories. The built-in GITHUB_TOKEN can only
+#                       write to this repository, so without SYNC_GITHUB_TOKEN a
+#                       cross-repository route will fail loudly (by design).
+on:
+  schedule:
+    # Every 30 minutes. The API is polled, so freshness is bounded by this interval.
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max conversations to examine this run'
+        required: true
+        default: '50'
+      dry_run:
+        description: 'Plan only; write nothing'
+        required: true
+        default: 'false'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: conversation-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Report which required secrets are present WITHOUT exposing their values.
+      # A missing source token or write token is a hard failure, so an inert
+      # schedule can never masquerade as a working one.
+      - name: Preflight secret presence
+        env:
+          OPENHANDS_API_KEY: ${{ secrets.OPENHANDS_API_KEY }}
+          SYNC_GITHUB_TOKEN: ${{ secrets.SYNC_GITHUB_TOKEN }}
+        run: |
+          missing=0
+          if [ -z "${OPENHANDS_API_KEY}" ]; then
+            echo "::error::OPENHANDS_API_KEY is not configured; the sync cannot read the source."
+            missing=1
+          else
+            echo "OPENHANDS_API_KEY is configured (value not shown)."
+          fi
+          if [ -z "${SYNC_GITHUB_TOKEN}" ]; then
+            echo "::warning::SYNC_GITHUB_TOKEN is not configured; only same-repository routes can be written. Cross-repository routes will fail loudly."
+          else
+            echo "SYNC_GITHUB_TOKEN is configured (value not shown)."
+          fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Run the sync
+        env:
+          OPENHANDS_API_KEY: ${{ secrets.OPENHANDS_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.SYNC_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          FORGE_SYNC_REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npx tsx scripts/sync.ts --dry-run --limit=${{ inputs.limit || '50' }}
+          else
+            npx tsx scripts/sync.ts --limit=${{ inputs.limit || '50' }}
+          fi
+
+      - name: Upload the sync status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-sync-status
+          path: |
+            docs/conversation-sync/sync-status.json
+            docs/conversation-sync/sync-status.md
+          if-no-files-found: warn

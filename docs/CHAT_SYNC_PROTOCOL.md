@@ -1,6 +1,64 @@
 # Cross-Project Conversation Sync Protocol
 
-Status: **Adopted as the working protocol; automatic cross-app capture is not yet implemented.**
+Status: **Implemented for the OpenHands source; the ChatGPT personal-conversation
+source is explicitly unsupported.**
+
+The unattended pipeline is live for OpenHands Cloud sessions: `src/sync/` reads the
+read-only API V1 event stream, routes each conversation to a repository by stable
+metadata, appends new messages idempotently against a per-repository checkpoint, and
+publishes a status file. See `docs/conversation-sync/SOURCE_CAPABILITY_MATRIX.md` for
+the evidence behind each source claim. Run it with `npm run sync`; CI runs it on a
+schedule in `.github/workflows/conversation-sync.yml`.
+
+There is **no** unattended source for ChatGPT personal conversations. OpenAI documents
+history export as a user-requested process, so that source is reported as unsupported
+rather than approximated by a manual export. The rest of this document is the adopted
+protocol; the sections below that describe "not yet implemented" behaviour apply only
+to sources that still lack a supported source, such as ChatGPT.
+
+## Correctness rules that keep a short run from looking complete
+
+These are implemented in `src/sync/` and are the answer to the review findings on
+PR #134.
+
+1. **The count is kind-filtered.** The unfiltered `events/count` over-reports versus
+   the paginated stream (observed +1-2 on every live conversation), so the gap check
+   uses `count?kind__eq=MessageEvent`, which matched the stream exactly on all 27 live
+   conversations. Each read reports the source's *declared* message count and the
+   count it actually *observed*; a mismatch is a visible `GAP`, never a silent
+   `COMPLETE`.
+2. **Pagination and the page guard fail loudly.** A read that cannot reach the last
+   page — because the 10,000-page guard is exhausted, or because a page is empty while
+   a next cursor is still reported — throws. A truncated stream is an error, not a
+   short result.
+3. **The conversation inventory reports truncation.** The inventory scan follows the
+   cursor to the end, then reports `examined` vs `totalAvailable` and a `truncated`
+   flag, so a run that saw a subset says so.
+4. **Routing fails closed.** `docs/conversation-sync/routes.json` is the registry, and
+   `fallbackRepository` is `null`. A conversation that matches no rule is routed
+   nowhere and reported as `ERROR`. An unknown project is never written to a guessed
+   repository.
+5. **Status is scoped.** The status file states whether it covers `run` (the
+   conversations this run examined) or `cumulative` (the whole checkpoint file), and
+   carries both a per-run total and a cumulative total. A partial run therefore shows
+   "N conversations this run, M archived in total" rather than a bare "N". Checkpoints
+   are *merged*, so a run that examines a subset never drops another conversation's
+   checkpoint.
+6. **Requests are paced.** The API enforces 100/minute and 10/second; the client paces
+   below both and backs off on a 429, so a long paginated read finishes rather than
+   failing.
+
+## Per-run versus cumulative status
+
+A single run may examine only part of the archive: a `--limit`, or a source inventory
+larger than the run read. The status file never conflates the two:
+
+- `scope` — `run` or `cumulative`.
+- `inventory.examined` / `inventory.totalAvailable` / `inventory.truncated` — how much
+  of the source's conversation inventory this run saw.
+- `totals` — the conversations listed in this file (the run's scope).
+- `cumulative` — conversations and messages in the repository's whole checkpoint file.
+- per conversation: `messageCount` (cumulative) and `addedThisRun`.
 
 ## Objective
 
