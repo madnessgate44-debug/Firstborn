@@ -1,0 +1,43 @@
+{
+  "generatedAt": "2026-10-25T17:22:19.880Z",
+  "source": "openhands",
+  "scope": "run",
+  "inventory": {
+    "examined": 1,
+    "totalAvailable": 1,
+    "truncated": false,
+    "inventoryComplete": true
+  },
+  "conversations": [
+    {
+      "conversationId": "58705495154e4fdd9c1873c9e9e34387",
+      "repository": "madnessgate44-debug/Firstborn",
+      "title": "SYNC-E2E controlled session 2026-10-25",
+      "messageCount": 2,
+      "addedThisRun": 2,
+      "lastMessageId": "4167f300-4cda-491b-8fde-1b7a90f2408c",
+      "lastTimestamp": "2026-10-25T17:10:40.714282",
+      "lagSeconds": 699,
+      "declaredMessages": 2,
+      "observedMessages": 2,
+      "pages": 1,
+      "paginationComplete": true,
+      "state": "OK",
+      "note": "2 new message(s)"
+    }
+  ],
+  "totals": {
+    "conversations": 1,
+    "messages": 2,
+    "gaps": 0,
+    "errors": 0
+  },
+  "cumulative": {
+    "conversations": 1,
+    "messages": 2
+  },
+  "unsupportedSources": [
+    "ChatGPT personal conversations: UNSUPPORTED for unattended sync: OpenAI documents history export as a user-requested process with no documented background API or webhook for personal conversations. No zero-action source exists, so this source is excluded from the pipeline rather than approximated by manual export."
+  ],
+  "lastSuccessfulSync": "2026-10-25T17:22:19.880Z"
+}
