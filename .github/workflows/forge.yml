@@ -104,7 +104,7 @@ jobs:
             exit 0
           fi
           if [ -z "$FORGE_CROSS_REPO_TOKEN" ]; then
-            echo "::error::BLOCKED before writes: cross-repository mission requires FORGE_CROSS_REPO_TOKEN with target-repository contents:write and pull-requests:write access."
+            echo "::error::BLOCKED before writes: cross-repository mission requires FORGE_CROSS_REPO_TOKEN with verified target-repository push access. Pull-request creation is checked separately when Forge opens the PR."
             exit 1
           fi
           RESPONSE=$(curl --silent --show-error --fail \
