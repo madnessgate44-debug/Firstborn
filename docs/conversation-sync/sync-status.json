@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-25T17:22:27.120Z",
+  "generatedAt": "2026-10-25T17:22:32.520Z",
   "source": "openhands",
   "scope": "run",
   "inventory": {
@@ -13,24 +13,24 @@
       "conversationId": "4580cc3157c246a7af4bd60cc3776cd7",
       "repository": "madnessgate44-debug/Firstborn",
       "title": "SYNC-E2E fault session 2 (2026-10-25)",
-      "messageCount": 0,
-      "addedThisRun": 0,
-      "lastMessageId": null,
-      "lastTimestamp": null,
-      "lagSeconds": null,
+      "messageCount": 2,
+      "addedThisRun": 2,
+      "lastMessageId": "82235c70-ac71-451d-a072-44e873dfabe8",
+      "lastTimestamp": "2026-10-25T17:21:12.903095",
+      "lagSeconds": 80,
       "declaredMessages": 2,
       "observedMessages": 2,
       "pages": 1,
       "paginationComplete": true,
-      "state": "ERROR",
-      "note": "commit failed: injected write failure (test): the transcript commit was refused"
+      "state": "OK",
+      "note": "2 new message(s)"
     }
   ],
   "totals": {
     "conversations": 1,
-    "messages": 0,
+    "messages": 2,
     "gaps": 0,
-    "errors": 1
+    "errors": 0
   },
   "cumulative": {
     "conversations": 2,
@@ -39,5 +39,5 @@
   "unsupportedSources": [
     "ChatGPT personal conversations: UNSUPPORTED for unattended sync: OpenAI documents history export as a user-requested process with no documented background API or webhook for personal conversations. No zero-action source exists, so this source is excluded from the pipeline rather than approximated by manual export."
   ],
-  "lastSuccessfulSync": null
+  "lastSuccessfulSync": "2026-10-25T17:22:32.520Z"
 }
