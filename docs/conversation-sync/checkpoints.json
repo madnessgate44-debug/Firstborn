@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "checkpoints": [
+    {
+      "source": "openhands",
+      "conversationId": "58705495154e4fdd9c1873c9e9e34387",
+      "lastMessageId": "4167f300-4cda-491b-8fde-1b7a90f2408c",
+      "lastTimestamp": "2026-10-25T17:10:40.714282",
+      "syncedCount": 2,
+      "updatedAt": "2026-10-25T17:22:16.497Z"
+    }
+  ]
+}
