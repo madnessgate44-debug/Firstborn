@@ -121,6 +121,39 @@ async function main(): Promise<void> {
         `${result.status.inventory.totalAvailable} conversation(s).`
     );
   }
+
+  // Explicit completeness checks, so the run itself shows what it proved.
+  const convs = result.status.conversations;
+  const unrouted = convs.filter((c) => c.repository === '(unrouted)');
+  const countMismatch = convs.filter(
+    (c) => c.declaredMessages !== null && c.declaredMessages !== c.observedMessages
+  );
+  const incomplete = convs.filter((c) => c.state !== 'ERROR' && !c.paginationComplete);
+  console.log('--- COMPLETENESS CHECKS ---');
+  console.log(
+    `Inventory: examined ${result.status.inventory.examined} of ` +
+      `${result.status.inventory.totalAvailable} conversation(s); ` +
+      `scan ${result.status.inventory.inventoryComplete ? 'complete' : 'INCOMPLETE'}; ` +
+      `truncated=${result.status.inventory.truncated}`
+  );
+  console.log(
+    `Event count vs stream: ${countMismatch.length} mismatch(es) of ${convs.length} ` +
+      `(declared MessageEvent count vs observed messages)`
+  );
+  for (const c of countMismatch) {
+    console.log(
+      `  - ${c.conversationId}: declared ${c.declaredMessages}, observed ${c.observedMessages}`
+    );
+  }
+  console.log(
+    `Pagination: ${incomplete.length} incomplete read(s) of ${convs.length} ` +
+      `(every non-error read must reach the source's last page)`
+  );
+  console.log(
+    `Unrouted (fail closed): ${unrouted.length} conversation(s) written nowhere`
+  );
+  for (const c of unrouted) console.log(`  - ${c.conversationId}: ${c.note}`);
+  console.log(`Total messages archived in this scope: ${result.status.totals.messages}`);
   if (result.errors.length) {
     console.log('Errors:');
     for (const e of result.errors) console.log(`  - ${e}`);

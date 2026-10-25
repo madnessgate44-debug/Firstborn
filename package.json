@@ -19,7 +19,8 @@
     "company": "tsx scripts/company.ts",
     "audit": "tsx scripts/audit.ts",
     "deliver": "tsx scripts/deliver.ts",
-    "sync": "tsx scripts/sync.ts"
+    "sync": "tsx scripts/sync.ts",
+    "sync:e2e": "tsx scripts/sync-e2e.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

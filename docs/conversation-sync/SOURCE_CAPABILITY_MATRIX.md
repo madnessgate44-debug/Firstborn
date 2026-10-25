@@ -125,3 +125,16 @@ Zero action means the owner does not run a command, export a file, or remember a
 closeout step for the **supported** source. It does **not** mean the platform pushes
 events; the OpenHands source is polled on a schedule. Freshness is therefore the poll
 interval, which the status file reports as `lagSeconds` per conversation.
+
+## Live verification (2026-10-25)
+
+A controlled end-to-end run proves the source→GitHub path on real data: a fresh source
+event is archived, a re-run is a no-op, and an injected write failure leaves the
+checkpoint unadvanced until a retry archives the event exactly once. Each run prints an
+explicit completeness block — inventory examined vs available, declared-vs-observed
+message counts, pagination completeness, and unrouted conversations that fail closed.
+The per-conversation status carries the same facts as `declaredMessages`,
+`observedMessages`, `pages`, and `paginationComplete`. See
+`docs/conversation-sync/FOLLOWUP_VERIFICATION_2026-10-25.md` and
+`docs/conversation-sync/evidence/`. This evidence is **manual polling**; scheduled
+operation is not yet active (the workflow is not on `main`).

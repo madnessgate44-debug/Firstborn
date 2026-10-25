@@ -101,6 +101,18 @@ export interface ConversationStatus {
   lastMessageId: string | null;
   lastTimestamp: string | null;
   lagSeconds: number | null;
+  /**
+   * The message count the source *declares* for this conversation's read, or null
+   * when the source does not report one. Compared against `observedMessages` to
+   * prove completeness rather than assume it.
+   */
+  declaredMessages: number | null;
+  /** Messages the read actually observed (raw, before normalization filtering). */
+  observedMessages: number;
+  /** Pages fetched from the source for this conversation. */
+  pages: number;
+  /** True only when the read reached the source's last page. */
+  paginationComplete: boolean;
   state: 'OK' | 'GAP' | 'ERROR';
   note?: string;
 }

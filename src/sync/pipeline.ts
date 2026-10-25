@@ -139,6 +139,8 @@ interface Planned {
   advanced: Checkpoint;
   plan: BatchPlan;
   transcript: { path: string; content: string } | null;
+  /** Completeness metadata from the read that produced the plan. */
+  read: SourceReadResult;
 }
 
 interface RepoOutcome {
@@ -200,6 +202,10 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
         lastMessageId: null,
         lastTimestamp: null,
         lagSeconds: null,
+        declaredMessages: null,
+        observedMessages: 0,
+        pages: 0,
+        paginationComplete: false,
         state: 'ERROR',
         note: `no route matched (${decision.matchedBy}); not written anywhere`,
       });
@@ -263,7 +269,7 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
       }
 
       const list = plannedByRepo.get(decision.repository) ?? [];
-      list.push({ conversation, repository: decision.repository, existing, advanced, plan, transcript });
+      list.push({ conversation, repository: decision.repository, existing, advanced, plan, transcript, read });
       plannedByRepo.set(decision.repository, list);
     } catch (err: any) {
       errors.push(`${conversation.id}: ${err?.message ?? String(err)}`);
@@ -277,6 +283,10 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
         lastMessageId: null,
         lastTimestamp: null,
         lagSeconds: null,
+        declaredMessages: null,
+        observedMessages: 0,
+        pages: 0,
+        paginationComplete: false,
         state: 'ERROR',
         note: err?.message ?? String(err),
       });
@@ -356,6 +366,10 @@ export async function runSync(options: PipelineOptions): Promise<SyncRunResult> 
         lastMessageId: durable.lastMessageId,
         lastTimestamp: durable.lastTimestamp,
         lagSeconds: lagSeconds(durable.lastTimestamp, now()),
+        declaredMessages: item.read.declaredMessages,
+        observedMessages: item.read.observedMessages,
+        pages: item.read.pages,
+        paginationComplete: item.read.paginationComplete,
         state,
         note,
       });

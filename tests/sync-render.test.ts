@@ -74,6 +74,10 @@ test('render: status surfaces run scope, inventory truncation and cumulative tot
         lastMessageId: 'm7',
         lastTimestamp: '2026-01-01T00:00:00Z',
         lagSeconds: 10,
+        declaredMessages: 7,
+        observedMessages: 7,
+        pages: 1,
+        paginationComplete: true,
         state: 'OK',
         note: '2 new message(s)',
       },
@@ -90,4 +94,7 @@ test('render: status surfaces run scope, inventory truncation and cumulative tot
   assert.match(md, /Cumulative archive: 5 conversations, 30 messages/);
   assert.match(md, /Added this run/);
   assert.match(md, /\| 7 \| 2 \|/);
+  // The source read completeness section shows declared vs observed and pagination.
+  assert.match(md, /## Source read completeness/);
+  assert.match(md, /\| `c1` \| 7 \| 7 \| 1 \| complete \|/);
 });

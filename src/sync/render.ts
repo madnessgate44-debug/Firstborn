@@ -106,6 +106,23 @@ export function renderStatus(status: SyncStatus): string {
     );
   }
   lines.push('');
+  lines.push('## Source read completeness');
+  lines.push('');
+  lines.push(
+    'The source declares a message count for each conversation; the read reports how many it ' +
+      'observed and whether pagination reached the last page. A declared/observed mismatch or an ' +
+      'incomplete pagination is a `GAP`, never a silent `COMPLETE`.'
+  );
+  lines.push('');
+  lines.push('| Conversation | Declared | Observed | Pages | Pagination |');
+  lines.push('| --- | --- | --- | --- | --- |');
+  for (const c of status.conversations) {
+    lines.push(
+      `| \`${c.conversationId}\` | ${c.declaredMessages ?? '—'} | ${c.observedMessages} | ` +
+        `${c.pages} | ${c.paginationComplete ? 'complete' : '**INCOMPLETE**'} |`
+    );
+  }
+  lines.push('');
   lines.push('## Unsupported sources');
   lines.push('');
   if (status.unsupportedSources.length === 0) {

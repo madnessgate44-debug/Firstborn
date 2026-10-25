@@ -355,6 +355,31 @@ test('pipeline: per-conversation status reports cumulative and per-run counts', 
   assert.equal(status.addedThisRun, 1, 'messages added by this run');
 });
 
+test('pipeline: per-conversation status carries the source read completeness', async () => {
+  const source = new FakeSource();
+  const writer = new FakeWriter();
+  source.conversations = [conv('c1', 'owner/Amina')];
+  source.messages.set('c1', [m('m1', 't1'), m('m2', 't2')]);
+  // The source declares two message events and the read observed two.
+  source.declared.set('c1', 2);
+  source.observed.set('c1', 2);
+
+  const result = await runSync(base(source, writer));
+  const status = result.status.conversations[0];
+  assert.equal(status.declaredMessages, 2);
+  assert.equal(status.observedMessages, 2);
+  assert.equal(status.paginationComplete, true);
+  assert.equal(status.pages, 1);
+
+  // The committed status files expose the same completeness facts.
+  const statusJson = JSON.parse(writer.files.get('owner/amina::docs/conversation-sync/sync-status.json')!);
+  assert.equal(statusJson.conversations[0].declaredMessages, 2);
+  assert.equal(statusJson.conversations[0].observedMessages, 2);
+  const md = writer.files.get('owner/amina::docs/conversation-sync/sync-status.md')!;
+  assert.match(md, /## Source read completeness/);
+  assert.match(md, /\| `c1` \| 2 \| 2 \| 1 \| complete \|/);
+});
+
 test('pipeline: an unknown project fails closed and is written nowhere', async () => {
   const source = new FakeSource();
   const writer = new FakeWriter();

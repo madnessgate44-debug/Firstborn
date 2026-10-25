@@ -3,6 +3,15 @@
 Status: **Implemented for the OpenHands source; the ChatGPT personal-conversation
 source is explicitly unsupported.**
 
+> **Verification status (2026-10-25):** the pipeline is proven by a live, controlled
+> end-to-end run — a fresh source event is archived to GitHub, a re-run does not
+> duplicate it, and an injected write failure leaves the checkpoint unadvanced until a
+> retry archives the event exactly once. See
+> `docs/conversation-sync/FOLLOWUP_VERIFICATION_2026-10-25.md` and the raw outputs in
+> `docs/conversation-sync/evidence/`. That evidence is **manual polling**. Scheduled
+> (unattended) operation is **not active**: `GET …/actions/runs?event=schedule` returns
+> zero runs and `.github/workflows/conversation-sync.yml` is not yet on `main`.
+
 The unattended pipeline is live for OpenHands Cloud sessions: `src/sync/` reads the
 read-only API V1 event stream, routes each conversation to a repository by stable
 metadata, appends new messages idempotently against a per-repository checkpoint, and
