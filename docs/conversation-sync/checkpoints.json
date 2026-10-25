@@ -3,6 +3,14 @@
   "checkpoints": [
     {
       "source": "openhands",
+      "conversationId": "4580cc3157c246a7af4bd60cc3776cd7",
+      "lastMessageId": "82235c70-ac71-451d-a072-44e873dfabe8",
+      "lastTimestamp": "2026-10-25T17:21:12.903095",
+      "syncedCount": 2,
+      "updatedAt": "2026-10-25T17:22:30.350Z"
+    },
+    {
+      "source": "openhands",
       "conversationId": "58705495154e4fdd9c1873c9e9e34387",
       "lastMessageId": "4167f300-4cda-491b-8fde-1b7a90f2408c",
       "lastTimestamp": "2026-10-25T17:10:40.714282",
