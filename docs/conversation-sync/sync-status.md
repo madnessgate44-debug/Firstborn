@@ -1,18 +1,18 @@
 # Conversation Sync Status
 
-- Generated: 2026-10-25T17:22:23.182Z
+- Generated: 2026-10-25T17:22:27.120Z
 - Source: openhands
-- Last successful sync: 2026-10-25T17:22:23.182Z
+- Last successful sync: (never)
 - Scope: **run** — this file lists the conversations examined by this run only; a short run is not total coverage
 - Inventory: examined 1 of 1 conversation(s)
-- Totals (this run): 1 conversations, 2 messages, 0 gaps, 0 errors
-- Cumulative archive: 1 conversations, 2 messages
+- Totals (this run): 1 conversations, 0 messages, 0 gaps, 1 errors
+- Cumulative archive: 2 conversations, 4 messages
 
 ## Conversations
 
 | Conversation | Repository | Messages (total) | Added this run | Lag (s) | State | Note |
 | --- | --- | --- | --- | --- | --- | --- |
-| `58705495154e4fdd9c1873c9e9e34387` | `madnessgate44-debug/Firstborn` | 2 | 0 | 702 | OK | no new messages |
+| `4580cc3157c246a7af4bd60cc3776cd7` | `madnessgate44-debug/Firstborn` | 0 | 0 | — | ERROR | commit failed: injected write failure (test): the transcript commit was refused |
 
 ## Source read completeness
 
@@ -20,7 +20,7 @@ The source declares a message count for each conversation; the read reports how 
 
 | Conversation | Declared | Observed | Pages | Pagination |
 | --- | --- | --- | --- | --- |
-| `58705495154e4fdd9c1873c9e9e34387` | 2 | 2 | 1 | complete |
+| `4580cc3157c246a7af4bd60cc3776cd7` | 2 | 2 | 1 | complete |
 
 ## Unsupported sources
 
