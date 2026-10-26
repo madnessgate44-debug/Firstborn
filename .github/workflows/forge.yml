@@ -93,6 +93,35 @@ jobs:
           print(f"repo={target}")
           PY
 
+      - name: Verify cross-repository write access before running Forge
+        env:
+          CURRENT_REPO: ${{ github.repository }}
+          TARGET_REPO: ${{ steps.coding-target.outputs.repo }}
+          FORGE_CROSS_REPO_TOKEN: ${{ secrets.FORGE_CROSS_REPO_TOKEN }}
+        run: |
+          if [ "$TARGET_REPO" = "$CURRENT_REPO" ]; then
+            echo "Same-repository mission; the workflow token is scoped to the target."
+            exit 0
+          fi
+          if [ -z "$FORGE_CROSS_REPO_TOKEN" ]; then
+            echo "::error::BLOCKED before writes: cross-repository mission requires FORGE_CROSS_REPO_TOKEN with verified target-repository push access. Pull-request creation is checked separately when Forge opens the PR."
+            exit 1
+          fi
+          RESPONSE=$(curl --silent --show-error --fail \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $FORGE_CROSS_REPO_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$TARGET_REPO") || {
+              echo "::error::BLOCKED before writes: target repository could not be read with FORGE_CROSS_REPO_TOKEN."
+              exit 1
+            }
+          PUSH=$(printf '%s' "$RESPONSE" | jq -r '.permissions.push // false')
+          if [ "$PUSH" != "true" ]; then
+            echo "::error::BLOCKED before writes: FORGE_CROSS_REPO_TOKEN does not verify push permission for $TARGET_REPO."
+            exit 1
+          fi
+          echo "Verified authenticated push permission for $TARGET_REPO; no target writes have occurred yet."
+
       - name: Run Forge Agent
         id: forge
         env:
@@ -113,9 +142,10 @@ jobs:
         run: npx tsx src/agent/forge-runner.ts
 
       - name: Approve the PR-triggered verification run
-        if: always()
+        if: always() && steps.forge.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.FORGE_CROSS_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ steps.coding-target.outputs.repo }}
           TASK_ID: ${{ github.event.issue.number || github.event.inputs.task_id }}
         run: |
           # Bot-authored PRs are held at action_required until a human approves
@@ -128,19 +158,24 @@ jobs:
           # and then stopped, so the other workflow was left at action_required
           # and the gate never completed without a human clicking approve.
           BRANCH="forge/task-${TASK_ID}-${{ github.run_id }}"
+          REPO="$TARGET_REPO"
+          if [ -z "$REPO" ]; then
+            echo "::error::Missing resolved target repository; refusing to approve any workflow run."
+            exit 1
+          fi
           approved=""
           for attempt in $(seq 1 12); do
             # Every run still held on this branch, newest first.
-            HELD=$(gh api "repos/${{ github.repository }}/actions/runs?status=action_required&per_page=100" \
+            HELD=$(gh api "repos/$REPO/actions/runs?status=action_required&per_page=100" \
               --jq ".workflow_runs[] | select(.head_branch==\"$BRANCH\") | \"\(.id) \(.name)\"" 2>/dev/null || echo "")
             while read -r RUN_ID RUN_NAME; do
               [ -z "$RUN_ID" ] && continue
               case " $approved " in *" $RUN_ID "*) continue ;; esac
-              if gh api -X POST "repos/${{ github.repository }}/actions/runs/$RUN_ID/approve" >/dev/null 2>&1; then
-                echo "APPROVED $RUN_ID ($RUN_NAME) on $BRANCH (attempt $attempt)"
+              if gh api -X POST "repos/$REPO/actions/runs/$RUN_ID/approve" >/dev/null 2>&1; then
+                echo "APPROVED $RUN_ID ($RUN_NAME) in $REPO on $BRANCH (attempt $attempt)"
                 approved="$approved $RUN_ID"
               else
-                echo "NOTICE: token not permitted to approve $RUN_ID ($RUN_NAME); verification remains pending human approval."
+                echo "NOTICE: token not permitted to approve $RUN_ID ($RUN_NAME) in $REPO; verification remains pending human approval."
                 approved="$approved $RUN_ID"
               fi
             done <<< "$HELD"
