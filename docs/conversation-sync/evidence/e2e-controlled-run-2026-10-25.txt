@@ -1,0 +1,102 @@
+[e2e] destination madnessgate44-debug/Firstborn@conversation-sync-e2e (isolated; never main, never conversation-sync)
+[e2e] controlled conversations: new=58705495154e4fdd9c1873c9e9e34387 fault=4580cc3157c246a7af4bd60cc3776cd7
+
+=== PHASE new: archive a controlled new source event ===
+[e2e] source read: {"messages":2,"declared":2,"observed":2,"pages":1,"paginationComplete":true}
+[e2e] source event id=ed2b7f0a-d989-4ac3-9d28-8f5cb4843f6a speaker=user ts=2026-10-25T17:10:38.739278 text="SYNC-E2E-CONTROLLED 2026-10-25T17:15Z marker: harmless verification message. Do not perform any work; reply with the sin"
+[e2e] source event id=4167f300-4cda-491b-8fde-1b7a90f2408c speaker=assistant ts=2026-10-25T17:10:40.714282 text="ACK"
+[
+  {
+    "conversationId": "58705495154e4fdd9c1873c9e9e34387",
+    "repository": "madnessgate44-debug/Firstborn",
+    "messageCount": 2,
+    "addedThisRun": 2,
+    "declared": 2,
+    "observed": 2,
+    "pages": 1,
+    "paginationComplete": true,
+    "state": "OK",
+    "note": "2 new message(s)"
+  }
+]
+[e2e] inventory {"examined":1,"totalAvailable":1,"truncated":false,"inventoryComplete":true}
+[e2e] errors []
+[e2e] PASS new: run produced no errors
+[e2e] PASS new: transcript was committed to GitHub — docs/conversation-sync/transcripts/openhands/58705495154e4fdd9c1873c9e9e34387.md
+[e2e] PASS new: committed transcript is new (not the pre-run state)
+[e2e] PASS new: read-back matches source message-for-message — 2 archived vs 2 source
+[e2e] PASS new: archived text contains the source marker verbatim
+[e2e] read-back ids: ed2b7f0a-d989-4ac3-9d28-8f5cb4843f6a, 4167f300-4cda-491b-8fde-1b7a90f2408c
+
+=== PHASE new2: re-run the same source; no duplicate ===
+[
+  {
+    "conversationId": "58705495154e4fdd9c1873c9e9e34387",
+    "repository": "madnessgate44-debug/Firstborn",
+    "messageCount": 2,
+    "addedThisRun": 0,
+    "declared": 2,
+    "observed": 2,
+    "pages": 1,
+    "paginationComplete": true,
+    "state": "OK",
+    "note": "no new messages"
+  }
+]
+[e2e] inventory {"examined":1,"totalAvailable":1,"truncated":false,"inventoryComplete":true}
+[e2e] errors []
+[e2e] PASS new2: transcript blob is byte-identical (no duplicate write) — 6defd528ac36 -> 6defd528ac36
+[e2e] PASS new2: addedThisRun is 0 for the already-synced conversation — 0
+[e2e] PASS new2: checkpoint file is unchanged
+[e2e] PASS new2: still exactly one archived copy of every source event
+
+=== PHASE fault: injected write failure after source read ===
+[e2e] source read: {"messages":2,"declared":2,"observed":2,"pages":1,"paginationComplete":true}
+[e2e] source event id=4732dff0-c3bf-4f49-8d95-d8e4fd8c1c81 speaker=user ts=2026-10-25T17:21:08.898430 text="SYNC-E2E-FAULT2 2026-10-25 marker: harmless verification message for the write-failure/retry test. Reply with the single"
+[e2e] source event id=82235c70-ac71-451d-a072-44e873dfabe8 speaker=assistant ts=2026-10-25T17:21:12.903095 text="ACK"
+[
+  {
+    "conversationId": "4580cc3157c246a7af4bd60cc3776cd7",
+    "repository": "madnessgate44-debug/Firstborn",
+    "messageCount": 0,
+    "addedThisRun": 0,
+    "declared": 2,
+    "observed": 2,
+    "pages": 1,
+    "paginationComplete": true,
+    "state": "ERROR",
+    "note": "commit failed: injected write failure (test): the transcript commit was refused"
+  }
+]
+[e2e] inventory {"examined":1,"totalAvailable":1,"truncated":false,"inventoryComplete":true}
+[e2e] errors ["write madnessgate44-debug/Firstborn: injected write failure (test): the transcript commit was refused"]
+[e2e] PASS fault: the run reported the injected failure
+[e2e] PASS fault: the conversation is marked ERROR — commit failed: injected write failure (test): the transcript commit was refused
+[e2e] PASS fault: the failed run does not claim a successful sync
+[e2e] PASS fault: the committed checkpoint did not advance for the failed conversation — checkpoint contains 4580cc3157c246a7af4bd60cc3776cd7: false -> false
+[e2e] PASS fault: no transcript was committed for the failed conversation
+
+=== PHASE fault (retry): the same event is archived exactly once ===
+[
+  {
+    "conversationId": "4580cc3157c246a7af4bd60cc3776cd7",
+    "repository": "madnessgate44-debug/Firstborn",
+    "messageCount": 2,
+    "addedThisRun": 2,
+    "declared": 2,
+    "observed": 2,
+    "pages": 1,
+    "paginationComplete": true,
+    "state": "OK",
+    "note": "2 new message(s)"
+  }
+]
+[e2e] inventory {"examined":1,"totalAvailable":1,"truncated":false,"inventoryComplete":true}
+[e2e] errors []
+[e2e] PASS retry: the run has no errors
+[e2e] PASS retry: the transcript is now committed
+[e2e] PASS retry: read-back matches source message-for-message — 2 archived vs 2 source
+[e2e] PASS retry: the checkpoint advanced exactly to the source message count — syncedCount=2
+[e2e] PASS retry: the archived event appears exactly once
+
+[e2e] failures: 0

@@ -1,0 +1,143 @@
+[sync] source: OpenHands Cloud (unattended)
+[sync] unsupported: UNSUPPORTED for unattended sync: OpenAI documents history export as a user-requested process with no documented background API or webhook for personal conversations. No zero-action source exists, so this source is excluded from the pipeline rather than approximated by manual export.
+[sync] mode: dry-run
+[sync] routing: 5 rule(s), fallback=(fail closed)
+
+--- SYNC STATUS ---
+# Conversation Sync Status
+
+- Generated: 2026-10-25T17:28:30.502Z
+- Source: openhands
+- Last successful sync: (never)
+- Scope: **run** — this file lists the conversations examined by this run only; a short run is not total coverage
+- Inventory: examined 31 of 31 conversation(s)
+- Totals (this run): 31 conversations, 483 messages, 0 gaps, 2 errors
+- Cumulative archive: 29 conversations, 483 messages
+
+## Conversations
+
+| Conversation | Repository | Messages (total) | Added this run | Lag (s) | State | Note |
+| --- | --- | --- | --- | --- | --- | --- |
+| `0a1a3e39a8724c4782569a2ef395580b` | `madnessgate44-debug/Firstborn` | 27 | 27 | 800443 | OK | 27 new message(s) |
+| `0b53fb8a302848898effb4b87f8d5774` | `madnessgate44-debug/brain` | 2 | 2 | 1234172 | OK | 2 new message(s) |
+| `13ba118db5e9455a8fac654e3ba53730` | `(unrouted)` | 0 | 0 | — | ERROR | no route matched (unrouted); not written anywhere |
+| `281c6deb6157442ca13f8790830021be` | `madnessgate44-debug/Firstborn` | 1 | 1 | 643 | OK | 1 new message(s) |
+| `296b0ce0a1f34183ac8244418ca253fd` | `madnessgate44-debug/Amina` | 1 | 1 | 285861 | OK | 1 new message(s) |
+| `319cdf69ecbb45b8a1c267edba0cdf7c` | `madnessgate44-debug/brain` | 2 | 2 | 1230177 | OK | 2 new message(s) |
+| `38a3b41f4302467197d375a026fe3c30` | `madnessgate44-debug/Amina` | 87 | 87 | 298649 | OK | 87 new message(s) |
+| `3df8d9826c5542b8aa9efce877ad3f1b` | `madnessgate44-debug/brain` | 2 | 2 | 1230972 | OK | 2 new message(s) |
+| `43bfdf2b750d47b6b896afd567218bb9` | `madnessgate44-debug/Firstborn` | 44 | 44 | 600726 | OK | 44 new message(s) |
+| `4580cc3157c246a7af4bd60cc3776cd7` | `madnessgate44-debug/Firstborn` | 2 | 2 | 438 | OK | 2 new message(s) |
+| `4c8d052277f44e8ba02c8131e4d42ba4` | `madnessgate44-debug/Firstborn` | 32 | 32 | 692393 | OK | 32 new message(s) |
+| `5612bd51a7564219b069dc1ebe4dd0f4` | `madnessgate44-debug/brain` | 2 | 2 | 1231826 | OK | 2 new message(s) |
+| `56ed1529e14d45c9b5c41c4df83c9de8` | `madnessgate44-debug/Firstborn` | 2 | 2 | 83028 | OK | 2 new message(s) |
+| `58705495154e4fdd9c1873c9e9e34387` | `madnessgate44-debug/Firstborn` | 2 | 2 | 1070 | OK | 2 new message(s) |
+| `59eb12e8f97547449519fcd6bdb7ed20` | `madnessgate44-debug/brain` | 2 | 2 | 1234088 | OK | 2 new message(s) |
+| `62057a7b1214489ead604dd29baf7b49` | `madnessgate44-debug/Firstborn` | 2 | 2 | 175258 | OK | 2 new message(s) |
+| `807d545c379e4eb38e02a695587328f1` | `madnessgate44-debug/brain` | 2 | 2 | 1230410 | OK | 2 new message(s) |
+| `8db6375184834040bc49dabfae41e8ad` | `madnessgate44-debug/Amina` | 7 | 7 | 277242 | OK | 7 new message(s) |
+| `8e7ac5344f0948fc8b9f0b68599647a0` | `madnessgate44-debug/Amina` | 2 | 2 | 717537 | OK | 2 new message(s) |
+| `8f0765bd42544025bfca64ad23e663fe` | `madnessgate44-debug/Firstborn` | 0 | 0 | — | ERROR | OpenHands GET /conversation/8f0765bd42544025bfca64ad23e663fe/events/search?limit=100&sort_order=TIMESTAMP&page_id=1700 failed: HTTP 429: {"error":"Rate limit exceeded: 100 per 1 minute"} (rate-limited 7x) |
+| `90d3f13ea700425681b643bc56c776ce` | `madnessgate44-debug/Amina` | 2 | 2 | 287066 | OK | 2 new message(s) |
+| `94cd4b3331a74ac9b731965330ca5186` | `madnessgate44-debug/Amina` | 14 | 14 | 280711 | OK | 14 new message(s) |
+| `aa7dd27bd6bf4996820a79c5ce14db6e` | `madnessgate44-debug/brain` | 2 | 2 | 1230642 | OK | 2 new message(s) |
+| `ab92584bdf3b4f9ba3318a7088ea9891` | `madnessgate44-debug/Amina` | 67 | 67 | 13899 | OK | 67 new message(s) |
+| `be6d9c5f3bec479297ba809be937a234` | `madnessgate44-debug/Firstborn` | 1 | 1 | 2488 | OK | 1 new message(s) |
+| `c1ff545e46e443d1a65f0f774fdb523c` | `madnessgate44-debug/Firstborn` | 2 | 2 | 1144880 | OK | 2 new message(s) |
+| `c315f0b0f03a4a0ba7751954f2ebf63a` | `madnessgate44-debug/Amina` | 2 | 2 | 283059 | OK | 2 new message(s) |
+| `d3bba29a861d4126862a5bda7ad77aec` | `madnessgate44-debug/Firstborn` | 2 | 2 | 1124214 | OK | 2 new message(s) |
+| `db0c07a7e4604daab9b8565ebc37fdce` | `madnessgate44-debug/Firstborn` | 167 | 167 | 879967 | OK | 167 new message(s) |
+| `f992c925e6444e3181d2796ecacc1591` | `madnessgate44-debug/brain` | 1 | 1 | 1230098 | OK | 1 new message(s) |
+| `ff7b917f8f0b466ba557f01945a79fbe` | `madnessgate44-debug/brain` | 2 | 2 | 1231465 | OK | 2 new message(s) |
+
+## Source read completeness
+
+The source declares a message count for each conversation; the read reports how many it observed and whether pagination reached the last page. A declared/observed mismatch or an incomplete pagination is a `GAP`, never a silent `COMPLETE`.
+
+| Conversation | Declared | Observed | Pages | Pagination |
+| --- | --- | --- | --- | --- |
+| `0a1a3e39a8724c4782569a2ef395580b` | 27 | 27 | 7 | complete |
+| `0b53fb8a302848898effb4b87f8d5774` | 2 | 2 | 3 | complete |
+| `13ba118db5e9455a8fac654e3ba53730` | — | 0 | 0 | **INCOMPLETE** |
+| `281c6deb6157442ca13f8790830021be` | 1 | 1 | 1 | complete |
+| `296b0ce0a1f34183ac8244418ca253fd` | 1 | 1 | 9 | complete |
+| `319cdf69ecbb45b8a1c267edba0cdf7c` | 2 | 2 | 2 | complete |
+| `38a3b41f4302467197d375a026fe3c30` | 87 | 87 | 77 | complete |
+| `3df8d9826c5542b8aa9efce877ad3f1b` | 2 | 2 | 2 | complete |
+| `43bfdf2b750d47b6b896afd567218bb9` | 44 | 44 | 37 | complete |
+| `4580cc3157c246a7af4bd60cc3776cd7` | 2 | 2 | 1 | complete |
+| `4c8d052277f44e8ba02c8131e4d42ba4` | 32 | 32 | 13 | complete |
+| `5612bd51a7564219b069dc1ebe4dd0f4` | 2 | 2 | 2 | complete |
+| `56ed1529e14d45c9b5c41c4df83c9de8` | 2 | 2 | 8 | complete |
+| `58705495154e4fdd9c1873c9e9e34387` | 2 | 2 | 1 | complete |
+| `59eb12e8f97547449519fcd6bdb7ed20` | 2 | 2 | 2 | complete |
+| `62057a7b1214489ead604dd29baf7b49` | 2 | 2 | 6 | complete |
+| `807d545c379e4eb38e02a695587328f1` | 2 | 2 | 2 | complete |
+| `8db6375184834040bc49dabfae41e8ad` | 7 | 7 | 15 | complete |
+| `8e7ac5344f0948fc8b9f0b68599647a0` | 2 | 2 | 2 | complete |
+| `8f0765bd42544025bfca64ad23e663fe` | — | 0 | 0 | **INCOMPLETE** |
+| `90d3f13ea700425681b643bc56c776ce` | 2 | 2 | 3 | complete |
+| `94cd4b3331a74ac9b731965330ca5186` | 14 | 14 | 74 | complete |
+| `aa7dd27bd6bf4996820a79c5ce14db6e` | 2 | 2 | 2 | complete |
+| `ab92584bdf3b4f9ba3318a7088ea9891` | 67 | 67 | 75 | complete |
+| `be6d9c5f3bec479297ba809be937a234` | 1 | 1 | 3 | complete |
+| `c1ff545e46e443d1a65f0f774fdb523c` | 2 | 2 | 2 | complete |
+| `c315f0b0f03a4a0ba7751954f2ebf63a` | 2 | 2 | 7 | complete |
+| `d3bba29a861d4126862a5bda7ad77aec` | 2 | 2 | 1 | complete |
+| `db0c07a7e4604daab9b8565ebc37fdce` | 167 | 167 | 67 | complete |
+| `f992c925e6444e3181d2796ecacc1591` | 1 | 1 | 2 | complete |
+| `ff7b917f8f0b466ba557f01945a79fbe` | 2 | 2 | 2 | complete |
+
+## Unsupported sources
+
+- ChatGPT personal conversations: UNSUPPORTED for unattended sync: OpenAI documents history export as a user-requested process with no documented background API or webhook for personal conversations. No zero-action source exists, so this source is excluded from the pipeline rather than approximated by manual export.
+
+--- COMPLETENESS CHECKS ---
+Inventory: examined 31 of 31 conversation(s); scan complete; truncated=false
+Event count vs stream: 0 mismatch(es) of 31 (declared MessageEvent count vs observed messages)
+Pagination: 0 incomplete read(s) of 31 (every non-error read must reach the source's last page)
+Unrouted (fail closed): 1 conversation(s) written nowhere
+  - 13ba118db5e9455a8fac654e3ba53730: no route matched (unrouted); not written anywhere
+Total messages archived in this scope: 483
+Errors:
+  - 8f0765bd42544025bfca64ad23e663fe: OpenHands GET /conversation/8f0765bd42544025bfca64ad23e663fe/events/search?limit=100&sort_order=TIMESTAMP&page_id=1700 failed: HTTP 429: {"error":"Rate limit exceeded: 100 per 1 minute"} (rate-limited 7x)
+Planned writes (dry-run):
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/4580cc3157c246a7af4bd60cc3776cd7.md (1075 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/281c6deb6157442ca13f8790830021be.md (969 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/58705495154e4fdd9c1873c9e9e34387.md (1079 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/be6d9c5f3bec479297ba809be937a234.md (12008 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/56ed1529e14d45c9b5c41c4df83c9de8.md (13609 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/62057a7b1214489ead604dd29baf7b49.md (11211 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/4c8d052277f44e8ba02c8131e4d42ba4.md (65355 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/0a1a3e39a8724c4782569a2ef395580b.md (41222 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/43bfdf2b750d47b6b896afd567218bb9.md (153692 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/d3bba29a861d4126862a5bda7ad77aec.md (2230 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/db0c07a7e4604daab9b8565ebc37fdce.md (254354 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/transcripts/openhands/c1ff545e46e443d1a65f0f774fdb523c.md (6582 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/checkpoints.json (3503 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/ab92584bdf3b4f9ba3318a7088ea9891.md (131324 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/8db6375184834040bc49dabfae41e8ad.md (5184 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/296b0ce0a1f34183ac8244418ca253fd.md (9122 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/c315f0b0f03a4a0ba7751954f2ebf63a.md (9156 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/90d3f13ea700425681b643bc56c776ce.md (4830 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/94cd4b3331a74ac9b731965330ca5186.md (18595 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/38a3b41f4302467197d375a026fe3c30.md (127723 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/transcripts/openhands/8e7ac5344f0948fc8b9f0b68599647a0.md (6468 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/checkpoints.json (2349 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/f992c925e6444e3181d2796ecacc1591.md (1545 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/319cdf69ecbb45b8a1c267edba0cdf7c.md (20852 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/807d545c379e4eb38e02a695587328f1.md (23629 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/aa7dd27bd6bf4996820a79c5ce14db6e.md (16690 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/3df8d9826c5542b8aa9efce877ad3f1b.md (23018 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/ff7b917f8f0b466ba557f01945a79fbe.md (18348 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/5612bd51a7564219b069dc1ebe4dd0f4.md (16611 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/59eb12e8f97547449519fcd6bdb7ed20.md (16005 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/transcripts/openhands/0b53fb8a302848898effb4b87f8d5774.md (17389 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/checkpoints.json (2634 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/sync-status.json (8157 bytes)
+  - madnessgate44-debug/Firstborn docs/conversation-sync/sync-status.md (3760 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/sync-status.json (5305 bytes)
+  - madnessgate44-debug/Amina docs/conversation-sync/sync-status.md (2670 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/sync-status.json (5630 bytes)
+  - madnessgate44-debug/brain docs/conversation-sync/sync-status.md (2831 bytes)
+Written: 38 file(s); errors: 1
