@@ -174,3 +174,33 @@ error is visible.
 - Cost: **$0**. Transcription is local; the explanation uses Google's free tier
   (<https://ai.google.dev/pricing>, no card). `yt-dlp` is public domain and
   `faster-whisper` is MIT.
+
+---
+
+## Background - why it runs here and not on Vercel
+
+Short answer: Vercel's free (Hobby) plan cannot run local speech-to-text. The
+limits that rule it out:
+
+| Hobby limit | Value | Why it fails here |
+| --- | --- | --- |
+| Function duration | 300 s max | Whisper on CPU can exceed this for long videos |
+| Bundle size | 250 MB (500 MB for Python) | `faster-whisper` + `ctranslate2` exceed it on their own |
+| Request/response body | 4.5 MB | video uploads are larger |
+| Filesystem | ephemeral and read-only | the model cannot be cached between calls |
+
+So the tool runs **on the machine that runs it**: your laptop, a server, or a
+container host. There is no build step and no account.
+
+### What else exists (surveyed 2026-10-31)
+
+| Project | Stars | License | Notes |
+| --- | --- | --- | --- |
+| [nexmoe/VidBee](https://github.com/nexmoe/VidBee) | 11.0k | MIT | Best packaged option: desktop app + Docker web/API, 1000+ sites, local Whisper, speaker labels, AI summaries |
+| [aschmelyun/subvert](https://github.com/aschmelyun/subvert) | 868 | MIT | Docker + OpenAI. Upload a file, get subtitles/chapters/summary |
+| [drpwchen/lecture-to-notes](https://github.com/drpwchen/lecture-to-notes) | 114 | MIT | Lecture recordings to grounded notes |
+| [denven/mediascribe](https://github.com/denven/mediascribe) | 54 | MIT | CLI, ASR providers + LLM summarisation |
+
+**If you want a polished GUI, use VidBee.** This tool is the minimal, scriptable
+core: two files, no desktop app, no Docker, so it runs anywhere Python runs and
+is easy to batch.
