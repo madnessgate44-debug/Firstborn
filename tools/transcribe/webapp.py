@@ -68,14 +68,15 @@ PAGE = """<!doctype html>
 <body>
 <header>
   <h1>Transcribe - audio to text</h1>
-  <p class="sub">Paste a video/reel link or upload an audio/video file. Get the full transcription, then save it as text.</p>
+  <p class="sub">Paste a Facebook Reel / video / YouTube link (or the whole shared message), or upload a file. Get the full transcription, then save it as text.</p>
 </header>
 <main>
   <div class="card">
     <div class="row">
       <div style="flex:1 1 100%">
         <label for="url">Video / reel URL</label>
-        <input id="url" type="text" placeholder="https://www.facebook.com/reel/... or https://youtube.com/watch?v=...">
+        <input id="url" type="text" placeholder="https://www.facebook.com/reel/123456789 or https://youtube.com/watch?v=...">
+        <p class="meta" style="margin:6px 0 0">Facebook tip: tap Share &rarr; Copy link and paste it. Any of these work: <code>facebook.com/reel/&hellip;</code>, <code>facebook.com/watch/?v=&hellip;</code>, <code>m.facebook.com/&hellip;</code>, <code>fb.watch/&hellip;</code>.</p>
       </div>
     </div>
     <div class="row" style="margin-top:12px">
@@ -203,6 +204,8 @@ def transcribe_source(*, url=None, upload_path=None, model="base", lang="auto") 
     """Run the vtx pipeline and return a JSON-ready dict."""
     ffmpeg = vtx.find_ffmpeg()
     workdir = Path(tempfile.mkdtemp(prefix="vtx-web-"))
+    if url:
+        url = vtx.normalize_target(url)
     meta = {"title": Path(upload_path).name if upload_path else "video",
             "extractor": "file", "duration": "n/a", "url": url or ""}
     if url:

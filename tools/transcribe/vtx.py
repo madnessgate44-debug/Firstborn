@@ -82,6 +82,53 @@ def is_url(target: str) -> bool:
     return bool(re.match(r"^https?://", target, re.I))
 
 
+URL_IN_TEXT = re.compile(r"https?://[^\s<>\"']+", re.I)
+# Facebook hands out several hostnames and short links for the same video.
+FACEBOOK_HOSTS = ("facebook.com", "www.facebook.com", "m.facebook.com",
+                  "web.facebook.com", "mbasic.facebook.com", "fb.watch", "fb.com")
+# Params Facebook appends when you tap "Copy link"; harmless to drop.
+TRACKING_PARAMS = {"mibextid", "__cft__", "__tn__", "rdid", "ref", "refsrc",
+                   "_rdr", "sfnsn", "extid", "fs", "eid", "paipv", "mibextid"}
+
+
+def extract_url(text: str) -> str:
+    """Pull the first URL out of pasted text, so a whole share blurb works."""
+    text = (text or "").strip()
+    match = URL_IN_TEXT.search(text)
+    if not match:
+        return text
+    return match.group(0).rstrip(".,;:!?)\"]'")
+
+
+def normalize_target(raw: str) -> str:
+    """Accept a Facebook link in whatever form the user copied it."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    url = extract_url(raw)
+    if not url:
+        return url
+    if not re.match(r"^https?://", url, re.I) and re.match(
+            r"^(www\.|m\.|web\.)?(facebook\.com|fb\.watch|fb\.com)/", url, re.I):
+        url = "https://" + url  # copied without the scheme
+
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    if host.endswith("facebook.com") and host != "www.facebook.com":
+        host = "www.facebook.com"  # m./web./mbasic. -> www.
+    if parts.query:
+        kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                if not _is_tracking_param(k)]
+        query = urlencode(kept)
+    else:
+        query = ""
+    return urlunsplit((parts.scheme, host, parts.path, query, ""))
+
+
+def _is_tracking_param(key: str) -> bool:
+    base = key.split("[", 1)[0].lower()
+    return base in TRACKING_PARAMS or base.startswith("__cft__")
+
+
 def slugify(text: str) -> str:
     text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE).strip().lower()
     text = re.sub(r"[\s_-]+", "-", text)
@@ -224,6 +271,7 @@ def build_markdown(meta: dict, stamped: str, plain: str, explanation: str | None
 
 
 def process(target: str, args) -> int:
+    target = normalize_target(target)
     ffmpeg = find_ffmpeg()
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
