@@ -21,8 +21,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -311,8 +313,9 @@ def process(target: str, args) -> int:
     log("[2/4] obtaining audio")
     segments = None
     lang = args.lang
+    workdir = Path(tempfile.mkdtemp(prefix="vtx-cli-"))
     try:
-        audio_path = target if not is_url(target) else download_audio(target, out_dir, args.cookies, ffmpeg)
+        audio_path = target if not is_url(target) else download_audio(target, workdir, args.cookies, ffmpeg)
         log(f"  audio: {audio_path}")
         log("[3/4] transcribing locally")
         audio = decode_to_float32(Path(audio_path), ffmpeg)
@@ -329,6 +332,8 @@ def process(target: str, args) -> int:
                 stamped, plain = cap, " ".join(l.split("] ", 1)[-1] for l in cap.splitlines())
                 return write_outputs(out_dir, slug, meta, stamped, plain, args, lang)
         raise
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
     stamped, plain = render_transcript(segments)
     return write_outputs(out_dir, slug, meta, stamped, plain, args, lang)

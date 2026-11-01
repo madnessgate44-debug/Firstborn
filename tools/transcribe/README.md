@@ -30,6 +30,7 @@ URL out of whatever you paste and strips the tracking junk for you.
 | Mobile link | `https://m.facebook.com/watch/?v=123456789` | yes |
 | Desktop link | `https://web.facebook.com/reel/123456789` | yes |
 | Short link | `https://fb.watch/abcDEF/` | yes |
+| Share link (new) | `https://www.facebook.com/share/r/1M41BdpN7Z/` | yes |
 | With tracking junk | `...?mibextid=ZbWKwL` or `...&__cft__[0]=...` | yes - stripped |
 | No `https://` | `facebook.com/reel/123456789` | yes |
 | Whole shared message | `Check this out https://www.facebook.com/reel/123 see it` | yes - URL pulled out |
@@ -44,6 +45,11 @@ URL out of whatever you paste and strips the tracking junk for you.
 Verified 2026-10-31: all five hostname forms above were resolved by the
 downloader, and a messy mobile link with tracking params produced a full
 transcript and explanation. *(Verified)*
+
+Verified 2026-11-01: five real Facebook `share/r/` links (including a
+Portuguese one, auto-detected as `pt`) each produced a distinct transcript.
+The page has an **All saved transcripts** link (`/transcripts`) that lists and
+downloads any `.transcript.txt` files in the `transcripts/` folder. *(Verified)*
 
 ---
 

@@ -115,6 +115,7 @@ PAGE = """<!doctype html>
       <button id="saveTxt" class="save">Save as text</button>
       <button id="copy" class="ghost">Copy</button>
       <span id="saved" class="status"></span>
+      <a class="ghost" href="/transcripts" style="text-decoration:none;display:inline-block">All saved transcripts</a>
     </div>
     <h2>Full transcription</h2>
     <textarea id="transcript" readonly></textarea>
@@ -266,12 +267,34 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj).encode(), "application/json")
 
     def do_GET(self):
-        if urlparse(self.path).path in ("/", "/index.html"):
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
             self._send(200, PAGE.encode(), "text/html; charset=utf-8")
-        elif urlparse(self.path).path == "/health":
+        elif path == "/health":
             self._json(200, {"ok": True})
+        elif path == "/transcripts" or path == "/transcripts/":
+            self._list_transcripts()
+        elif path.startswith("/transcripts/"):
+            self._serve_transcript(path[len("/transcripts/"):])
         else:
             self._json(404, {"ok": False, "error": "not found"})
+
+    def _transcript_dir(self) -> Path:
+        return (HERE / "transcripts").resolve()
+
+    def _list_transcripts(self) -> None:
+        d = self._transcript_dir()
+        names = sorted(p.name for p in d.glob("*.txt")) if d.is_dir() else []
+        rows = "".join(f'<li><a href="/transcripts/{n}">{n}</a></li>' for n in names)
+        body = f"<h1>Saved transcripts ({len(names)})</h1><ul>{rows or '<li>none yet</li>'}</ul>"
+        self._send(200, body.encode(), "text/html; charset=utf-8")
+
+    def _serve_transcript(self, name: str) -> None:
+        d = self._transcript_dir()
+        target = (d / name).resolve()
+        if d not in target.parents or not target.is_file():
+            return self._json(404, {"ok": False, "error": "no such transcript"})
+        self._send(200, target.read_bytes(), "text/plain; charset=utf-8")
 
     def do_POST(self):
         parsed = urlparse(self.path)
