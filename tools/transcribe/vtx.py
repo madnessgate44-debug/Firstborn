@@ -26,7 +26,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_MODEL_FALLBACKS = ("gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={k}"
 
 EXPLAIN_PROMPT = """You are explaining a video to someone who has not watched it.
@@ -68,7 +69,7 @@ def find_ffmpeg() -> str:
 
         return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception as exc:  # pragma: no cover - environment dependent
-        raise SystemExit(
+        raise RuntimeError(
             "ffmpeg not found. Install it, or `pip install imageio-ffmpeg`. "
             f"({exc})"
         )
@@ -239,16 +240,36 @@ def render_transcript(segments: list[dict]) -> tuple[str, str]:
     return "\n".join(stamped), " ".join(plain).strip()
 
 
-def explain(plain_transcript: str, api_key: str) -> str:
-    body = {"contents": [{"parts": [{"text": EXPLAIN_PROMPT.format(transcript=plain_transcript)}]}]}
+def _gemini_generate(model: str, body: dict, api_key: str) -> str:
     req = urllib.request.Request(
-        GEMINI_URL.format(m=GEMINI_MODEL, k=api_key),
+        GEMINI_URL.format(m=model, k=api_key),
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=120) as resp:
         data = json.load(resp)
     return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def explain(plain_transcript: str, api_key: str) -> str:
+    """Ask Gemini for the explanation, trying a couple of models on quota errors.
+
+    The free tier rate-limits per model, so a 429 on one model is not fatal.
+    """
+    body = {"contents": [{"parts": [{"text": EXPLAIN_PROMPT.format(transcript=plain_transcript)}]}]}
+    models = [GEMINI_MODEL] + [m for m in GEMINI_MODEL_FALLBACKS if m != GEMINI_MODEL]
+    last_exc: Exception | None = None
+    for model in models:
+        try:
+            return _gemini_generate(model, body, api_key)
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            log(f"  [explain] {model} -> HTTP {exc.code}; trying next model")
+            continue
+    raise RuntimeError(
+        f"Gemini explanation failed for models {models} "
+        f"(provider: Google Gemini, key: present). Last error: {last_exc}"
+    )
 
 
 def build_markdown(meta: dict, stamped: str, plain: str, explanation: str | None, lang: str) -> str:
