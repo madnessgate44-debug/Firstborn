@@ -1,0 +1,21 @@
+{
+  "status": "PARTIAL_BLOCKED",
+  "lastUpdated": "2026-10-22T00:00:00Z",
+  "scope": "ChatGPT and OpenHands conversation sync",
+  "capabilities": {
+    "chatgpt_personal": {
+      "zeroActionSync": false,
+      "blocker": "No continuous background webhook or unattended API provided by OpenAI for personal ChatGPT web/mobile conversations; requires manual data export.",
+      "supportedPath": "Manual export or session-assisted transcript capture"
+    },
+    "openhands_sessions": {
+      "zeroActionSync": true,
+      "supportedPath": "Event stream and log artifact ingestion via server integration"
+    }
+  },
+  "lastSuccessfulSync": "2026-10-22T00:00:00Z",
+  "lagSeconds": 0,
+  "unsupportedSources": [
+    "ChatGPT personal web/mobile sessions (lacks real-time push webhook)"
+  ]
+}
