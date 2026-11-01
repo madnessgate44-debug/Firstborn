@@ -1,0 +1,1 @@
+Forge dispatch link works.
