@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "fallbackRepository": null,
+  "routes": [
+    {
+      "repository": "madnessgate44-debug/Amina",
+      "selectedRepository": "madnessgate44-debug/Amina"
+    },
+    {
+      "repository": "madnessgate44-debug/smart-farm",
+      "selectedRepository": "madnessgate44-debug/smart-farm"
+    },
+    {
+      "repository": "madnessgate44-debug/brain",
+      "selectedRepository": "madnessgate44-debug/brain"
+    },
+    {
+      "repository": "madnessgate44-debug/Firstborn",
+      "selectedRepository": "madnessgate44-debug/Firstborn"
+    },
+    {
+      "repository": "madnessgate44-debug/Firstborn",
+      "titleContains": "conversation synchronization"
+    }
+  ]
+}
