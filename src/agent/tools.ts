@@ -451,6 +451,25 @@ export function buildBrowserTools(executablePath?: string): AgentTool[] {
       },
     },
     {
+      name: 'browser_wait',
+      description:
+        'Wait for the page to settle, then re-read it. Input: {"text":"…","timeoutMs":15000}. With "text" it waits until that text appears (a slow panel, a reply); without it waits for the network to go idle. Prefer this over repeating browser_view to poll.',
+      run: async (input): Promise<ToolObservation> => {
+        const text = str(input, 'text') || undefined;
+        const timeoutMs = Number(input.timeoutMs);
+        try {
+          return {
+            ok: true,
+            output: renderSnapshot(
+              await browser.wait({ text, timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined })
+            ),
+          };
+        } catch (err) {
+          return { ok: false, output: `browser_wait failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
       name: 'browser_extract',
       description: 'Return the visible text of the current page, optionally only sentences matching a regex. Input: {"pattern":"price"}.',
       run: async (input): Promise<ToolObservation> => {

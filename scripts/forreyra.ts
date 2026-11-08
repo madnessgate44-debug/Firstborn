@@ -28,6 +28,7 @@ Actions (run in order):
   type:<n>=<text>      type into element [n]
   press:<key>          press a key, e.g. press:Enter
   scroll:up|down       scroll one screen
+  wait[:<text>][,<ms>] wait for <text> (or network idle) then re-read
   extract[:<regex>]    print page text (optionally matching sentences)
   query:<question>     answer a plain-English question, e.g. query:what is the price
   view                 re-print the elements
@@ -70,6 +71,10 @@ async function main(): Promise<void> {
         snap = await browser.press(rest || 'Enter');
       } else if (verb === 'scroll') {
         snap = await browser.scroll(rest === 'up' ? 'up' : 'down');
+      } else if (verb === 'wait') {
+        const [text, ms] = (rest ?? '').split(/,(?=\d+$)/);
+        const timeoutMs = Number(ms);
+        snap = await browser.wait({ text: text || undefined, timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined });
       } else if (verb === 'extract') {
         console.log('\n--- extract ---');
         console.log(await browser.extract(rest || undefined));

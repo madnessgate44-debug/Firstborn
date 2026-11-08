@@ -27,13 +27,23 @@ const PAGE = `<!doctype html>
 </body></html>`;
 const PAGE2 = '<!doctype html><html><head><title>Second page</title></head><body><h1>Navigation succeeded</h1></body></html>';
 
+// Content that only appears after a delay, so a wait has something real to
+// observe. An immediate view must NOT contain it; browser_wait must.
+const DELAYED = `<!doctype html><html><head><title>Delayed page</title></head><body>
+  <h1>Waiting for data</h1>
+  <p id="slow">not yet</p>
+  <script>setTimeout(() => { document.getElementById('slow').textContent = ['arrived','eventually'].join(' '); }, 600);</script>
+</body></html>`;
+
 let server: Server;
 let base = '';
 
 function start(): Promise<void> {
   server = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' });
-    res.end(req.url === '/second' ? PAGE2 : PAGE);
+    if (req.url === '/second') return res.end(PAGE2);
+    if (req.url === '/delayed') return res.end(DELAYED);
+    res.end(PAGE);
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -66,7 +76,7 @@ function indexFor(output: string, text: string): number {
 test('Forge capability registry exposes the complete browser set only when enabled', () => {
   const expectedBrowser = [
     'browser_open', 'browser_view', 'browser_click', 'browser_type',
-    'browser_press', 'browser_scroll', 'browser_extract', 'browser_close',
+    'browser_press', 'browser_scroll', 'browser_extract', 'browser_wait', 'browser_close',
   ];
   const disabled = buildForgeTools({ owner: 'owner', repo: 'repo', allowBrowser: false });
   assert.ok(expectedBrowser.every((name) => !disabled.some((tool) => tool.name === name)));
@@ -83,8 +93,8 @@ test('Forge read-only mode hides every mutation; authorized mode exposes all mut
   assert.ok(mutationNames.every((name) => !readonly.some((tool) => tool.name === name)));
   assert.ok(mutationNames.every((name) => authorized.some((tool) => tool.name === name)));
   const queryAvailable = authorized.some((tool) => tool.name === 'browser_query');
-  assert.equal(readonly.length, queryAvailable ? 15 : 14);
-  assert.equal(authorized.length, queryAvailable ? 18 : 17);
+  assert.equal(readonly.length, queryAvailable ? 16 : 15);
+  assert.equal(authorized.length, queryAvailable ? 19 : 18);
 });
 
 test('browser_view re-reads the active page and preserves interactive indices', async () => {
@@ -129,6 +139,22 @@ test('browser_scroll supports down and up and dispatches real wheel input', asyn
     const up = await tools.get('browser_scroll')!.run({ direction: 'up' }, ctx);
     assert.equal(up.ok, true);
     assert.match(up.output, /Capability test landing page/);
+  } finally {
+    await tools.get('browser_close')!.run({}, ctx);
+  }
+});
+
+test('browser_wait blocks until delayed content appears', async () => {
+  const tools = mapTools(buildBrowserTools());
+  try {
+    const opened = await tools.get('browser_open')!.run({ url: `${base}/delayed` }, ctx);
+    assert.equal(opened.ok, true);
+    assert.match(opened.output, /not yet/);
+    assert.ok(!opened.output.includes('arrived eventually'), 'content must not be present immediately');
+
+    const waited = await tools.get('browser_wait')!.run({ text: 'arrived eventually', timeoutMs: 5000 }, ctx);
+    assert.equal(waited.ok, true);
+    assert.match(waited.output, /arrived eventually/);
   } finally {
     await tools.get('browser_close')!.run({}, ctx);
   }

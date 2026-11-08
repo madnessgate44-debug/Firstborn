@@ -167,6 +167,28 @@ export class BrowserService {
     return this.view();
   }
 
+  /**
+   * Wait for the page to settle, then snapshot it. Prefers a real condition
+   * over a fixed sleep: when `text` is given, wait for that substring to appear
+   * in the body (a slow panel, a reply, a result list); otherwise wait for the
+   * network to be idle. Both are bounded by `timeoutMs`.
+   */
+  async wait(options: { text?: string; timeoutMs?: number } = {}): Promise<BrowserSnapshot> {
+    const page = await this.ensurePage();
+    const timeout = Math.min(Math.max(options.timeoutMs ?? 15_000, 100), 120_000);
+    const wanted = options.text?.trim();
+    if (wanted) {
+      await page
+        .locator('body', { hasText: wanted })
+        .first()
+        .waitFor({ state: 'visible', timeout })
+        .catch(() => {});
+    } else {
+      await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
+    }
+    return this.view();
+  }
+
   /** Extract the visible text of the page, optionally matching a regex. */
   async extract(pattern?: string): Promise<string> {
     const snap = await this.view();
@@ -251,6 +273,7 @@ export type BrowserActionKind =
   | 'type'
   | 'press'
   | 'scroll'
+  | 'wait'
   | 'extract'
   | 'query'
   | 'screenshot'

@@ -32,6 +32,7 @@ elements:
 | `type:<n>=<text>` | type text into element `[n]` |
 | `press:<key>` | press a key, e.g. `press:Enter` |
 | `scroll:up` / `scroll:down` | scroll one screen |
+| `wait[:<text>][,<ms>]` | wait for text to appear (or network idle) then re-read |
 | `extract[:<regex>]` | print the page text (optionally only matching sentences) |
 | `query:<question>` | answer a plain-English question, e.g. `query:what is the price` |
 | `view` | re-print the element list |
@@ -60,11 +61,11 @@ by a fresh element list, so the `[n]` you click is exactly the element you saw.
 
 ## 2. As agent tools (Forge uses it like a person)
 
-When the loop runs with the browser enabled, Forge gets eight tools:
+When the loop runs with the browser enabled, Forge gets these tools:
 
 `browser_open`, `browser_view`, `browser_click`, `browser_type`,
-`browser_press`, `browser_scroll`, `browser_extract`, `browser_query`,
-`browser_screenshot`, `browser_close`.
+`browser_press`, `browser_scroll`, `browser_wait`, `browser_extract`,
+`browser_query`, `browser_screenshot`, `browser_close`.
 
 A goal like *"open news.ycombinator.com and report the top story"* makes Forge
 call `browser_open`, read the numbered elements, and finish with the answer.
@@ -116,9 +117,13 @@ the same look-then-act model.
 npm run forreyra:mcp
 ```
 
-It exposes ten tools: `browser_open`, `browser_view`, `browser_click`,
-`browser_type`, `browser_press`, `browser_scroll`, `browser_extract`,
-`browser_query`, `browser_screenshot` (returns a PNG image), `browser_close`.
+It exposes twelve tools: `browser_open`, `browser_view`, `browser_click`,
+`browser_type`, `browser_press`, `browser_scroll`, `browser_wait`,
+`browser_extract`, `browser_query`, `browser_screenshot` (returns a PNG image),
+`browser_history` (redacted audit receipts), `browser_close`.
+
+The same tool set is also served over **Streamable HTTP** for remote controllers
+(ChatGPT, Claude, Cursor) — see `docs/FORGE-MCP-HTTP.md`.
 
 `browser_query` takes a plain-English question and returns structured data — no
 regex. It handles titles, headings, links (optionally filtered by keyword),

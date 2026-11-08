@@ -71,6 +71,7 @@ test('HTTP MCP: a valid token drives the browser end to end', async () => {
   const names = (await client.listTools()).tools.map((t) => t.name).sort();
   assert.ok(names.includes('browser_open'));
   assert.ok(names.includes('browser_history'));
+  assert.ok(names.includes('browser_wait'));
 
   const open = await client.callTool({ name: 'browser_open', arguments: { url: base } });
   const openText = (open.content as { type: string; text: string }[])[0].text;

@@ -35,11 +35,13 @@ The Express server mounts it from `src/mcp/http.ts` (`createMcpHttpHandler`). It
 ## Tools
 
 `browser_open`, `browser_view`, `browser_click`, `browser_type`, `browser_press`,
-`browser_scroll`, `browser_extract`, `browser_query`, `browser_screenshot`,
-`browser_history`, `browser_close`.
+`browser_scroll`, `browser_wait`, `browser_extract`, `browser_query`,
+`browser_screenshot`, `browser_history`, `browser_close`.
 
 Elements are index-addressed against the most recent `browser_view` / `browser_open`
-result: read the page, then act on `[i]`.
+result: read the page, then act on `[i]`. To wait for slow content (a reply, a
+result panel) call `browser_wait` with the `text` you expect instead of polling
+with repeated `browser_view` calls.
 
 ## Example call (raw JSON-RPC)
 
@@ -65,3 +67,21 @@ ChatGPT cannot reach a private/loopback address. The endpoint must be reachable 
 Steps 2–3 are ChatGPT-side actions performed by the Owner; Forge supplies the URL and token
 model. The endpoint existing is **not** proof that ChatGPT can call it — that requires the
 connector registration and a live invocation.
+
+## Verify a deployment (before registering it)
+
+```bash
+FORGE_MCP_TOKEN=… node scripts/mcp-http-smoke.mjs https://<host>/mcp https://example.com
+```
+
+It connects with the official MCP client SDK, lists the tools, opens a real page, and prints
+`HTTP MCP ROUND TRIP OK`. A `503` means no token is configured; a `401` means the token is
+wrong. Neither secret nor page cookies are printed.
+
+## Environment
+
+| Variable | Meaning |
+|---|---|
+| `FORGE_MCP_TOKEN` | Required bearer token. Unset ⇒ endpoint answers `503` (fail-closed). |
+| `FORGE_BROWSER_ALLOW_WRITES` | `1` enables `click`/`type`/`Enter` (default read-only). |
+| `PORT` | HTTP port the Express server listens on. |

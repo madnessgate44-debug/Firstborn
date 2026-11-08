@@ -215,6 +215,27 @@ export function createForreyraServer(options: ForreyraOptions = {}): McpServer {
   );
 
   server.registerTool(
+    'browser_wait',
+    {
+      title: 'Wait for the page to settle',
+      description:
+        'Wait for a page condition, then return a fresh snapshot. Prefer this over repeated browser_view polling. With "text" it waits until that text appears (a slow panel, a chat reply, a result); without it waits for the network to go idle. "timeoutMs" bounds the wait (default 15000, max 120000).',
+      inputSchema: {
+        text: z.string().optional().describe('Text to wait for in the page; omit to wait for network idle'),
+        timeoutMs: z.number().int().positive().optional().describe('Max wait in milliseconds (default 15000)'),
+      },
+    },
+    async ({ text, timeoutMs }): Promise<Result> => {
+      try {
+        const snap = await browser.wait({ text: text || undefined, timeoutMs });
+        return ok(renderSnapshot(snap), { at: new Date().toISOString(), action: 'wait', detail: text ? `text=${text}` : 'networkidle', ok: true, url: snap.url });
+      } catch (err) {
+        return fail(err, { at: new Date().toISOString(), action: 'wait', detail: text || '', ok: false });
+      }
+    }
+  );
+
+  server.registerTool(
     'browser_extract',
     {
       title: 'Extract page text',
