@@ -10,6 +10,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 const PAGE = `<!doctype html><html><head><title>MCP Browser Page</title></head>
 <body><h1>Hello from MCP</h1><a href="/next">next</a></body></html>`;
 
+// A page whose content arrives late, so browser_wait has a real condition to
+// observe. The literal is built in the script so it does not leak into the
+// rendered body text before the timer fires.
+const DELAYED = `<!doctype html><html><head><title>Delayed</title></head>
+<body><h1>Loading</h1><p id="s">pending</p>
+<script>setTimeout(() => { document.getElementById('s').textContent = ['arrived','eventually'].join(' '); }, 600);</script>
+</body></html>`;
+
 let http: Server;
 let base = '';
 let child: ChildProcessWithoutNullStreams;
@@ -36,7 +44,9 @@ function notify(method: string, params: unknown = {}): void {
 test.before(async () => {
   http = createServer((req, res) => {
     res.setHeader('content-type', 'text/html');
-    res.end(req.url === '/next' ? '<html><title>Next</title><body>next page</body></html>' : PAGE);
+    if (req.url === '/next') return res.end('<html><title>Next</title><body>next page</body></html>');
+    if (req.url === '/delayed') return res.end(DELAYED);
+    res.end(PAGE);
   });
   await new Promise<void>((r) => http.listen(0, '127.0.0.1', () => r()));
   const addr = http.address();
@@ -99,6 +109,7 @@ test('MCP tools/list advertises the browser tools', async () => {
     'browser_click',
     'browser_close',
     'browser_extract',
+    'browser_history',
     'browser_open',
     'browser_press',
     'browser_query',
@@ -106,6 +117,7 @@ test('MCP tools/list advertises the browser tools', async () => {
     'browser_scroll',
     'browser_type',
     'browser_view',
+    'browser_wait',
   ]);
 });
 
@@ -137,6 +149,14 @@ test('MCP tools/call browser_screenshot returns a PNG image', async () => {
   assert.equal(part.type, 'image');
   assert.equal(part.mimeType, 'image/png');
   assert.ok(part.data.length > 100, 'expected base64 PNG data');
+});
+
+test('MCP tools/call browser_wait waits for delayed content', async () => {
+  await rpc('tools/call', { name: 'browser_open', arguments: { url: `${base}/delayed` } });
+  const res = await rpc('tools/call', { name: 'browser_wait', arguments: { text: 'arrived eventually', timeoutMs: 5000 } });
+  assert.notEqual(res.result.isError, true);
+  assert.match(res.result.content[0].text, /arrived eventually/);
+  assert.match(res.result.content[0].text, /\[receipt\] wait ok=true/);
 });
 
 test('MCP tools/call browser_close closes the session', async () => {

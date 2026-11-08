@@ -42,6 +42,7 @@ const READ_ONLY_TOOLS = new Set([
   'browser_view',
   'browser_extract',
   'browser_scroll',
+  'browser_wait',
   'browser_query',
 ]);
 

@@ -9,6 +9,7 @@ import { ForgeAgent } from './src/agent/forge.ts';
 import { GitHubService } from './src/services/github.ts';
 import { ModelService } from './src/services/model.ts';
 import { TestRunnerService } from './src/services/test-runner.ts';
+import { createMcpHttpHandler } from './src/mcp/http.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -167,6 +168,19 @@ app.get('/api/coordination', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Streamable HTTP MCP endpoint — Forreyra browser tool for remote controllers
+// (ChatGPT, Claude, Cursor, ...). Bearer-auth, read-only by default. Fails
+// closed (503) when FORGE_MCP_TOKEN is unset. Env:
+//   FORGE_MCP_TOKEN             required bearer token (secret)
+//   FORGE_BROWSER_ALLOW_WRITES  "1" enables click/type/Enter (default read-only)
+app.all(
+  '/mcp',
+  createMcpHttpHandler({
+    token: process.env.FORGE_MCP_TOKEN,
+    allowConsequential: process.env.FORGE_BROWSER_ALLOW_WRITES === '1',
+  })
+);
 
 // Serve static frontend in production
 app.use(express.static(path.resolve(process.cwd(), 'dist')));
