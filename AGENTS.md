@@ -50,12 +50,12 @@ Forge drives a real headless Chromium through `BrowserService`
 (`src/services/browser.ts`). The browser is named **Forreyra**.
 
 - **Agent tools** (`buildBrowserTools` in `src/agent/tools.ts`):
-  `browser_open`, `browser_view`, `browser_click`, `browser_type`,
+  `browser_open`, `browser_view`, `browser_wait`, `browser_click`, `browser_type`,
   `browser_press`, `browser_scroll`, `browser_extract`, `browser_query`,
   `browser_close`.
 - **CLI** (`scripts/forreyra.ts`, `npm run forreyra`): chained actions
   `open`, `click:<n>`, `type:<n>=<text>`, `press:<key>`, `scroll:up|down`,
-  `extract[:<regex>]`, `query:<question>`, `view`.
+  `wait[:<text>]`, `extract[:<regex>]`, `query:<question>`, `view`.
 - **MCP server** (`src/mcp/forreyra-server.ts`, `npm run forreyra:mcp`):
   the ten tools above plus `browser_screenshot` (returns a PNG).
 - **Plain-English query** (`src/services/query.ts`, merged in #80): ask
