@@ -99,6 +99,7 @@ test('MCP tools/list advertises the browser tools', async () => {
     'browser_click',
     'browser_close',
     'browser_extract',
+    'browser_history',
     'browser_open',
     'browser_press',
     'browser_query',
