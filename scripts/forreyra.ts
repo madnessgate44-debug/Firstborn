@@ -12,6 +12,7 @@
  *   type:<index>=<text>    type text into element [index]
  *   press:<key>            press a key (Enter, Tab, Escape, ...)
  *   scroll:up | scroll:down
+ *   wait[:<text>]          wait for text (or the load to settle), then re-print
  *   extract[:<pattern>]    print the page text (optionally only matching sentences)
  *   view                   re-print the element list
  */
@@ -28,6 +29,7 @@ Actions (run in order):
   type:<n>=<text>      type into element [n]
   press:<key>          press a key, e.g. press:Enter
   scroll:up|down       scroll one screen
+  wait[:<text>]        wait for text to appear (or the load to settle), then re-print
   extract[:<regex>]    print page text (optionally matching sentences)
   query:<question>     answer a plain-English question, e.g. query:what is the price
   view                 re-print the elements
@@ -70,6 +72,10 @@ async function main(): Promise<void> {
         snap = await browser.press(rest || 'Enter');
       } else if (verb === 'scroll') {
         snap = await browser.scroll(rest === 'up' ? 'up' : 'down');
+      } else if (verb === 'wait') {
+        const result = await browser.wait({ text: rest || undefined });
+        console.log(`\n--- wait: matched=${result.matched} reason=${result.reason} waitedMs=${result.waitedMs} ---`);
+        snap = result.snapshot;
       } else if (verb === 'extract') {
         console.log('\n--- extract ---');
         console.log(await browser.extract(rest || undefined));
