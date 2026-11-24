@@ -117,3 +117,25 @@ test('diagnosis: failed stages are derived from the trace', () => {
   });
   assert.deepEqual(d.failedStages, ['TEST']);
 });
+
+test('diagnosis: locally verified but PR creation not authorized is POLICY, not MODEL_ROUTE', () => {
+  const d = diagnoseMission({
+    status: 'VERIFYING',
+    blockerReason: 'Pull Request creation not authorized by caller; task verified locally. Authorize PR creation (for example by supplying a GitHub token) to open the PR.',
+    keylessRouteErrors: ['kilo: model response was empty'],
+    trace: [{ stage: 'POLICY', status: 'BLOCKED' }],
+  });
+  assert.equal(d.category, 'POLICY');
+  assert.equal(d.retryable, false);
+  assert.deepEqual(d.recovery, ['MANUAL_REVIEW']);
+});
+
+test('diagnosis: a BLOCKED POLICY stage classifies as POLICY even without keyword evidence', () => {
+  const d = diagnoseMission({
+    status: 'VERIFYING',
+    keylessRouteErrors: ['kilo: model response was empty'],
+    trace: [{ stage: 'POLICY', status: 'BLOCKED' }],
+  });
+  assert.equal(d.category, 'POLICY');
+  assert.equal(d.retryable, false);
+});
