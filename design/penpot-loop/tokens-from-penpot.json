@@ -1,0 +1,68 @@
+{
+  "$meta": {
+    "status": "ROUND-TRIP TEST from Penpot export",
+    "note": "values come from Penpot's own token export",
+    "version": "0.1.0"
+  },
+  "color": {
+    "surface": {
+      "canvas": "#ffffff",
+      "raised": "#f5f5f4",
+      "inverse": "#1c1917"
+    },
+    "text": {
+      "primary": "#1c1917",
+      "secondary": "#57534e",
+      "onInverse": "#fafaf9"
+    },
+    "brand": {
+      "base": "#525252",
+      "contrast": "#ffffff"
+    },
+    "feedback": {
+      "error": "#b91c1c",
+      "warning": "#b45309",
+      "success": "#15803d",
+      "info": "#1d4ed8"
+    }
+  },
+  "space": {
+    "xs": "4px",
+    "sm": "8px",
+    "md": "16px",
+    "lg": "24px",
+    "xl": "40px"
+  },
+  "radius": {
+    "sm": "4px",
+    "md": "8px",
+    "lg": "16px",
+    "full": "999px"
+  },
+  "type": {
+    "family": {
+      "base": "system-ui, sans-serif",
+      "arabic": "'Noto Kufi Arabic', system-ui, sans-serif"
+    },
+    "size": {
+      "sm": "0.875rem",
+      "md": "1rem",
+      "lg": "1.25rem",
+      "xl": "1.75rem"
+    },
+    "weight": {
+      "regular": "400",
+      "bold": "700"
+    }
+  },
+  "motion": {
+    "duration": {
+      "fast": "120ms",
+      "base": "240ms"
+    },
+    "easing": {
+      "standard": "cubic-bezier(0.2, 0, 0, 1)"
+    },
+    "reducedMotion": "respect-prefers-reduced-motion"
+  }
+}
