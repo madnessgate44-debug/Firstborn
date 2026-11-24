@@ -12,6 +12,7 @@ import { evaluatePermissionPolicy, loadPermissionConfig } from './policy.ts';
 import { traceEntry } from './mission-trace.ts';
 import { diagnoseMission } from './diagnosis.ts';
 import { partitionScopeDiff } from './scope.ts';
+import { parsePlanJsonWithSalvage } from './plan-salvage.ts';
 import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -174,6 +175,24 @@ export function validateModelPlanShape(raw: unknown): ModelPlanShapeCheck {
   }
 
   return { ok: true, requirements, changes };
+}
+
+// Salvage acceptance policy: a truncated plan is usable only when it still
+// carries at least one complete file change. Acceptance is never completion:
+// the caller must treat any accepted salvage as a partial stage.
+export function selectSalvagedPlan(rawText: string): { plan: unknown; changes: number } | null {
+  const salvage = parsePlanJsonWithSalvage(rawText);
+  if (!salvage.salvaged || !salvage.plan) return null;
+  const shape = validateModelPlanShape(salvage.plan);
+  if (!shape.ok || shape.changes.length === 0) return null;
+  return { plan: salvage.plan, changes: shape.changes.length };
+}
+
+// The blocker a mission returns when its plan came from truncation salvage:
+// verified partial work is preserved (patch artifact), the remaining scope
+// is explicitly handed back for replanning.
+export function buildSalvagePartialBlockerReason(survivingChanges: number): string {
+  return `Model plan was recovered from truncated output: ${survivingChanges} complete file change(s) verified and exported as a patch artifact, but the original mission scope may be larger. This is a partial stage, not a completed mission; replan the remaining scope before merging.`;
 }
 
 // Requested branch wins only when it is explicit and not the default; invalid
@@ -674,10 +693,29 @@ export class ForgeAgent {
         return true;
       };
 
+      // Truncation salvage is only accepted when it recovers a shape-valid
+      // plan with at least one complete file change; an empty salvage would
+      // silently discard work a repair call could still recover. Acceptance
+      // marks the plan as salvaged: a salvaged plan is a partial stage and
+      // is blocked before commit/PR later in this flow.
+      let planWasSalvaged = false;
+      const acceptSalvage = (rawText: string): any | null => {
+        const selected = selectSalvagedPlan(rawText);
+        if (!selected) return null;
+        planWasSalvaged = true;
+        log('warn', `Model output was truncated JSON; salvaged ${selected.changes} complete file change(s) without spending a repair call`);
+        trace('PLAN', 'PASSED', `Salvaged ${selected.changes} complete change(s) from truncated model JSON; incomplete tail dropped, never synthesized`);
+        return selected.plan;
+      };
+
       let parsedPlan: any;
       try {
         parsedPlan = parseModelJson(modelResult.text);
       } catch (err: any) {
+        const salvagedPlan = acceptSalvage(modelResult.text);
+        if (salvagedPlan !== null) {
+          parsedPlan = salvagedPlan;
+        } else {
         if (!guardModelCall('JSON repair attempt')) return finalize();
         log('warn', `Model output was not valid JSON; requesting one compact-format retry: ${err.message}`);
         report.modelInvoked.callsCount += 1;
@@ -701,10 +739,16 @@ export class ForgeAgent {
         try {
           parsedPlan = parseModelJson(modelResult.text);
         } catch (repairErr: any) {
-          report.status = 'FAILED';
-          report.errorMessage = `Model output remained invalid JSON after one repair attempt: ${repairErr.message}`;
-          log('error', report.errorMessage);
-          return finalize();
+          const repairSalvagedPlan = acceptSalvage(modelResult.text);
+          if (repairSalvagedPlan !== null) {
+            parsedPlan = repairSalvagedPlan;
+          } else {
+            report.status = 'FAILED';
+            report.errorMessage = `Model output remained invalid JSON after one repair attempt: ${repairErr.message}`;
+            log('error', report.errorMessage);
+            return finalize();
+          }
+        }
         }
       }
       applyPlanToReport(parsedPlan);
@@ -1022,6 +1066,19 @@ export class ForgeAgent {
         await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
       }
 
+      if (planWasSalvaged) {
+        // A salvaged plan is a verified PARTIAL stage, never a completed
+        // mission: the truncated tail may hold work the retained JSON does
+        // not, so surviving checks passing cannot mark the mission fulfilled.
+        // The verified patch artifact was already exported above; stop before
+        // branch/commit/PR and require an explicit replan of the remainder.
+        report.status = 'BLOCKED';
+        report.blockerReason = buildSalvagePartialBlockerReason(report.plannedChanges.length);
+        trace('COMMIT', 'BLOCKED', 'salvaged plan treated as partial stage; commit/PR withheld pending replan');
+        log('warn', report.blockerReason);
+        return finalize();
+      }
+
       // 7. GITHUB BRANCH, COMMIT & PR CREATION
       report.status = 'VERIFYING';
       const runDiscriminator = process.env.GITHUB_RUN_ID || `${Date.now()}`;
@@ -1146,4 +1203,4 @@ export class ForgeAgent {
       return finalize();
     }
   }
-}
+        }
