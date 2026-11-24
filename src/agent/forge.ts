@@ -11,6 +11,7 @@ import { loadForgeLimits } from './limits.ts';
 import { evaluatePermissionPolicy, loadPermissionConfig } from './policy.ts';
 import { traceEntry } from './mission-trace.ts';
 import { diagnoseMission } from './diagnosis.ts';
+import { partitionScopeDiff } from './scope.ts';
 import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -985,6 +986,38 @@ export class ForgeAgent {
           req.status = evaluation.status;
           req.evidence = evaluation.evidence;
         });
+
+        // Durable artifact export: the worktree is deleted in `finally`, so a
+        // verified mission whose PR step is unauthorized would otherwise lose the
+        // actual patch. Persist the unified diff of the verified worktree before
+        // cleanup, regardless of PR authorization, and record it on the report.
+        try {
+          await execFileAsync('git', ['add', '-A'], { cwd: worktree, timeout: 15000 });
+          const { stdout: nameOnly } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: worktree, timeout: 15000 });
+          const changedFiles = nameOnly.split('\n').map((f) => f.trim()).filter(Boolean);
+          const scope = partitionScopeDiff(report.plannedChanges.map((c) => c.path), changedFiles);
+          if (scope.outOfScope.length > 0) {
+            // Tool-induced or unexpected changes (for example lockfile drift from
+            // npm install) are flagged for review, never blended into the patch
+            // and never silently discarded.
+            report.scopeDrift = scope.outOfScope;
+            log('warn', `Out-of-scope worktree changes flagged for review (excluded from patch artifact): ${scope.outOfScope.join(', ')}`);
+          }
+          if (scope.inScope.length > 0) {
+            const { stdout: verifiedDiff } = await execFileAsync('git', ['diff', '--cached', '--', ...scope.inScope], { cwd: worktree, timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+            if (verifiedDiff.trim()) {
+              const evidenceDir = path.resolve(process.cwd(), '.firstborn', 'evidence');
+              await fs.mkdir(evidenceDir, { recursive: true });
+              const safeId = task.id.replace(/[^a-zA-Z0-9_-]/g, '-');
+              const patchPath = path.join(evidenceDir, `${safeId}.patch`);
+              await fs.writeFile(patchPath, verifiedDiff, 'utf-8');
+              report.artifactPaths = { ...(report.artifactPaths ?? {}), patch: patchPath };
+              log('info', `Exported verified patch artifact: ${patchPath}`);
+            }
+          }
+        } catch (artifactError) {
+          log('warn', `Verified patch artifact export failed: ${artifactError instanceof Error ? artifactError.message : String(artifactError)}`);
+        }
       } finally {
         await fs.rm(workRoot, { recursive: true, force: true }).catch(() => undefined);
       }

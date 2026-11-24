@@ -60,6 +60,8 @@ async function runCli() {
   if (report.prUrl) console.log('PR Opened:', report.prUrl);
   if (report.errorMessage) console.log('Error:', report.errorMessage);
   if (report.blockerReason) console.log('Blocker:', report.blockerReason);
+  if (report.artifactPaths?.patch) console.log('Patch artifact:', report.artifactPaths.patch);
+  if (report.scopeDrift?.length) console.log('Scope drift (review, excluded from patch):', report.scopeDrift.join(', '));
   if (report.diagnosis) {
     console.log('Diagnosis:', `${report.diagnosis.category} (${report.diagnosis.severity})`, '-', report.diagnosis.summary);
     console.log('Recovery:', report.diagnosis.recovery.join(', '), `| retryable=${report.diagnosis.retryable}`);
