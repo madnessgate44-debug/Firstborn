@@ -1,0 +1,132 @@
+{
+  "mg-foundation": {
+    "color": {
+      "surface": {
+        "canvas": {
+          "$value": "#ffffff",
+          "$type": "color"
+        },
+        "raised": {
+          "$value": "#f5f5f4",
+          "$type": "color"
+        },
+        "inverse": {
+          "$value": "#1c1917",
+          "$type": "color"
+        }
+      },
+      "text": {
+        "primary": {
+          "$value": "#1c1917",
+          "$type": "color"
+        },
+        "secondary": {
+          "$value": "#57534e",
+          "$type": "color"
+        },
+        "onInverse": {
+          "$value": "#fafaf9",
+          "$type": "color"
+        }
+      },
+      "brand": {
+        "base": {
+          "$value": "#525252",
+          "$type": "color"
+        },
+        "contrast": {
+          "$value": "#ffffff",
+          "$type": "color"
+        }
+      },
+      "feedback": {
+        "error": {
+          "$value": "#b91c1c",
+          "$type": "color"
+        },
+        "warning": {
+          "$value": "#b45309",
+          "$type": "color"
+        },
+        "success": {
+          "$value": "#15803d",
+          "$type": "color"
+        },
+        "info": {
+          "$value": "#1d4ed8",
+          "$type": "color"
+        }
+      }
+    },
+    "space": {
+      "xs": {
+        "$value": "4px",
+        "$type": "dimension"
+      },
+      "sm": {
+        "$value": "8px",
+        "$type": "dimension"
+      },
+      "md": {
+        "$value": "16px",
+        "$type": "dimension"
+      },
+      "lg": {
+        "$value": "24px",
+        "$type": "dimension"
+      },
+      "xl": {
+        "$value": "40px",
+        "$type": "dimension"
+      }
+    },
+    "radius": {
+      "sm": {
+        "$value": "4px",
+        "$type": "dimension"
+      },
+      "md": {
+        "$value": "8px",
+        "$type": "dimension"
+      },
+      "lg": {
+        "$value": "16px",
+        "$type": "dimension"
+      },
+      "full": {
+        "$value": "999px",
+        "$type": "dimension"
+      }
+    },
+    "type": {
+      "size": {
+        "sm": {
+          "$value": "0.875rem",
+          "$type": "fontSize"
+        },
+        "md": {
+          "$value": "1rem",
+          "$type": "fontSize"
+        },
+        "lg": {
+          "$value": "1.25rem",
+          "$type": "fontSize"
+        },
+        "xl": {
+          "$value": "1.75rem",
+          "$type": "fontSize"
+        }
+      },
+      "weight": {
+        "regular": {
+          "$value": "400",
+          "$type": "fontWeight"
+        },
+        "bold": {
+          "$value": "700",
+          "$type": "fontWeight"
+        }
+      }
+    }
+  }
+}
