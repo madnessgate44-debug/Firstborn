@@ -96,4 +96,8 @@ export interface TaskExecutionReport {
   logs: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }[];
   errorMessage?: string;
   blockerReason?: string;
+  /** Durable artifacts exported before worktree cleanup (e.g. the verified unified diff). */
+  artifactPaths?: { patch?: string };
+  /** Worktree changes outside the mission's planned scope, excluded from the patch artifact and flagged for review. */
+  scopeDrift?: string[];
 }
