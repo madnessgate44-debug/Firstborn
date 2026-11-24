@@ -1146,4 +1146,4 @@ export class ForgeAgent {
       return finalize();
     }
   }
-                }
+}
