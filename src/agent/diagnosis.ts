@@ -99,6 +99,23 @@ export function diagnoseMission(input: DiagnosisInput): Diagnosis {
     failedChecks,
   };
 
+  // Policy evidence wins over every keyword guess: a BLOCKED/FAILED POLICY
+  // stage in the trace, or explicit policy/authorization text, means the
+  // mission stopped because the operator withheld a write, not because the
+  // model route failed. This must run before the MODEL_ROUTE branch, whose
+  // keylessRouteErrors signal is otherwise triggered by unrelated route noise
+  // recorded earlier in the same mission.
+  if (failedStages.includes('POLICY') || text.includes('policy') || text.includes('permission') || text.includes('not authorized')) {
+    return {
+      ...base,
+      category: 'POLICY',
+      severity: 'HIGH',
+      summary: 'The permission policy withheld an action (commit or pull request).',
+      recovery: ['MANUAL_REVIEW'],
+      retryable: false,
+    };
+  }
+
   if (text.includes('model') && (text.includes('route') || text.includes('generation failed') || text.includes('json') || input.keylessRouteErrors?.length)) {
     return {
       ...base,
@@ -161,17 +178,6 @@ export function diagnoseMission(input: DiagnosisInput): Diagnosis {
       severity: 'MEDIUM',
       summary: 'The task definition or supplied context failed input validation.',
       recovery: ['FIX_INPUTS'],
-      retryable: false,
-    };
-  }
-
-  if (text.includes('policy') || text.includes('permission')) {
-    return {
-      ...base,
-      category: 'POLICY',
-      severity: 'HIGH',
-      summary: 'The permission policy withheld an action (commit or pull request).',
-      recovery: ['MANUAL_REVIEW'],
       retryable: false,
     };
   }
