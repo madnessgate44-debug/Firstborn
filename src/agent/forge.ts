@@ -1024,6 +1024,7 @@ export class ForgeAgent {
 
       if (!task.allowPrCreation) {
         log('info', 'Task verified locally. Pull Request creation not authorized by caller.');
+        report.blockerReason = 'Pull Request creation not authorized by caller; task verified locally. Authorize PR creation (for example by supplying a GitHub token) to open the PR.';
         report.status = 'VERIFYING';
       } else if (!permission.allowBranchWrite) {
         report.status = 'BLOCKED';
