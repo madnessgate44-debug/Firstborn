@@ -1,0 +1,38 @@
+/* GENERATED from tokens.json - do not edit by hand. */
+/* status: ROUND-TRIP TEST from Penpot export */
+:root, [dir='rtl'] {
+  --ds-color-brand-base: #525252;
+  --ds-color-brand-contrast: #ffffff;
+  --ds-color-feedback-error: #b91c1c;
+  --ds-color-feedback-info: #1d4ed8;
+  --ds-color-feedback-success: #15803d;
+  --ds-color-feedback-warning: #b45309;
+  --ds-color-surface-canvas: #ffffff;
+  --ds-color-surface-inverse: #1c1917;
+  --ds-color-surface-raised: #f5f5f4;
+  --ds-color-text-onInverse: #fafaf9;
+  --ds-color-text-primary: #1c1917;
+  --ds-color-text-secondary: #57534e;
+  --ds-motion-duration-base: 240ms;
+  --ds-motion-duration-fast: 120ms;
+  --ds-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ds-motion-reducedMotion: respect-prefers-reduced-motion;
+  --ds-radius-full: 999px;
+  --ds-radius-lg: 16px;
+  --ds-radius-md: 8px;
+  --ds-radius-sm: 4px;
+  --ds-space-lg: 24px;
+  --ds-space-md: 16px;
+  --ds-space-sm: 8px;
+  --ds-space-xl: 40px;
+  --ds-space-xs: 4px;
+  --ds-type-family-arabic: 'Noto Kufi Arabic', system-ui, sans-serif;
+  --ds-type-family-base: system-ui, sans-serif;
+  --ds-type-size-lg: 1.25rem;
+  --ds-type-size-md: 1rem;
+  --ds-type-size-sm: 0.875rem;
+  --ds-type-size-xl: 1.75rem;
+  --ds-type-weight-bold: 700;
+  --ds-type-weight-regular: 400;
+}
+@media (prefers-reduced-motion: reduce) { :root { --ds-motion-duration-fast: 0ms; --ds-motion-duration-base: 0ms; } }
