@@ -1,0 +1,169 @@
+{
+  "2-mg-tokens-penpot": {
+    "mg-foundation": {
+      "type": {
+        "size": {
+          "xl": {
+            "$value": "1.75rem",
+            "$type": "fontSizes",
+            "$description": ""
+          },
+          "lg": {
+            "$value": "1.25rem",
+            "$type": "fontSizes",
+            "$description": ""
+          },
+          "sm": {
+            "$value": "0.875rem",
+            "$type": "fontSizes",
+            "$description": ""
+          },
+          "md": {
+            "$value": "1rem",
+            "$type": "fontSizes",
+            "$description": ""
+          }
+        },
+        "weight": {
+          "regular": {
+            "$value": "400",
+            "$type": "fontWeights",
+            "$description": ""
+          },
+          "bold": {
+            "$value": "700",
+            "$type": "fontWeights",
+            "$description": ""
+          }
+        }
+      },
+      "space": {
+        "md": {
+          "$value": "16px",
+          "$type": "dimension",
+          "$description": ""
+        },
+        "sm": {
+          "$value": "8px",
+          "$type": "dimension",
+          "$description": ""
+        },
+        "xs": {
+          "$value": "4px",
+          "$type": "dimension",
+          "$description": ""
+        },
+        "lg": {
+          "$value": "24px",
+          "$type": "dimension",
+          "$description": ""
+        },
+        "xl": {
+          "$value": "40px",
+          "$type": "dimension",
+          "$description": ""
+        }
+      },
+      "radius": {
+        "lg": {
+          "$value": "16px",
+          "$type": "dimension",
+          "$description": ""
+        },
+        "sm": {
+          "$value": "4px",
+          "$type": "dimension",
+          "$description": ""
+        },
+        "md": {
+          "$value": "8px",
+          "$type": "dimension",
+          "$description": ""
+        },
+        "full": {
+          "$value": "999px",
+          "$type": "dimension",
+          "$description": ""
+        }
+      },
+      "color": {
+        "feedback": {
+          "success": {
+            "$value": "#15803d",
+            "$type": "color",
+            "$description": ""
+          },
+          "error": {
+            "$value": "#b91c1c",
+            "$type": "color",
+            "$description": ""
+          },
+          "warning": {
+            "$value": "#b45309",
+            "$type": "color",
+            "$description": ""
+          },
+          "info": {
+            "$value": "#1d4ed8",
+            "$type": "color",
+            "$description": ""
+          }
+        },
+        "brand": {
+          "contrast": {
+            "$value": "#ffffff",
+            "$type": "color",
+            "$description": ""
+          },
+          "base": {
+            "$value": "#525252",
+            "$type": "color",
+            "$description": ""
+          }
+        },
+        "surface": {
+          "inverse": {
+            "$value": "#1c1917",
+            "$type": "color",
+            "$description": ""
+          },
+          "raised": {
+            "$value": "#f5f5f4",
+            "$type": "color",
+            "$description": ""
+          },
+          "canvas": {
+            "$value": "#ffffff",
+            "$type": "color",
+            "$description": ""
+          }
+        },
+        "text": {
+          "primary": {
+            "$value": "#1c1917",
+            "$type": "color",
+            "$description": ""
+          },
+          "secondary": {
+            "$value": "#57534e",
+            "$type": "color",
+            "$description": ""
+          },
+          "onInverse": {
+            "$value": "#fafaf9",
+            "$type": "color",
+            "$description": ""
+          }
+        }
+      }
+    }
+  },
+  "$themes": [],
+  "$metadata": {
+    "tokenSetOrder": [
+      "2-mg-tokens-penpot"
+    ],
+    "activeThemes": [],
+    "activeSets": []
+  }
+}
