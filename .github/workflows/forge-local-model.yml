@@ -27,7 +27,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest   # standard GitHub-hosted runner, free for public repositories
-    timeout-minutes: 75
+    timeout-minutes: 120
     outputs:
       has_patch: ${{ steps.patch_meta.outputs.has_patch }}
       patch_sha256: ${{ steps.patch_meta.outputs.patch_sha256 }}
@@ -457,6 +457,42 @@ jobs:
           git checkout -b "$branch"
           git commit -m "Forge local-model patch (run ${RUN_ID}, sha256 ${actual_sha256})"
           git push origin HEAD
-          gh pr create --draft --base main --head "$branch" \
-            --title "Forge local-model patch (run ${RUN_ID})" \
-            --body "Run ID: ${RUN_ID}, patch sha256: ${actual_sha256}, report sha256: ${actual_report_sha256}, checks passed: ${EXPECTED_CHECKS_PASSED}. Forge's own checks ran in the workflow run job (see the linked run). Repository CI checks created by the workflow token start in an approval-required state and must be approved by a user with write access; this draft is unreviewed."
+          pushed_sha="$(git rev-parse HEAD)"
+          title="Forge local-model patch (run ${RUN_ID})"
+          body="Run ID: ${RUN_ID}, patch sha256: ${actual_sha256}, report sha256: ${actual_report_sha256}, checks passed: ${EXPECTED_CHECKS_PASSED}. Forge's own checks ran in the workflow run job (see the linked run). Repository CI checks created by the workflow token start in an approval-required state and must be approved by a user with write access; this draft is unreviewed."
+
+          verify_existing_pr() {
+            local attempt pr_json pr_number
+            for attempt in 1 2 3; do
+              if pr_json="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --base main --state open --limit 10 --json number,isDraft,headRefName,baseRefName,headRefOid,title,body)"; then
+                if pr_number="$(printf '%s' "$pr_json" | jq -er \
+                  --arg branch "$branch" \
+                  --arg pushed_sha "$pushed_sha" \
+                  --arg title "$title" \
+                  --arg body "$body" \
+                  'if length == 1 and (.[0] | .isDraft == true and .headRefName == $branch and .baseRefName == "main" and .headRefOid == $pushed_sha and .title == $title and .body == $body) then .[0].number else empty end')"; then
+                  echo "Recovered: PR #${pr_number} already exists and matches"
+                  return 0
+                fi
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep 5
+              fi
+            done
+            echo "Error: gh pr create failed and no matching open draft PR was found after 3 attempts." >&2
+            return 1
+          }
+
+          if gh pr create --draft --base main --head "$branch" \
+            --title "$title" \
+            --body "$body"; then
+            exit 0
+          else
+            echo "Warning: gh pr create failed; verifying whether PR already exists." >&2
+            if verify_existing_pr; then
+              exit 0
+            else
+              echo "Error: gh pr create failed and no existing PR could be verified." >&2
+              exit 1
+            fi
+          fi
