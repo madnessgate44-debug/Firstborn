@@ -1,3 +1,5 @@
+import http from 'node:http';
+
 /**
  * Optional local OpenAI-compatible model route (e.g. llama.cpp's llama-server).
  *
@@ -20,6 +22,73 @@ export function localModelUrl(env: NodeJS.ProcessEnv = process.env): string | nu
   return `${url.origin}/v1/chat/completions`;
 }
 
+function postLoopbackJson(endpoint: string, payload: string, timeoutMs: number): Promise<string> {
+  const parsed = new URL(endpoint);
+  return new Promise<string>((resolve, reject) => {
+    const controller = new AbortController();
+    let req!: http.ClientRequest;
+
+    const timer = setTimeout(() => {
+      const timeoutErr = new Error(`local model timed out after ${timeoutMs}ms`);
+      controller.abort(timeoutErr);
+      req.destroy(timeoutErr);
+    }, timeoutMs);
+
+    const cleanup = () => clearTimeout(timer);
+
+    req = http.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port ? Number(parsed.port) : 80,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload, 'utf8'),
+        },
+        signal: controller.signal,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400) {
+          res.resume();
+          cleanup();
+          reject(new Error(`local model HTTP ${status} (redirect refused)`));
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          res.resume();
+          cleanup();
+          reject(new Error(`local model HTTP ${status}`));
+          return;
+        }
+        res.setEncoding('utf8');
+        let body = '';
+        res.on('data', (chunk: string) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          cleanup();
+          resolve(body);
+        });
+        res.on('error', (err) => {
+          cleanup();
+          reject(err);
+        });
+      },
+    );
+
+    req.on('error', (err) => {
+      cleanup();
+      reject(controller.signal.aborted && controller.signal.reason instanceof Error ? controller.signal.reason : err);
+    });
+
+    req.write(payload);
+    req.end();
+  });
+}
+
 export async function callLocalModel(
   messages: LocalChatMessage[],
   env: NodeJS.ProcessEnv = process.env,
@@ -31,15 +100,28 @@ export async function callLocalModel(
   const timeoutMs = Math.min(Math.max(Number(env.FORGE_LOCAL_MODEL_TIMEOUT_S || 900), 30), 1800) * 1000;
   const maxTokens = Math.min(Math.max(Number(env.FORGE_LOCAL_MODEL_MAX_TOKENS || 4096), 256), 8192);
   try {
-    const response = await fetchImpl(endpoint, {
-      method: 'POST',
-      redirect: 'error',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: maxTokens, response_format: { type: 'json_object' } }),
-      signal: AbortSignal.timeout(timeoutMs),
+    const requestBody = JSON.stringify({
+      model,
+      messages,
+      temperature: 0.1,
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
     });
-    if (!response.ok) throw new Error(`local model HTTP ${response.status}`);
-    const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+    let rawText: string;
+    if (fetchImpl === fetch) {
+      rawText = await postLoopbackJson(endpoint, requestBody, timeoutMs);
+    } else {
+      const response = await fetchImpl(endpoint, {
+        method: 'POST',
+        redirect: 'error',
+        headers: { 'content-type': 'application/json' },
+        body: requestBody,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) throw new Error(`local model HTTP ${response.status}`);
+      rawText = await response.text();
+    }
+    const data = JSON.parse(rawText) as { choices?: { message?: { content?: string } }[] };
     const text = data.choices?.[0]?.message?.content ?? '';
     if (!text.trim()) throw new Error('local model returned no content');
     return { text, model, provider: 'local OpenAI-compatible (loopback)', success: true };
