@@ -34,12 +34,17 @@ The Express server mounts it from `src/mcp/http.ts` (`createMcpHttpHandler`). It
 
 ## Tools
 
-`browser_open`, `browser_view`, `browser_click`, `browser_type`, `browser_press`,
-`browser_scroll`, `browser_extract`, `browser_query`, `browser_screenshot`,
-`browser_history`, `browser_close`.
+`browser_open`, `browser_view`, `browser_wait`, `browser_click`, `browser_type`,
+`browser_press`, `browser_scroll`, `browser_extract`, `browser_query`,
+`browser_screenshot`, `browser_history`, `browser_close`.
 
 Elements are index-addressed against the most recent `browser_view` / `browser_open`
 result: read the page, then act on `[i]`.
+
+`browser_wait` takes `{"selector": "..."}` or `{"text": "..."}` (or neither, to wait
+for the load to settle) and an optional `timeoutMs` (default 5000, capped at 30000).
+It returns a fresh snapshot and reports `matched: false` on a timeout rather than
+failing, so a slow page is an observation, not an error.
 
 ## Example call (raw JSON-RPC)
 

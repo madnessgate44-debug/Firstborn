@@ -215,6 +215,35 @@ export function createForreyraServer(options: ForreyraOptions = {}): McpServer {
   );
 
   server.registerTool(
+    'browser_wait',
+    {
+      title: 'Wait for a page condition',
+      description:
+        'Wait for a page condition without a fixed sleep, then return a fresh snapshot. Provide {"selector":"..."} or {"text":"..."} (or neither to wait for the load to settle). Bounded to 30s; a condition that never arrives reports matched=false.',
+      inputSchema: {
+        selector: z.string().optional().describe('CSS selector to wait for (element attached to the DOM)'),
+        text: z.string().optional().describe('Visible text to wait for'),
+        timeoutMs: z.number().int().nonnegative().optional().describe('Upper bound in ms (default 5000, max 30000)'),
+      },
+    },
+    async ({ selector, text, timeoutMs }): Promise<Result> => {
+      try {
+        const result = await browser.wait({ selector: selector || undefined, text: text || undefined, timeoutMs });
+        const head = `wait: matched=${result.matched} reason=${result.reason} waitedMs=${result.waitedMs}`;
+        return ok(`${head}\n${renderSnapshot(result.snapshot)}`, {
+          at: new Date().toISOString(),
+          action: 'wait',
+          detail: `matched=${result.matched} reason=${result.reason}`,
+          ok: true,
+          url: result.snapshot.url,
+        });
+      } catch (err) {
+        return fail(err, { at: new Date().toISOString(), action: 'wait', detail: 'error', ok: false });
+      }
+    }
+  );
+
+  server.registerTool(
     'browser_extract',
     {
       title: 'Extract page text',

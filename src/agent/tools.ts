@@ -400,6 +400,24 @@ export function buildBrowserTools(executablePath?: string): AgentTool[] {
       },
     },
     {
+      name: 'browser_wait',
+      description:
+        'Wait for a page condition without a fixed sleep, then return a fresh snapshot. Input: {"selector":"#done"} or {"text":"Loaded"} or {"timeoutMs":8000}. With no condition, waits for the load to settle. Bounded to 30s; a condition that never arrives reports matched=false instead of failing.',
+      run: async (input): Promise<ToolObservation> => {
+        try {
+          const result = await browser.wait({
+            selector: str(input, 'selector') || undefined,
+            text: str(input, 'text') || undefined,
+            timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : undefined,
+          });
+          const head = `wait: matched=${result.matched} reason=${result.reason} waitedMs=${result.waitedMs}`;
+          return { ok: true, output: `${head}\n${renderSnapshot(result.snapshot)}` };
+        } catch (err) {
+          return { ok: false, output: `browser_wait failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      },
+    },
+    {
       name: 'browser_click',
       description: 'Click the interactive element at an index from the latest view. Input: {"index":3}.',
       run: async (input): Promise<ToolObservation> => {

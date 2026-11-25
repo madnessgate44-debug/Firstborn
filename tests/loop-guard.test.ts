@@ -38,3 +38,16 @@ test('a repeated think is nudged with a different thought', () => {
   assert.equal(result.tool, 'think');
   assert.notEqual(result.input?.thought, 'x');
 });
+
+test('a repeated browser_wait is nudged because an identical wait cannot change', () => {
+  const action = { tool: 'browser_wait', input: { selector: '#done' } };
+  const history = [{ action: { tool: 'browser_wait', input: { selector: '#done' } } }];
+  const result = guardRepeatedReadOnly(action, history);
+  assert.equal(result.tool, 'think');
+});
+
+test('a browser_wait with a different condition is not considered repeated', () => {
+  const action = { tool: 'browser_wait', input: { selector: '#other' } };
+  const history = [{ action: { tool: 'browser_wait', input: { selector: '#done' } } }];
+  assert.deepEqual(guardRepeatedReadOnly(action, history), action);
+});

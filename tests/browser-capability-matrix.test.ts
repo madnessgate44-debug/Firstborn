@@ -27,13 +27,29 @@ const PAGE = `<!doctype html>
 </body></html>`;
 const PAGE2 = '<!doctype html><html><head><title>Second page</title></head><body><h1>Navigation succeeded</h1></body></html>';
 
+// A page whose marker text and #done element appear only after a real delay, so
+// browser_wait has a genuine condition to observe rather than an already-present
+// string.
+const DELAYED = `<!doctype html><html><head><title>Delayed</title></head>
+<body><p id="status">loading</p>
+<script>setTimeout(() => {
+  const done = document.createElement('div');
+  done.id = 'done';
+  done.textContent = 'Ready now';
+  document.body.appendChild(done);
+  document.getElementById('status').textContent = 'Ready now';
+}, 600);</script>
+</body></html>`;
+
 let server: Server;
 let base = '';
 
 function start(): Promise<void> {
   server = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' });
-    res.end(req.url === '/second' ? PAGE2 : PAGE);
+    if (req.url === '/second') return res.end(PAGE2);
+    if (req.url === '/delayed') return res.end(DELAYED);
+    res.end(PAGE);
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -66,7 +82,7 @@ function indexFor(output: string, text: string): number {
 test('Forge capability registry exposes the complete browser set only when enabled', () => {
   const expectedBrowser = [
     'browser_open', 'browser_view', 'browser_click', 'browser_type',
-    'browser_press', 'browser_scroll', 'browser_extract', 'browser_close',
+    'browser_press', 'browser_scroll', 'browser_wait', 'browser_extract', 'browser_close',
   ];
   const disabled = buildForgeTools({ owner: 'owner', repo: 'repo', allowBrowser: false });
   assert.ok(expectedBrowser.every((name) => !disabled.some((tool) => tool.name === name)));
@@ -83,8 +99,8 @@ test('Forge read-only mode hides every mutation; authorized mode exposes all mut
   assert.ok(mutationNames.every((name) => !readonly.some((tool) => tool.name === name)));
   assert.ok(mutationNames.every((name) => authorized.some((tool) => tool.name === name)));
   const queryAvailable = authorized.some((tool) => tool.name === 'browser_query');
-  assert.equal(readonly.length, queryAvailable ? 15 : 14);
-  assert.equal(authorized.length, queryAvailable ? 18 : 17);
+  assert.equal(readonly.length, queryAvailable ? 16 : 15);
+  assert.equal(authorized.length, queryAvailable ? 19 : 18);
 });
 
 test('browser_view re-reads the active page and preserves interactive indices', async () => {
@@ -204,4 +220,59 @@ test('run_check executes an allowlisted verification command and rejects arbitra
   const rejected = await check.run({ command: 'git status && rm -rf /' }, { ...ctx, workspace: process.cwd() });
   assert.equal(rejected.ok, false);
   assert.match(rejected.output, /exit=126/);
+});
+
+test('browser_wait resolves a real delayed condition without a fixed sleep', async () => {
+  const tools = mapTools(buildBrowserTools());
+  try {
+    await tools.get('browser_open')!.run({ url: `${base}/delayed` }, ctx);
+    const waited = await tools.get('browser_wait')!.run({ selector: '#done', timeoutMs: 5000 }, ctx);
+    assert.equal(waited.ok, true);
+    assert.match(waited.output, /wait: matched=true reason=selector/);
+    assert.match(waited.output, /Ready now/);
+  } finally {
+    await tools.get('browser_close')!.run({}, ctx);
+  }
+});
+
+test('browser_wait reports matched=false when the condition never arrives', async () => {
+  const tools = mapTools(buildBrowserTools());
+  try {
+    await tools.get('browser_open')!.run({ url: base }, ctx);
+    const waited = await tools.get('browser_wait')!.run({ selector: '#never-present', timeoutMs: 400 }, ctx);
+    assert.equal(waited.ok, true, 'a miss is an observation, not a failure');
+    assert.match(waited.output, /wait: matched=false reason=selector/);
+    assert.match(waited.output, /title: Forge Capability Matrix/);
+  } finally {
+    await tools.get('browser_close')!.run({}, ctx);
+  }
+});
+
+test('browser_wait waits for text and can settle with no condition', async () => {
+  const tools = mapTools(buildBrowserTools());
+  try {
+    await tools.get('browser_open')!.run({ url: `${base}/delayed` }, ctx);
+    const byText = await tools.get('browser_wait')!.run({ text: 'Ready now', timeoutMs: 5000 }, ctx);
+    assert.equal(byText.ok, true);
+    assert.match(byText.output, /wait: matched=true reason=text/);
+    const settle = await tools.get('browser_wait')!.run({ timeoutMs: 500 }, ctx);
+    assert.equal(settle.ok, true);
+    assert.match(settle.output, /wait: matched=true reason=settle/);
+  } finally {
+    await tools.get('browser_close')!.run({}, ctx);
+  }
+});
+
+test('browser_wait with a zero budget returns immediately instead of waiting forever', async () => {
+  const tools = mapTools(buildBrowserTools());
+  try {
+    await tools.get('browser_open')!.run({ url: base }, ctx);
+    const started = Date.now();
+    const waited = await tools.get('browser_wait')!.run({ selector: '#never-present', timeoutMs: 0 }, ctx);
+    assert.equal(waited.ok, true);
+    assert.ok(Date.now() - started < 1000, 'a zero timeout must not block');
+    assert.match(waited.output, /wait: matched=false reason=selector/);
+  } finally {
+    await tools.get('browser_close')!.run({}, ctx);
+  }
 });

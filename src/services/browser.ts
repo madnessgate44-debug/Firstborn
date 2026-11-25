@@ -41,6 +41,38 @@ export interface BrowserSnapshot {
   text: string;
 }
 
+/** A bounded condition to wait for. With no condition, wait for the load to settle. */
+export interface WaitOptions {
+  /** CSS selector to wait for (element attached to the DOM). */
+  selector?: string;
+  /** Visible text to wait for (substring of the body's inner text). */
+  text?: string;
+  /** Upper bound in milliseconds. Default 5000, clamped to [0, 30000]. */
+  timeoutMs?: number;
+}
+
+export type WaitReason = 'selector' | 'text' | 'settle';
+
+export interface WaitResult {
+  /** True when the condition was met before the timeout. */
+  matched: boolean;
+  /** Which condition was evaluated. */
+  reason: WaitReason;
+  /** Elapsed wall time in milliseconds. */
+  waitedMs: number;
+  /** A fresh snapshot of the page taken after the wait. */
+  snapshot: BrowserSnapshot;
+}
+
+const DEFAULT_WAIT_MS = 5_000;
+const MAX_WAIT_MS = 30_000;
+
+/** Bound a requested timeout to [0, 30s], defaulting to 5s. */
+export function clampTimeout(timeoutMs?: number): number {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs)) return DEFAULT_WAIT_MS;
+  return Math.min(MAX_WAIT_MS, Math.max(0, Math.floor(timeoutMs)));
+}
+
 /** Find a Chromium binary, preferring a bundled one then the system package. */
 export function resolveChromiumPath(explicit?: string): string | undefined {
   const candidates = [
@@ -218,6 +250,44 @@ export class BrowserService {
     return runQuery(await this.gather(), planQuery(question));
   }
 
+  /**
+   * Wait for a page condition without a fixed sleep, then return a fresh
+   * snapshot. Bounded: the wait never exceeds `timeoutMs` (default 5s, capped at
+   * 30s), and a condition that never arrives reports `matched: false` instead of
+   * throwing, so a slow page is an observation, not a crash.
+   */
+  async wait(options: WaitOptions = {}): Promise<WaitResult> {
+    const page = await this.ensurePage();
+    // Playwright treats `timeout: 0` as "no timeout"; floor at 1ms so the bound
+    // is always real and a zero budget means "check once, now".
+    const timeoutMs = Math.max(1, clampTimeout(options.timeoutMs));
+    const started = Date.now();
+    let reason: WaitReason = 'settle';
+    let matched = false;
+    try {
+      if (options.selector) {
+        reason = 'selector';
+        await page.waitForSelector(options.selector, { state: 'attached', timeout: timeoutMs });
+        matched = true;
+      } else if (options.text) {
+        reason = 'text';
+        await page.waitForFunction(
+          (needle) => Boolean(document.body && document.body.innerText.includes(needle)),
+          options.text,
+          { timeout: timeoutMs }
+        );
+        matched = true;
+      } else {
+        // No condition given: wait for the load to settle, bounded.
+        await page.waitForLoadState('networkidle', { timeout: timeoutMs }).catch(() => {});
+        matched = true;
+      }
+    } catch {
+      matched = false;
+    }
+    return { matched, reason, waitedMs: Date.now() - started, snapshot: await this.view() };
+  }
+
   async screenshot(path: string): Promise<string> {
     const page = await this.ensurePage();
     await page.screenshot({ path, fullPage: false });
@@ -251,6 +321,7 @@ export type BrowserActionKind =
   | 'type'
   | 'press'
   | 'scroll'
+  | 'wait'
   | 'extract'
   | 'query'
   | 'screenshot'

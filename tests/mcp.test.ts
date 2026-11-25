@@ -107,6 +107,7 @@ test('MCP tools/list advertises the browser tools', async () => {
     'browser_scroll',
     'browser_type',
     'browser_view',
+    'browser_wait',
   ]);
 });
 
