@@ -1,0 +1,92 @@
+name: Forge Local Model Run
+
+# Manual only. Runs Forge against this PUBLIC repo using an open-weight model served on the
+# runner itself (llama.cpp, MIT; Qwen2.5-Coder-7B-Instruct GGUF, Apache-2.0). No secrets, no
+# external model provider, no schedule, read-only token. Only public-source-derived results are
+# uploaded, after a secret-pattern scrub.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_title:
+        description: Task title (public text only)
+        required: true
+        type: string
+      task_desc:
+        description: Task description with exact anchor lines (public text only)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forge-local-model
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest   # standard GitHub-hosted runner, free for public repositories
+    timeout-minutes: 75
+    env:
+      LLAMA_TAG: b12709
+      MODEL_FILE: qwen2.5-coder-7b-instruct-q4_k_m.gguf
+      MODEL_BYTES: "4683073536"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Runner facts
+        run: |
+          echo "nproc=$(nproc)"; free -m | head -2; df -h . | tail -1
+      - name: Install dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts
+      - name: Fetch llama.cpp release binary and model weights (public downloads)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o llama.tgz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
+          mkdir -p llama && tar xzf llama.tgz -C llama --strip-components=1
+          ls llama | head -5
+          curl -fL --retry 3 -o "$MODEL_FILE" "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/${MODEL_FILE}"
+          test "$(stat -c %s "$MODEL_FILE")" = "$MODEL_BYTES"
+      - name: Start local model server (loopback only)
+        run: |
+          set -euo pipefail
+          nohup ./llama/llama-server -m "$MODEL_FILE" --host 127.0.0.1 --port 8080 -c 16384 -t "$(nproc)" --parallel 1 > llama-server.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then echo "model server ready after ${i}x5s"; exit 0; fi
+            sleep 5
+          done
+          tail -40 llama-server.log
+          exit 1
+      - name: Run Forge on the local model (read-only token, no push)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_REPO: ${{ github.repository }}
+          TASK_ID: local-model-${{ github.run_id }}
+          TASK_TITLE: ${{ inputs.task_title }}
+          TASK_DESC: ${{ inputs.task_desc }}
+          FORGE_LOCAL_MODEL_URL: http://127.0.0.1:8080
+          FORGE_LOCAL_MODEL_NAME: qwen2.5-coder-7b-instruct-q4_k_m
+          FORGE_LOCAL_MODEL_TIMEOUT_S: "900"
+          FORGE_MAX_ATTEMPTS: "1"
+        run: timeout 2400 npx tsx src/agent/forge-runner.ts 2>&1 | tee forge-run.log
+      - name: Scrub and stage aggregate artifacts
+        if: always()
+        run: |
+          mkdir -p out
+          cp -r .firstborn/evidence out/ 2>/dev/null || true
+          cp forge-run.log out/ 2>/dev/null || true
+          tail -60 llama-server.log > out/llama-server-tail.log 2>/dev/null || true
+          if grep -rIE 'ghs_[A-Za-z0-9]{20,}|github_pat_|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|Bearer [A-Za-z0-9._-]{20,}' out; then
+            echo "secret-like content found; removing artifacts"; rm -rf out; mkdir out; echo scrubbed > out/SCRUBBED.txt
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: forge-local-model-result
+          path: out
+          retention-days: 7
