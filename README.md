@@ -11,6 +11,8 @@ what it gets back, and what evidence accompanies every claim.
 
 ## 1. What Forge does
 
+Forge can also run on a loopback-only local model through the manual forge-local-model workflow.
+
 For a single task Forge will:
 
 1. Validate the task definition and verify the target repository and base commit.
