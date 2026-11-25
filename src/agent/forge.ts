@@ -16,6 +16,7 @@ import { parsePlanJsonWithSalvage } from './plan-salvage.ts';
 import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { buildWindowedContext, MAX_WINDOWED_FILE_CHARS } from './context-window.ts';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -222,7 +223,7 @@ export function extractExplicitPaths(taskText: string, repoFilePaths: string[]):
 
 // Exhaustion run: weak free models copied the harness's own context separator
 // and used it as an edit anchor, which can never match real file content.
-const HARNESS_SEPARATOR_ANCHOR_RE = /--- END FILE ---|<<<FORGE_(END_)?CONTEXT_FILE/;
+const HARNESS_SEPARATOR_ANCHOR_RE = /--- END FILE ---|<<<FORGE_(END_)?CONTEXT_FILE|<<<FORGE_OMITTED/;
 
 export function isHarnessSeparatorAnchor(find: string): boolean {
   return HARNESS_SEPARATOR_ANCHOR_RE.test(find);
@@ -582,6 +583,8 @@ export class ForgeAgent {
           return score(b) - score(a) || a.localeCompare(b);
         }));
       const targetSourceFiles: { path: string; content: string }[] = [];
+      // Full contents of files shown to the model as an excerpt, for anchor validation.
+      const fullSourceByPath = new Map<string, string>();
       for (const candidate of sourceCandidates) {
         if (targetSourceFiles.length >= 5) break;
         const file = await this.github.fetchFile(owner, repo, candidate, targetBranch);
@@ -591,6 +594,20 @@ export class ForgeAgent {
         }
         if (file.content.length > 16000) {
           const reason = `source file exceeds 16000 characters: ${file.path}`;
+          // An explicitly named large file is not guessed at: show a bounded excerpt around the
+          // lines the task points at. Anchors are still validated against the FULL file.
+          if (explicitPaths.length > 0 && file.content.length <= MAX_WINDOWED_FILE_CHARS) {
+            const windowed = buildWindowedContext(file.content, taskText);
+            if (windowed) {
+              log('info', `Using a bounded excerpt of ${file.path} (${windowed.shownLines}/${windowed.totalLines} lines, ${windowed.matchedTerms} task term(s) matched); anchors are validated against the full file.`);
+              fullSourceByPath.set(file.path, file.content);
+              const ctx = targetSourceFiles.reduce((total, source) => total + source.content.length, 0);
+              if (ctx + windowed.excerpt.length <= MAX_SOURCE_CONTEXT_CHARS) {
+                targetSourceFiles.push({ path: file.path, content: windowed.excerpt });
+                continue;
+              }
+            }
+          }
           if (explicitPaths.length > 0) {
             report.status = 'BLOCKED';
             report.blockerReason = `Explicitly requested ${reason}; refusing to guess or patch an incomplete context.`;
@@ -633,6 +650,9 @@ export class ForgeAgent {
         { path: 'FILE_TREE_INVENTORY.txt', content: repoFilePaths.slice(0, 100).join('\n') },
         ...targetSourceFiles,
       ];
+
+      // Anchor validation always uses the full file, even when the model saw an excerpt.
+      const validationFiles = contextFiles.map((file) => ({ path: file.path, content: fullSourceByPath.get(file.path) ?? file.content }));
 
       report.modelInvoked.callsCount += 1;
       let modelResult = await this.model.generatePlanAndPatch(
@@ -754,7 +774,7 @@ export class ForgeAgent {
       applyPlanToReport(parsedPlan);
 
       // Retry malformed exact anchors at most twice. Never relax matching or apply a guessed edit.
-      let anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+      let anchorProblems = this.findEditAnchorProblems(report.plannedChanges, validationFiles);
       let anchorRepairAttempts = 0;
       while (anchorProblems.length > 0 && anchorRepairAttempts < 2) {
         if (!guardModelCall('anchor repair')) return finalize();
@@ -787,7 +807,7 @@ export class ForgeAgent {
           return finalize();
         }
         applyPlanToReport(parsedPlan);
-        anchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+        anchorProblems = this.findEditAnchorProblems(report.plannedChanges, validationFiles);
       }
       if (anchorProblems.length > 0) {
         report.status = 'FAILED';
@@ -993,7 +1013,7 @@ export class ForgeAgent {
               content: change.content,
               edits: change.edits,
             }));
-            const repairAnchorProblems = this.findEditAnchorProblems(report.plannedChanges, contextFiles);
+            const repairAnchorProblems = this.findEditAnchorProblems(report.plannedChanges, validationFiles);
             if (repairAnchorProblems.length > 0) {
               report.status = 'FAILED';
               report.errorMessage = `Target-check repair failed patch preflight: ${repairAnchorProblems.slice(0, 5).join(' | ')}`;
