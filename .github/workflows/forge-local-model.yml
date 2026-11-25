@@ -30,8 +30,10 @@ jobs:
     timeout-minutes: 75
     env:
       LLAMA_TAG: b12709
+      LLAMA_TGZ_SHA256: "1bab2ad0c7268f2f081e490db7234928fdfc75b2ff60d3dcf406ac02cd45be0a"
       MODEL_FILE: qwen2.5-coder-7b-instruct-q4_k_m.gguf
       MODEL_BYTES: "4683073536"
+      MODEL_SHA256: "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,10 +50,12 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL -o llama.tgz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
+          echo "${LLAMA_TGZ_SHA256}  llama.tgz" | sha256sum -c -
           mkdir -p llama && tar xzf llama.tgz -C llama --strip-components=1
           ls llama | head -5
           curl -fL --retry 3 -o "$MODEL_FILE" "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/${MODEL_FILE}"
           test "$(stat -c %s "$MODEL_FILE")" = "$MODEL_BYTES"
+          echo "${MODEL_SHA256}  ${MODEL_FILE}" | sha256sum -c -
       - name: Start local model server (loopback only)
         run: |
           set -euo pipefail
