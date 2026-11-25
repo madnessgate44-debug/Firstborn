@@ -5,6 +5,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { FreeLLM } from 'freelm';
+import { callLocalModel, localModelUrl } from './local-model.ts';
 // The routing policy is shared with the company engine so both paths make the
 // same keyless-vs-keyed decision. See src/model-routing.ts for the policy.
 import { applyRoutingPolicy, isKeylessOnly, CREDENTIAL_ENV_NAMES } from '../model-routing.ts';
@@ -256,6 +257,11 @@ Respond only with valid JSON.`;
 
   /** Shared routing and fallback brain used by coding, audit, and the loop. */
   private async invokeModel(messages: ChatMessage[], fullPrompt: string): Promise<ModelGenerationResult> {
+    // Local-only route: when configured it is the ONLY route (no freelm, keyless or Gemini fallback).
+    if (localModelUrl()) {
+      const local = await callLocalModel(messages.map((m) => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })));
+      return { text: local.text, model: local.model, provider: local.provider, success: local.success, error: local.error, fallbackUsed: false };
+    }
     const primaryErrors: string[] = [];
     const routingNotes: string[] = [];
     let invokedProvider = 'freelm free-tier router';
