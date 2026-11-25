@@ -33,6 +33,7 @@ export async function callLocalModel(
   try {
     const response = await fetchImpl(endpoint, {
       method: 'POST',
+      redirect: 'error',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: maxTokens, response_format: { type: 'json_object' } }),
       signal: AbortSignal.timeout(timeoutMs),
