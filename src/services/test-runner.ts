@@ -14,6 +14,8 @@ export interface SafeCommandSpec {
 
 export const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
   'npm install': { executable: 'npm', args: ['install', '--ignore-scripts'] },
+  // Reproducible install: never rewrites package-lock.json (used when a lockfile exists).
+  'npm ci': { executable: 'npm', args: ['ci', '--ignore-scripts'] },
   'npm run lint': { executable: 'npm', args: ['run', 'lint'] },
   'npm run test': { executable: 'npm', args: ['run', 'test'] },
   'npm test': { executable: 'npm', args: ['test'] },
@@ -75,7 +77,7 @@ export class TestRunnerService {
           durationMs: Date.now() - startTime,
           status: 'ERROR',
         });
-      }, trimmed === 'npm install' ? 180000 : 45000);
+      }, trimmed === 'npm install' || trimmed === 'npm ci' ? 180000 : 45000);
 
       child.stdout.on('data', (data) => {
         stdout += data.toString();
