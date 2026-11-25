@@ -44,7 +44,7 @@ value can raise them without bound.
 | Variable | Default | Guards against |
 | :-- | :-- | :-- |
 | `FORGE_MAX_MISSION_ATTEMPTS` | 1 | repeated mission-level retries |
-| `FORGE_MAX_MODEL_CALLS` | 6 | unbounded model calls |
+| `FORGE_MAX_MODEL_CALLS` | 8 | unbounded model calls |
 | `FORGE_MAX_REPAIRS` | 2 | unbounded patch-repair loops |
 | `FORGE_MODEL_ATTEMPTS` | 2 | per-call model retries |
 | `FORGE_MAX_RUNTIME_MS` | 600000 | runaway wall-clock |
