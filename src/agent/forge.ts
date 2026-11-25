@@ -15,6 +15,7 @@ import { partitionScopeDiff } from './scope.ts';
 import { parsePlanJsonWithSalvage } from './plan-salvage.ts';
 import { applyExactEdits } from './stages.ts';
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import * as path from 'path';
 import { buildWindowedContext, MAX_WINDOWED_FILE_CHARS } from './context-window.ts';
 import * as os from 'os';
@@ -917,12 +918,16 @@ export class ForgeAgent {
         for (let attempt = 0; attempt < 3 && !allChecksPassed; attempt += 1) {
           const attemptResults: TaskExecutionReport['testResults'] = [];
           if (hasNpmScripts) {
-            let install = await this.testRunner.runCheck('npm install', worktree);
+            // Prefer a reproducible install when a lockfile exists so Forge's own
+            // check does not rewrite package-lock.json and show up as scope drift.
+            const installCommand = existsSync(path.join(worktree, 'package-lock.json')) ? 'npm ci' : 'npm install';
+            let install = await this.testRunner.runCheck(installCommand, worktree);
             report.testResults.push(install);
             attemptResults.push(install);
             if (install.status !== 'PASSED') {
               log('warn', `Dependency installation failed on attempt ${attempt + 1}; retrying once before classifying the environment as blocked.`);
               await new Promise((resolve) => setTimeout(resolve, 1000));
+              // A lockfile that is out of sync makes `npm ci` fail; fall back to npm install.
               const retryInstall = await this.testRunner.runCheck('npm install', worktree);
               report.testResults.push(retryInstall);
               attemptResults[attemptResults.length - 1] = retryInstall;
