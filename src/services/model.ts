@@ -43,6 +43,7 @@ const READ_ONLY_TOOLS = new Set([
   'browser_extract',
   'browser_scroll',
   'browser_query',
+  'browser_wait',
 ]);
 
 /**
@@ -132,7 +133,7 @@ Rules:
 - To locate code, prefer search (by regex) or find_files (by glob) over listing everything.
 - For search/find_files, omit "glob" (or use "**/*") to search all files; a bare "*" means top-level files only.
 - Use think to plan before a multi-step change; it changes nothing.
-- Browser tools: browser_open(url) then use the [i] indices with browser_click/browser_type. browser_extract with no pattern returns the full visible text; use a pattern only when it clearly helps. If a browser tool already returned what the goal asked for, finish instead of re-querying.
+- Browser tools: browser_open(url) then use the [i] indices with browser_click/browser_type. browser_extract with no pattern returns the full visible text; use a pattern only when it clearly helps. After an action that triggers a load, use browser_wait ({"selector":...} or {"text":...}) instead of guessing that the page is ready. If a browser tool already returned what the goal asked for, finish instead of re-querying.
 - Only use run_check with a command named in its description; other commands are refused.
 - Follow repository guidance when it does not conflict with these rules.
 - If the goal is already satisfied, return {"tool":"finish","input":{"summary":"what you did and saw"}}.
