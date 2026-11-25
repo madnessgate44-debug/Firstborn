@@ -27,6 +27,17 @@ export const AUTHORIZED_COMMANDS: Record<string, SafeCommandSpec> = {
   'git diff --check': { executable: 'git', args: ['diff', '--check'] },
 };
 
+export function commandTimeoutMs(commandKey: string): number {
+  const trimmed = commandKey.trim();
+  if (trimmed === 'npm install' || trimmed === 'npm ci') {
+    return 180000;
+  }
+  if (trimmed === 'npm test' || trimmed === 'npm run test') {
+    return 240000;
+  }
+  return 45000;
+}
+
 const SAFE_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TZ', 'TMPDIR'];
 function buildSafeEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { CI: 'true' };
@@ -67,17 +78,18 @@ export class TestRunnerService {
         env: buildSafeEnv(),
       });
 
+      const timeoutMs = commandTimeoutMs(trimmed);
       const timer = setTimeout(() => {
         child.kill('SIGKILL');
         resolve({
           command: trimmed,
           exitCode: 124, // Timeout
           stdout,
-          stderr: stderr + '\nExecution timed out (npm install: 180000ms; other commands: 45000ms)',
+          stderr: stderr + `\nExecution timed out after ${timeoutMs}ms`,
           durationMs: Date.now() - startTime,
           status: 'ERROR',
         });
-      }, trimmed === 'npm install' || trimmed === 'npm ci' ? 180000 : 45000);
+      }, timeoutMs);
 
       child.stdout.on('data', (data) => {
         stdout += data.toString();
