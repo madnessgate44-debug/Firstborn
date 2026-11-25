@@ -24,6 +24,8 @@ For a single task Forge will:
 
 Forge never rewrites architecture, touches secrets, or changes unrelated files.
 
+The local-model publish step checks for an existing matching draft pull request if creating one fails.
+
 ---
 
 ## 2. Interfaces a controller can use
