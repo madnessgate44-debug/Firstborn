@@ -78,6 +78,29 @@ jobs:
           FORGE_LOCAL_MODEL_TIMEOUT_S: "900"
           FORGE_MAX_ATTEMPTS: "1"
         run: timeout 2400 npx tsx src/agent/forge-runner.ts 2>&1 | tee forge-run.log
+      - name: Print evidence summary to log
+        if: always()
+        run: |
+          if [ ! -d .firstborn/evidence ]; then
+            echo "No .firstborn/evidence directory found"
+            exit 0
+          fi
+          ls -lh .firstborn/evidence
+          secret_regex='ghs_[A-Za-z0-9]{20,}|github_pat_|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|Bearer [A-Za-z0-9._-]{20,}'
+          for f in .firstborn/evidence/*; do
+            [ -e "$f" ] || continue
+            fname="$(basename "$f")"
+            if [ -f "$f" ] && grep -qIE "$secret_regex" "$f"; then
+              echo "::group::${fname}"
+              echo "skipped: secret-like content"
+              echo "::endgroup::"
+            elif [ -f "$f" ]; then
+              echo "::group::${fname}"
+              head -c 30000 "$f"
+              echo ""
+              echo "::endgroup::"
+            fi
+          done
       - name: Scrub and stage aggregate artifacts
         if: always()
         run: |
