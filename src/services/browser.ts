@@ -238,3 +238,27 @@ export class BrowserService {
     this.browser = null;
   }
 }
+
+/**
+ * Consequence classification for a browser action, used by the permission gate
+ * of the MCP surface. Read-only actions never change external state; gated
+ * actions can. Keep this conservative: unknown element types are gated.
+ */
+export type BrowserActionKind =
+  | 'open'
+  | 'view'
+  | 'click'
+  | 'type'
+  | 'press'
+  | 'scroll'
+  | 'extract'
+  | 'query'
+  | 'screenshot'
+  | 'close';
+
+/** True when the action can change external state (submit, send, delete, ...). */
+export function isConsequential(kind: BrowserActionKind, key?: string): boolean {
+  if (kind === 'click' || kind === 'type') return true;
+  if (kind === 'press') return Boolean(key && /^(enter|return)$/i.test(key));
+  return false;
+}
